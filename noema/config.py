@@ -19,7 +19,7 @@ class KalshiConfig:
         return "https://external-api.demo.kalshi.co/trade-api/v2"
 
     @classmethod
-    def from_env(cls) -> "KalshiConfig":
+    def from_env(cls) -> KalshiConfig:
         environment = os.getenv("NOEMA_KALSHI_ENV", "demo").strip().lower()
         if environment not in {"demo", "production"}:
             raise ValueError("NOEMA_KALSHI_ENV must be demo or production")
