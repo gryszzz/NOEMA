@@ -1,0 +1,24 @@
+[project]
+name = "noema"
+version = "0.1.0"
+description = "Calibrated autonomous forecasting and prediction-market research engine."
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.28,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+noema = "noema.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
