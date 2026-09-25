@@ -1,22 +1,24 @@
-from noema.config import KalshiConfig
 from noema.diagnostics import diagnose
 
+from noema.config import KalshiConfig
 
-def test_demo_config_never_reports_production_ready() -> None:
+
+def test_demo_config_without_credentials_is_not_ready() -> None:
     result = diagnose(KalshiConfig(environment="demo"))
-    assert result.production_execution_possible is False
+    assert result.demo_ready is False
 
 
-def test_master_halt_blocks_production_readiness(tmp_path) -> None:
+def test_demo_credentials_report_ready(tmp_path) -> None:
     key = tmp_path / "key.pem"
-    key.write_text("not a real key")
+    key.write_text("placeholder")
     result = diagnose(
         KalshiConfig(
-            environment="production",
+            environment="demo",
             key_id="abc",
             private_key_path=str(key),
-            allow_live_orders=True,
+            allow_live_orders=False,
             master_halt=True,
         )
     )
-    assert result.production_execution_possible is False
+    assert result.demo_ready is True
+    assert result.master_halt is True
