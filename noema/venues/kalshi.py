@@ -28,7 +28,7 @@ def _decimal(value: Any) -> float | None:
 def _dt(value: Any) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return datetime.fromisoformat(str(value))
 
 
 def _estimated_top_book_liquidity(market: dict[str, Any]) -> float | None:
@@ -170,7 +170,7 @@ class KalshiVenue(VenueAdapter):
             raise NotImplementedError("initial Kalshi executor supports YES buys only")
 
         price = Decimal(str(action.max_price))
-        if not Decimal("0") < price < Decimal("1"):
+        if not Decimal(0) < price < Decimal(1):
             raise ValueError("Kalshi binary price must be between 0 and 1")
 
         count = Decimal(str(action.stake_usd)) / price
