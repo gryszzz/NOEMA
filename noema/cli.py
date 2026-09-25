@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 
+from .account import KalshiAccount
 from .config import KalshiConfig
 from .outcomes import OutcomeStore
 from .sync import sync_kalshi_outcomes
@@ -51,6 +52,32 @@ def _evaluate(db: str) -> None:
     print(json.dumps(summary.__dict__, sort_keys=True))
 
 
+async def _account() -> None:
+    account = KalshiAccount()
+    try:
+        snapshot = await account.snapshot()
+        print(
+            json.dumps(
+                {
+                    "balance": snapshot.balance,
+                    "positions": snapshot.positions,
+                    "orders": snapshot.orders,
+                    "fills": snapshot.fills,
+                    "limits": snapshot.limits,
+                    "user_data_as_of": (
+                        snapshot.user_data_as_of.isoformat()
+                        if snapshot.user_data_as_of
+                        else None
+                    ),
+                },
+                sort_keys=True,
+                default=str,
+            )
+        )
+    finally:
+        await account.close()
+
+
 async def _sync_outcomes(db: str, limit: int | None) -> None:
     store = OutcomeStore(db)
     history = KalshiHistory()
@@ -74,6 +101,8 @@ def main() -> None:
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--db", default="data/noema.db")
 
+    sub.add_parser("account")
+
     sync = sub.add_parser("sync-outcomes")
     sync.add_argument("--db", default="data/noema.db")
     sync.add_argument("--limit", type=int, default=None)
@@ -85,6 +114,8 @@ def main() -> None:
         asyncio.run(_stream(args.tickers))
     elif args.command == "sync-outcomes":
         asyncio.run(_sync_outcomes(args.db, args.limit))
+    elif args.command == "account":
+        asyncio.run(_account())
     else:
         _evaluate(args.db)
 
