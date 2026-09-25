@@ -6,6 +6,7 @@ import json
 
 from .account import KalshiAccount
 from .config import KalshiConfig
+from .diagnostics import diagnostic_dict
 from .outcomes import OutcomeStore
 from .sync import sync_kalshi_outcomes
 from .venues.kalshi import KalshiVenue
@@ -102,6 +103,7 @@ def main() -> None:
     evaluate.add_argument("--db", default="data/noema.db")
 
     sub.add_parser("account")
+    sub.add_parser("check-config")
 
     sync = sub.add_parser("sync-outcomes")
     sync.add_argument("--db", default="data/noema.db")
@@ -116,6 +118,8 @@ def main() -> None:
         asyncio.run(_sync_outcomes(args.db, args.limit))
     elif args.command == "account":
         asyncio.run(_account())
+    elif args.command == "check-config":
+        print(json.dumps(diagnostic_dict(), sort_keys=True))
     else:
         _evaluate(args.db)
 
