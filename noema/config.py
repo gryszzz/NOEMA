@@ -11,6 +11,7 @@ class KalshiConfig:
     key_id: str | None = None
     private_key_path: str | None = None
     allow_live_orders: bool = False
+    master_halt: bool = False
 
     @property
     def base_url(self) -> str:
@@ -27,6 +28,7 @@ class KalshiConfig:
         key_id = os.getenv("KALSHI_API_KEY_ID")
         private_key_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
         allow_live = os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") == "1"
+        master_halt = os.getenv("NOEMA_MASTER_HALT", "0") == "1"
 
         if private_key_path and not Path(private_key_path).exists():
             raise FileNotFoundError(private_key_path)
@@ -36,4 +38,5 @@ class KalshiConfig:
             key_id=key_id,
             private_key_path=private_key_path,
             allow_live_orders=allow_live,
+            master_halt=master_halt,
         )

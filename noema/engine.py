@@ -6,6 +6,7 @@ from typing import Protocol
 from .ledger import ForecastLedger
 from .models import Forecast, MarketSnapshot, Opportunity
 from .risk import RiskEngine
+from .validation import validate_market_snapshot
 from .venues.base import VenueAdapter
 
 
@@ -44,6 +45,14 @@ class NoemaEngine:
         results: list[str] = []
 
         async for market in self.venue.markets():
+            validation = validate_market_snapshot(market)
+            if not validation.valid:
+                results.append(
+                    f"{market.venue}:{market.market_id}:invalid:"
+                    + "|".join(validation.issues)
+                )
+                continue
+
             forecast = await self.forecaster.forecast(market)
             if forecast is None or market.yes_ask is None:
                 continue

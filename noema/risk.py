@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from .models import Action, Decision, Mode, Opportunity
 
@@ -14,15 +15,33 @@ class RiskPolicy:
     max_stake_usd: float = 10.0
     max_fraction_of_bankroll: float = 0.005
     max_forecast_width: float = 0.20
+    max_market_data_age_seconds: float = 10.0
 
 
 class RiskEngine:
     def __init__(self, policy: RiskPolicy) -> None:
         self.policy = policy
 
-    def decide(self, opportunity: Opportunity, bankroll_usd: float) -> Action:
+    def decide(
+        self,
+        opportunity: Opportunity,
+        bankroll_usd: float,
+        *,
+        risk_multiplier: float = 1.0,
+    ) -> Action:
+        if not 0 <= risk_multiplier <= 1:
+            raise ValueError("risk_multiplier must be in [0, 1]")
+        if risk_multiplier == 0:
+            return self._pass(opportunity, "external risk gate set multiplier to zero")
+
         s = opportunity.snapshot
         f = opportunity.forecast
+
+        quote_age = (datetime.now(UTC) - s.captured_at).total_seconds()
+        if quote_age < 0:
+            return self._pass(opportunity, "market snapshot timestamp is in the future")
+        if quote_age > self.policy.max_market_data_age_seconds:
+            return self._pass(opportunity, f"market snapshot stale by {quote_age:.1f}s")
 
         if s.yes_ask is None or s.yes_bid is None:
             return self._pass(opportunity, "missing tradable YES quote")
@@ -41,8 +60,8 @@ class RiskEngine:
             return self._pass(opportunity, "robust edge below threshold")
 
         stake = min(
-            self.policy.max_stake_usd,
-            max(0.0, bankroll_usd * self.policy.max_fraction_of_bankroll),
+            self.policy.max_stake_usd * risk_multiplier,
+            max(0.0, bankroll_usd * self.policy.max_fraction_of_bankroll * risk_multiplier),
         )
         if stake <= 0:
             return self._pass(opportunity, "zero risk budget")
