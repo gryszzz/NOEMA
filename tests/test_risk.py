@@ -1,3 +1,6 @@
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
 from noema.models import Forecast, MarketSnapshot, Mode, Opportunity
 from noema.risk import RiskEngine, RiskPolicy
 
@@ -65,3 +68,15 @@ def test_external_zero_multiplier_halts() -> None:
     )
     assert action.decision.value == "pass"
     assert action.stake_usd == 0
+
+
+def test_stale_market_snapshot_passes() -> None:
+    op = opportunity()
+    stale_snapshot = replace(
+        op.snapshot,
+        captured_at=datetime.now(UTC) - timedelta(seconds=30),
+    )
+    stale_op = replace(op, snapshot=stale_snapshot)
+    action = RiskEngine(RiskPolicy()).decide(stale_op, bankroll_usd=2_000)
+    assert action.decision.value == "pass"
+    assert "stale" in action.reason
