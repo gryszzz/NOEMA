@@ -6,10 +6,10 @@ import json
 
 from .config import KalshiConfig
 from .outcomes import OutcomeStore
-from .venues.kalshi import KalshiVenue
-from .venues.kalshi_stream import KalshiStream
-from .venues.kalshi_history import KalshiHistory
 from .sync import sync_kalshi_outcomes
+from .venues.kalshi import KalshiVenue
+from .venues.kalshi_history import KalshiHistory
+from .venues.kalshi_stream import KalshiStream
 
 
 async def _markets(limit: int) -> None:
