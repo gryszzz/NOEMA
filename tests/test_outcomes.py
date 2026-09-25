@@ -1,6 +1,6 @@
-import pytest
-
 import json
+
+import pytest
 
 from noema.ledger import ForecastLedger
 from noema.models import Action, Decision, Forecast, MarketSnapshot, Opportunity
