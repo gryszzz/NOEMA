@@ -205,9 +205,7 @@ class KalshiVenue(VenueAdapter):
         if not ticker:
             return None
 
-        rules = "
-
-".join(
+        rules = "\n\n".join(
             part for part in [raw.get("rules_primary"), raw.get("rules_secondary")] if part
         )
         return MarketSnapshot(
