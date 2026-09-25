@@ -1,31 +1,14 @@
-# Connect NOEMA to a Kalshi Account
+# Connect NOEMA to Kalshi Safely
 
-NOEMA should be connected in **demo first**, then production only after account reconciliation and risk tests pass.
+Start with Kalshi's **demo environment** and keep production execution disabled while validating data, account reconciliation, and model evaluation.
 
-## 1. Create an API key in Kalshi
+## Demo credentials
 
-Use Kalshi's API-key flow for the environment you intend to use.
+Kalshi demo and production credentials are separate. Create a demo API key following Kalshi's official API-key documentation.
 
-Demo and production credentials are separate. A demo API key cannot authenticate against production and a production key cannot authenticate against demo.
+Keep the private key outside the repository. Never commit it, paste it into chat, or print it in logs.
 
-Keep these two values:
-
-- API key ID
-- downloaded private key file
-
-The private key is secret. Do not paste it into chat, commit it to GitHub, store it in README files, or print it in logs.
-
-## 2. Put the private key outside the repository
-
-Example:
-
-```text
-~/.config/noema/kalshi-demo.pem
-```
-
-Restrict local file permissions where your operating system supports it.
-
-## 3. Configure demo
+Example environment:
 
 ```bash
 export NOEMA_KALSHI_ENV=demo
@@ -35,72 +18,23 @@ export NOEMA_ALLOW_LIVE_ORDERS=0
 export NOEMA_MASTER_HALT=1
 ```
 
-Starting with `NOEMA_MASTER_HALT=1` is intentional.
-
-## 4. Verify configuration without leaking secrets
+## Validate the connection
 
 ```bash
 noema check-config
-```
-
-The diagnostic reports only whether required values exist. It never prints the private key.
-
-## 5. Inspect the authenticated account mirror
-
-```bash
 noema account
-```
-
-This reads the primary account:
-
-- balance
-- portfolio value
-- positions
-- orders
-- fills
-- API usage tier / limits
-- Kalshi user-data freshness timestamp
-
-## 6. Run data collection
-
-```bash
 noema markets --limit 20
 noema stream
 noema sync-outcomes --limit 1000
 noema evaluate
 ```
 
-No production order should be enabled during this phase.
+The account command mirrors balance, portfolio value, positions, orders, fills, API limits, and Kalshi's user-data freshness timestamp for reconciliation.
 
-## 7. Production later
+## Production
 
-Production requires all of these simultaneously:
+Production activation is intentionally not part of this setup guide. Keep the master halt enabled until the research system has passed demo reconciliation, evaluation, and survival testing.
 
-```text
-NOEMA_KALSHI_ENV=production
-valid production API key
-valid production private key
-NOEMA_ALLOW_LIVE_ORDERS=1
-NOEMA_MASTER_HALT=0
-survival gate approved
-strategy promotion gate approved
-deterministic risk engine approved
-```
+## Visibility
 
-Missing any condition must result in no trade.
-
-## Primary account visibility
-
-NOEMA defaults to Kalshi subaccount 0. This keeps activity in the primary account rather than a numbered API-only subaccount.
-
-## Emergency stop
-
-Set:
-
-```bash
-export NOEMA_MASTER_HALT=1
-```
-
-and restart/reload the worker. Production execution support becomes false even when all other live settings are present.
-
-A future deployment should put the master halt in an external secret/config system so it can be changed without editing code.
+NOEMA defaults to primary subaccount 0. Kalshi numbered subaccounts are API-only today, so the primary account is the clearest default for visibility during validation.
