@@ -48,3 +48,20 @@ def test_small_edge_passes() -> None:
 def test_live_mode_is_explicit() -> None:
     action = RiskEngine(RiskPolicy(mode=Mode.LIVE)).decide(opportunity(), bankroll_usd=2_000)
     assert action.decision.value == "live_buy_yes"
+
+
+def test_external_risk_multiplier_scales_stake() -> None:
+    engine = RiskEngine(RiskPolicy())
+    full = engine.decide(opportunity(), bankroll_usd=2_000, risk_multiplier=1.0)
+    half = engine.decide(opportunity(), bankroll_usd=2_000, risk_multiplier=0.5)
+    assert half.stake_usd == full.stake_usd / 2
+
+
+def test_external_zero_multiplier_halts() -> None:
+    action = RiskEngine(RiskPolicy()).decide(
+        opportunity(),
+        bankroll_usd=2_000,
+        risk_multiplier=0.0,
+    )
+    assert action.decision.value == "pass"
+    assert action.stake_usd == 0
