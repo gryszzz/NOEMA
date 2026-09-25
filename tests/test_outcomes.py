@@ -1,3 +1,5 @@
+import pytest
+
 import json
 
 from noema.ledger import ForecastLedger
@@ -57,7 +59,7 @@ def test_outcomes_join_forecast_ledger(tmp_path) -> None:
     )
     summary = store.evaluate_ledger()
     assert summary.count == 1
-    assert summary.mean_brier == 0.09
+    assert summary.mean_brier == pytest.approx(0.09)
     assert summary.mean_log_loss > 0
 
     row = store.conn.execute("SELECT raw_json FROM outcomes").fetchone()
