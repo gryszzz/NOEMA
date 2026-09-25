@@ -8,6 +8,8 @@ from .config import KalshiConfig
 from .outcomes import OutcomeStore
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_stream import KalshiStream
+from .venues.kalshi_history import KalshiHistory
+from .sync import sync_kalshi_outcomes
 
 
 async def _markets(limit: int) -> None:
@@ -49,6 +51,16 @@ def _evaluate(db: str) -> None:
     print(json.dumps(summary.__dict__, sort_keys=True))
 
 
+async def _sync_outcomes(db: str, limit: int | None) -> None:
+    store = OutcomeStore(db)
+    history = KalshiHistory()
+    try:
+        result = await sync_kalshi_outcomes(store, history, max_markets=limit)
+        print(json.dumps(result.__dict__, sort_keys=True))
+    finally:
+        await history.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="noema")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -62,11 +74,17 @@ def main() -> None:
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--db", default="data/noema.db")
 
+    sync = sub.add_parser("sync-outcomes")
+    sync.add_argument("--db", default="data/noema.db")
+    sync.add_argument("--limit", type=int, default=None)
+
     args = parser.parse_args()
     if args.command == "markets":
         asyncio.run(_markets(args.limit))
     elif args.command == "stream":
         asyncio.run(_stream(args.tickers))
+    elif args.command == "sync-outcomes":
+        asyncio.run(_sync_outcomes(args.db, args.limit))
     else:
         _evaluate(args.db)
 
