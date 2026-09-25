@@ -123,14 +123,30 @@ pytest -q
 ruff check .
 ```
 
+## Kalshi Core
+
+The first real venue adapter now targets Kalshi's official Trade API:
+
+- open-market discovery with cursor pagination;
+- live binary quotes and settlement rules;
+- order-book retrieval;
+- exchange-status checks;
+- demo and production environment separation;
+- RSA / Ed25519 request signing;
+- authenticated **demo** order submission;
+- production execution hard-disabled unless explicitly armed.
+
+See [docs/kalshi-core.md](docs/kalshi-core.md).
+
 ## Next integrations
 
-1. Kalshi market discovery + order book + demo executor
-2. Forecast ledger outcome resolution and scoring
+1. Kalshi WebSocket market/order-book stream
+2. Historical resolved-market ingestion + outcome scoring
 3. Baseline forecasters and calibration tables
 4. Specialized first niche
-5. Polymarket market-data adapter
-6. Authorized sportsbook-odds reference feed
-7. Only after sufficient out-of-sample evidence: tightly capped live execution
+5. Separate Kalshi perps engine
+6. Polymarket market-data adapter
+7. Authorized sportsbook-odds reference feed
+8. Only after sufficient out-of-sample evidence: tightly capped live execution
 
 NOEMA is research software. Prediction markets and sports betting involve real financial risk; paper performance can differ materially from live results.
