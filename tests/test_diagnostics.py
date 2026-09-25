@@ -1,6 +1,5 @@
-from noema.diagnostics import diagnose
-
 from noema.config import KalshiConfig
+from noema.diagnostics import diagnose
 
 
 def test_demo_config_without_credentials_is_not_ready() -> None:
