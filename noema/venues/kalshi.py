@@ -133,8 +133,13 @@ class KalshiVenue(VenueAdapter):
                 break
 
     async def orderbook(self, ticker: str, depth: int | None = None) -> dict[str, Any]:
+        if self.signer is None:
+            raise RuntimeError("Kalshi orderbook access requires API credentials")
         params = {"depth": depth} if depth is not None else None
-        response = await self.client.get(f"/markets/{ticker}/orderbook", params=params)
+        endpoint = f"/markets/{ticker}/orderbook"
+        sign_path = f"/trade-api/v2{endpoint}"
+        headers = self.signer.headers("GET", sign_path)
+        response = await self.client.get(endpoint, params=params, headers=headers)
         response.raise_for_status()
         return response.json()
 
