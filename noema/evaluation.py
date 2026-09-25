@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import math
-from statistics import mean
-
 from dataclasses import dataclass
+from statistics import mean
 
 
 _EPSILON = 1e-12
