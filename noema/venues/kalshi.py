@@ -98,6 +98,7 @@ class KalshiVenue(VenueAdapter):
         return (
             self.config.environment == "production"
             and self.config.allow_live_orders
+            and not self.config.master_halt
             and self.signer is not None
         )
 
@@ -154,6 +155,8 @@ class KalshiVenue(VenueAdapter):
         return await self._submit_event_order(action)
 
     async def execute(self, action: Action) -> str:
+        if self.config.master_halt:
+            raise RuntimeError("NOEMA master halt is active")
         if not self.supports_live_execution:
             raise RuntimeError(
                 "Kalshi production execution is disabled. "
