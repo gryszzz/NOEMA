@@ -20,7 +20,18 @@ class RiskEngine:
     def __init__(self, policy: RiskPolicy) -> None:
         self.policy = policy
 
-    def decide(self, opportunity: Opportunity, bankroll_usd: float) -> Action:
+    def decide(
+        self,
+        opportunity: Opportunity,
+        bankroll_usd: float,
+        *,
+        risk_multiplier: float = 1.0,
+    ) -> Action:
+        if not 0 <= risk_multiplier <= 1:
+            raise ValueError("risk_multiplier must be in [0, 1]")
+        if risk_multiplier == 0:
+            return self._pass(opportunity, "external risk gate set multiplier to zero")
+
         s = opportunity.snapshot
         f = opportunity.forecast
 
@@ -41,8 +52,8 @@ class RiskEngine:
             return self._pass(opportunity, "robust edge below threshold")
 
         stake = min(
-            self.policy.max_stake_usd,
-            max(0.0, bankroll_usd * self.policy.max_fraction_of_bankroll),
+            self.policy.max_stake_usd * risk_multiplier,
+            max(0.0, bankroll_usd * self.policy.max_fraction_of_bankroll * risk_multiplier),
         )
         if stake <= 0:
             return self._pass(opportunity, "zero risk budget")
