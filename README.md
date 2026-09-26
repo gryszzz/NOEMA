@@ -136,6 +136,17 @@ It produces `quarantine`, `observe`, or `research_candidate` -- never a live
 BUY/SELL instruction. Read [Trench-1](docs/trench-1.md) for the evidence base,
 data contract, training ladder, and promotion rules.
 
+## Continuous Trench collection
+
+The Trench-1 specialist can now accumulate time-honest Solana launch trajectories inside the
+persistent NOEMA runtime. It stores discovery, successful snapshots, failed attempts, the fixed
+five-minute research assessment, and later counterfactual outcomes. Missing/stale horizons are
+never backfilled with newer data.
+
+Collection is off by default. Set `NOEMA_TRENCH_ENABLED=1` after configuring the read-only data
+connections. Inspect with `noema trench-show` or `GET /api/trench`. See
+[Trench-1](docs/trench-1.md).
+
 ## Keep the project affordable
 
 The repository's `render.yaml` defines **one paid paper worker with a persistent
