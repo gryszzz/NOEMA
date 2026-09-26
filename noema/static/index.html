@@ -91,6 +91,24 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
     </div>
 
     <div class="card span12">
+      <h2>Economic OS</h2>
+      <div class="grid" style="grid-template-columns:repeat(12,1fr);gap:10px">
+        <div class="card span3" style="min-height:90px"><div class="k">Autonomy</div><div class="v" id="econ-level">NOT INITIALIZED</div><div class="small" id="econ-transition">No economic review yet.</div></div>
+        <div class="card span3" style="min-height:90px"><div class="k">Economic Equity</div><div class="v mono" id="econ-equity">—</div><div class="small">Internal economic snapshot</div></div>
+        <div class="card span3" style="min-height:90px"><div class="k">High-Water Mark</div><div class="v mono" id="econ-hwm">—</div><div class="small">Only new profit above this is allocatable</div></div>
+        <div class="card span3" style="min-height:90px"><div class="k">New Allocatable Profit</div><div class="v mono" id="econ-profit">—</div><div class="small">Reviewable plan, not an automatic transfer</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:10px" id="econ-buckets">
+        <div class="row"><span>Reserve</span><b id="econ-reserve">—</b></div>
+        <div class="row"><span>Strategy</span><b id="econ-strategy">—</b></div>
+        <div class="row"><span>Research</span><b id="econ-research">—</b></div>
+        <div class="row"><span>Infrastructure</span><b id="econ-infra">—</b></div>
+        <div class="row"><span>Treasury sweep</span><b id="econ-sweep">—</b></div>
+      </div>
+      <div class="small" style="margin-top:10px">Survival capital, strategy capital, R&D, infrastructure and treasury sweep are accounted separately. Promotions are gradual; demotions are immediate.</div>
+    </div>
+
+    <div class="card span12">
       <h2>Research Attention Radar</h2>
       <div class="small" style="margin-bottom:8px">Attention score is research triage, not a trade instruction. Political/election-like markets are not automatically scored.</div>
       <div id="radar-table" class="empty">No forecast ledger rows yet.</div>
@@ -146,6 +164,27 @@ async function refreshAll(){
   document.getElementById('snapshots').textContent=o.soak?.snapshots||0;
   const vf=o.soak?.valid_fraction||0;document.getElementById('valid-frac').textContent=pct(vf);document.getElementById('valid-bar').style.width=(vf*100)+'%';
   renderTrust(o.model_trust);
+  try{
+   const econ=await getJSON('/api/economy');
+   const snap=econ.snapshot;
+   const review=econ.latest_review;
+   if(snap){
+    document.getElementById('econ-equity').textContent=money(snap.current_equity_usd);
+    document.getElementById('econ-hwm').textContent=money(snap.high_water_equity_usd);
+    document.getElementById('econ-reserve').textContent=money(snap.reserve_usd);
+    document.getElementById('econ-strategy').textContent=money(snap.strategy_capital_usd);
+    document.getElementById('econ-research').textContent=money(snap.research_budget_usd);
+    document.getElementById('econ-infra').textContent=money(snap.infrastructure_budget_usd);
+    document.getElementById('econ-sweep').textContent=money(snap.treasury_sweep_usd);
+   }
+   if(econ.profit_plan){
+    document.getElementById('econ-profit').textContent=money(econ.profit_plan.profit_above_high_water_usd);
+   }
+   if(review){
+    document.getElementById('econ-level').textContent=String(review.next_level||'unknown').toUpperCase();
+    document.getElementById('econ-transition').textContent=review.transition_reason||'Economic review recorded.';
+   }
+  }catch(e){}
   try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
   try{
    const w=await getJSON('/api/wallet-policy');
