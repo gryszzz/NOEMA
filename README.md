@@ -1,160 +1,304 @@
-# NOEMA
+<div align="center">
 
-**Calibrated autonomous forecasting for prediction markets.**
+# NOEMA //
 
-NOEMA is designed as a small autonomous forecasting desk: discover markets, understand resolution rules, gather evidence, estimate fair probabilities, subtract uncertainty and trading costs, reject weak edges, paper-execute strong candidates, and score every forecast after resolution.
+### Observe. Infer. Verify. Act.
 
-> **Market price is not truth. Model confidence is not edge.**
->
-> NOEMA only promotes an opportunity after uncertainty, spread, fees, slippage, liquidity, and deterministic risk limits are applied.
+**A calibrated autonomous market-intelligence system for prediction markets, realtime microstructure research, and bounded multichain agents.**
 
-## Autonomous loop
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![CI](https://img.shields.io/github/actions/workflow/status/gryszzz/NOEMA/verify.yml?branch=main&label=verify)](https://github.com/gryszzz/NOEMA/actions)
+![Research First](https://img.shields.io/badge/mode-research--first-8A7DFF)
+![Fail Closed](https://img.shields.io/badge/risk-fail--closed-2E8B57)
+![Ops Console](https://img.shields.io/badge/console-NOEMA%20OPS-111827)
+
+**Evidence → Belief → Edge → Restraint**
+
+</div>
+
+---
+
+## What is NOEMA?
+
+NOEMA is an autonomous forecasting and market-research stack built around one idea:
+
+> **A model is not allowed to call itself smart. It has to prove it.**
+
+The system continuously gathers market data, preserves evidence, forms probabilistic beliefs, compares those beliefs with executable prices, measures uncertainty and execution quality, rejects weak opportunities, and scores itself after resolution.
+
+It is designed to become more selective as it becomes more capable.
+
+Most markets should end in **PASS**.
+
+## System map
+
+```mermaid
+flowchart TD
+    A[Authorized Market + World Data] --> B[Validation + Provenance]
+    B --> C[Realtime Journal + Sequence-Safe Books]
+    C --> D[Specialist Models]
+    D --> E[Adaptive Trust]
+    E --> F[Bayesian Ensemble]
+    F --> G[Fair Probability Range]
+
+    G --> H[YES / NO Edge]
+    H --> I[Fees + Spread + Slippage]
+    I --> J[Uncertainty + Toxicity + Timing]
+    J --> K[Research Credibility]
+    K --> L[Strategy Health]
+    L --> M[Capital Guardian]
+    M --> N{Decision}
+
+    N -->|weak / stale / uncertain| P[PASS]
+    N -->|research-worthy| Q[PAPER / DEMO]
+
+    Q --> R[Outcome + Fill + Fee Telemetry]
+    R --> S[Calibration + Trust Update]
+    S --> D
+```
+
+## Current stack
+
+| Layer | What NOEMA does |
+| --- | --- |
+| **Truth** | Evidence IDs, payload hashes, source authority, stale/future-data rejection |
+| **Realtime** | WebSocket capture, receipt timestamps, sequence-aware local books, latency metrics |
+| **Forecasting** | Market prior, specialist probabilities, Bayesian/log-odds ensemble |
+| **Self-critique** | Model disagreement, skeptic logic, multiple-testing/search penalties |
+| **Calibration** | Brier score, log loss, ECE, tail calibration, drift detection |
+| **Microstructure** | Spread, liquidity, queue crowding, toxicity, shock resilience, lead/lag |
+| **Timing** | Quote freshness, latency, edge persistence, price-shock rejection |
+| **Execution truth** | Fills, fees, maker/taker mix, partial fills, reconciliation |
+| **Survival** | Drawdown stops, exposure caps, reserve floor, loss quarantine, master halt |
+| **Ops** | Browser dashboard, Opportunity Radar, account telemetry, model-trust view |
+| **Wallet foundation** | Multichain intents, policy gate, daily budget, provider-neutral signer |
+
+## Opportunity Radar
+
+The Ops Console contains an expandable **Research Attention Radar**.
+
+Each market can expose:
 
 ```text
-market discovery
-      ↓
-resolution rules
-      ↓
-source-backed evidence
-      ↓
-independent forecasts
-      ↓
-calibration
-      ↓
-skeptic / contradiction pass
-      ↓
-fair probability range
-      ↓
-market price + costs
-      ↓
+model probability
+market probability
+executable ask
+raw edge
+estimated cost
+uncertainty penalty
 robust edge
-      ↓
-deterministic risk gate
-      ↓
-PASS or PAPER EXECUTION
-      ↓
-outcome + calibration update
+spread
+liquidity
+freshness
+forecast width
+evidence IDs
+decision
+exact PASS / attention reason
 ```
 
-The intended production behavior is selective. Most markets should end in **PASS**.
+The radar ranks **research attention**, not guaranteed trades.
 
-## Current core
+Automatic attention scoring is suppressed for obvious election/political contract titles.
 
-The first branch adds:
+## Edge-fragment laboratory
 
-- immutable market / forecast / opportunity / action models;
-- append-only SQLite forecast ledger;
-- deterministic cost and risk gates;
-- explicit paper vs live modes;
-- generic venue-adapter interface;
-- paper broker;
-- bounded autonomous scheduler;
-- unit tests and CI;
-- an agent operating contract that forbids fabricated inputs, lookahead, unsupported venue automation, secret leakage, and silent risk overrides.
+NOEMA includes small diagnostics that can be measured independently and deleted if they do not add value.
 
-See [docs/architecture.md](docs/architecture.md).
+```mermaid
+mindmap
+  root((EDGE FRAGMENTS))
+    Flow
+      VPIN-like volume toxicity
+      Arrival toxicity
+      Directional persistence
+    Book
+      Queue crowding
+      Spread
+      Depth imbalance
+    Time
+      Edge half-life
+      Time-to-resolution pressure
+      Latency
+    Behavior
+      Tail calibration
+      Calibration drift
+      Shock resilience
+    Structure
+      Probability graph consistency
+      Threshold monotonicity
+      Lead / lag
+```
 
-## Venue strategy
+These are hypotheses, not alpha declarations.
 
-### Kalshi
-Primary first integration. Kalshi documents REST, WebSocket, and FIX APIs for event-contract market data and trade execution, plus a demo environment.
-
-### Polymarket
-Second integration. Use only its documented SDKs/APIs and respect current availability and account restrictions.
-
-### Sportsbook comparison data
-DraftKings can be useful as a market reference, but NOEMA should **not scrape or automate the consumer DraftKings sportsbook**. Use an authorized odds/data provider for sportsbook consensus instead.
-
-## Modes
+The lifecycle is:
 
 ```text
-PAPER (default)
-  market data → forecast → risk → simulated fill → score
-
-LIVE (explicit)
-  market data → forecast → risk → venue adapter → order
+hypothesis
+  -> collect
+  -> replay
+  -> walk-forward test
+  -> incremental-value test
+  -> KEEP / THROTTLE / DELETE
 ```
 
-Live execution is intentionally impossible unless:
-1. the venue adapter declares live execution support;
-2. live mode is explicitly enabled;
-3. credentials are configured outside the repository;
-4. deterministic limits approve the action.
+## Strategist
 
-An LLM never chooses stake size or bypasses the kill switch.
+NOEMA does not average a pile of agents and call it intelligence.
 
-## What makes NOEMA useful
+Specialists earn influence.
 
-NOEMA is not optimized for number of trades. It is optimized for measurable forecast quality:
+```mermaid
+flowchart LR
+    M[Market Prior] --> E[Ensemble]
+    A[Model A] --> T1[Trust A] --> E
+    B[Model B] --> T2[Trust B] --> E
+    C[Model C] --> T3[Trust C] --> E
+    E --> U[Disagreement + Uncertainty]
+    U --> V[Fair Value Range]
+```
 
-- Brier score
-- log loss
-- calibration error
-- realized performance after costs
-- closing-price comparison where meaningful
-- maximum drawdown
-- results by market family, horizon, confidence bucket, and edge bucket
+A model can lose influence when:
 
-A few profitable outcomes do not prove an edge.
+- recent calibration deteriorates;
+- Brier/log-loss stops beating transparent baselines;
+- out-of-sample performance weakens;
+- drawdown breaches strategy policy;
+- a formerly useful signal decays.
 
-## Budget philosophy
+See [docs/strategist.md](docs/strategist.md).
 
-Expensive reasoning should only touch finalists:
+## Truth + timing
+
+NOEMA treats hallucination as a systems problem, not a prompting problem.
+
+A factual AI claim must resolve to stored evidence.
 
 ```text
-thousands of markets
-  → deterministic filters
-  → cheap statistical features
-  → model ensemble
-  → selective retrieval
-  → skeptic
-  → a handful of candidates
+CLAIM
+  -> evidence ID
+  -> source
+  -> observed timestamp
+  -> retrieval timestamp
+  -> payload hash
+  -> integrity / freshness gate
 ```
 
-That lets the agent run continuously without turning every market scan into an expensive AI call.
+Realtime market books also fail closed on sequence gaps.
 
-## Development
+See [docs/truth-timing.md](docs/truth-timing.md).
+
+## NOEMA // OPS
+
+Run the browser console:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q
-ruff check .
+noema-dashboard
 ```
 
-## Kalshi Core
+Open:
 
-The first real venue adapter now targets Kalshi's official Trade API:
+```text
+http://127.0.0.1:8787
+```
 
-- open-market discovery with cursor pagination;
-- live binary quotes and settlement rules;
-- order-book retrieval;
-- exchange-status checks;
-- demo and production environment separation;
-- RSA / Ed25519 request signing;
-- authenticated **demo** order submission;
-- production execution hard-disabled unless explicitly armed.
+The console can display:
 
-See [docs/kalshi-core.md](docs/kalshi-core.md).
+- exchange-reported realized P&L;
+- fees;
+- orders, fills and positions;
+- reconciliation status;
+- model trust;
+- data health;
+- resolved-market coverage;
+- evidence/realtime counts;
+- Opportunity Radar;
+- research diagnostics.
 
-## Next integrations
+The UI deliberately separates **observed**, **derived**, **model**, and **research** values.
 
-1. Kalshi WebSocket market/order-book stream
-2. Historical resolved-market ingestion + outcome scoring
-3. Baseline forecasters and calibration tables
-4. Specialized first niche
-5. Separate Kalshi perps engine
-6. Polymarket market-data adapter
-7. Authorized sportsbook-odds reference feed
-8. Only after sufficient out-of-sample evidence: tightly capped live execution
+## Agent wallet architecture
 
-NOEMA is research software. Prediction markets and sports betting involve real financial risk; paper performance can differ materially from live results.
+The long-term goal is autonomous action without handing unlimited authority to one process.
 
+```mermaid
+flowchart LR
+    H[Human Treasury] -->|bounded funding| A[NOEMA Agent Wallet]
+    N[NOEMA Strategist] --> I[Wallet Intent]
+    I --> P[Deterministic Wallet Policy]
+    A --> P
+    P -->|approved only| S[Policy-Enforced Signer]
+    S --> SOL[Solana]
+    S --> EVM[EVM]
+    K[Master Halt] -. veto .-> P
+    R[Reserve / Tx / Daily Limits] -. veto .-> P
+    L[Venue + Contract Allowlists] -. veto .-> P
+```
 
-## Demo Soak Lab
+### Treasury vs agent
 
-NOEMA now includes a replayable data-collection lab for long-running demo/paper research.
+**Treasury / human wallet**
+
+- long-term funds;
+- deposits/withdrawals;
+- recovery;
+- user-visible wallet such as Phantom;
+- never exposes its seed to NOEMA.
+
+**NOEMA agent wallet**
+
+- intentionally small operating balance;
+- autonomous only inside pre-authorized limits;
+- separate signer/provider;
+- replaceable;
+- hard policy boundaries.
+
+Current code includes:
+
+- wallet roles/providers;
+- Solana/EVM/Bitcoin-capable chain descriptors;
+- structured wallet intents;
+- deterministic policy evaluation;
+- daily notional accounting;
+- evidence requirement;
+- reserve/slippage/size caps;
+- provider-neutral signer interface;
+- fail-closed disabled signer by default.
+
+See [docs/agent-wallet.md](docs/agent-wallet.md).
+
+## Multichain direction
+
+The future multichain research engine is not intended to be a blind meme-coin sniper.
+
+It should ask:
+
+```text
+Is the move real?
+Is the liquidity real?
+What venue moved first?
+What is the executable route?
+What is the price impact?
+What are gas / priority costs?
+Is order flow toxic?
+Is the edge already decaying?
+Does the route violate wallet policy?
+```
+
+Potential adapters:
+
+- Solana DEX routing;
+- EVM DEX routing;
+- cross-venue reference prices;
+- on-chain flow;
+- bridge-cost/latency research;
+- volatility/regime models.
+
+Every chain/venue remains an isolated adapter behind the wallet policy.
+
+## Demo soak lab
+
+Build a replayable dataset:
 
 ```bash
 noema soak-once --limit 100
@@ -164,82 +308,110 @@ noema sync-outcomes --limit 2000
 noema evaluate
 ```
 
-The lab persists normalized market snapshots, validation failures, collector heartbeats, and settled outcomes into SQLite. A Docker worker is included for an always-on deployment with a persistent `/data` volume.
+The long-running worker records normalized snapshots, invalid observations, heartbeats and resolved outcomes.
 
 See [docs/soak-lab.md](docs/soak-lab.md).
 
+## Execution telemetry
 
-## Strategist Layer
-
-NOEMA now has a research strategist layer designed to learn **where its own beliefs deserve trust**.
-
-It includes:
-
-- market-prior shrinkage;
-- reliability-weighted Bayesian/log-odds ensemble pooling;
-- adaptive specialist trust updated after resolution;
-- explicit model-disagreement penalties;
-- symmetric YES / NO edge comparison;
-- separate fee, slippage, liquidity and uncertainty haircuts;
-- walk-forward evaluation helpers;
-- multiple-testing / false-discovery penalties;
-- calibration-aware strategy promotion;
-- model-family concentration caps;
-- research-only capped fractional Kelly diagnostics;
-- human-readable strategist reports.
-
-The strategist does **not** assume profit is guaranteed. Apparent edge must survive out-of-sample testing, costs, uncertainty, search penalties, calibration checks and survival controls before it is considered credible.
-
-See [docs/strategist.md](docs/strategist.md).
-
-
-## Truth + Timing Layer
-
-NOEMA now separates realtime truth, AI interpretation, and timing research.
-
-It includes:
-
-- append-only evidence provenance with payload hashes;
-- forecast grounding against stored evidence IDs;
-- structured AI reasoning packets with per-claim evidence requirements;
-- raw WebSocket frame journaling with receipt timestamps;
-- sequence-aware local binary order books;
-- feed/processing latency measurement;
-- edge-persistence tracking;
-- shock/spread/latency-aware entry-quality research;
-- source-authority policy;
-- deterministic truth + timing gates.
-
-The design intentionally prefers missing an opportunity over acting on stale, corrupt, unsynchronized, or ungrounded state.
-
-See [docs/truth-timing.md](docs/truth-timing.md).
-
-
-## Ops Console
-
-NOEMA includes a lightweight browser console for local or private-network monitoring.
+Authenticated read-only telemetry:
 
 ```bash
-noema-dashboard
+noema account
+noema telemetry
 ```
 
-Default address:
+NOEMA can reconcile:
+
+- exchange-reported order fill counts;
+- raw fill records;
+- partial fills;
+- maker/taker mix;
+- actual fee cost;
+- position-level fees;
+- realized P&L.
+
+See [docs/execution-telemetry.md](docs/execution-telemetry.md).
+
+## Kalshi
+
+The current venue stack includes:
+
+- market discovery;
+- binary quote normalization;
+- resolution rules;
+- authenticated orderbook reads;
+- WebSocket ingestion;
+- market-history/outcome sync;
+- account telemetry;
+- queue position observation;
+- demo/production separation.
+
+See [docs/kalshi-core.md](docs/kalshi-core.md).
+
+## Modes
 
 ```text
-http://127.0.0.1:8787
+RESEARCH
+  ingest -> replay -> forecast -> evaluate
+
+PAPER / DEMO
+  live data -> forecast -> policy -> simulated/demo behavior -> score
+
+PRODUCTION
+  intentionally gated behind explicit credentials, wallet/venue policy,
+  survival controls, current API verification and human-controlled limits
 ```
 
-The console separates observed account/exchange data from research-derived analytics and can display:
+## Repository principles
 
-- exchange-reported realized P&L;
-- fees paid;
-- orders, fills, positions and reconciliation;
-- resolved-market / forecast counts;
-- soak-lab data quality;
-- realtime frame and evidence counts;
-- model trust;
-- microstructure research status.
+1. **No fabricated inputs.**
+2. **No lookahead.**
+3. **Probability before position.**
+4. **Evidence before narrative.**
+5. **Risk is deterministic.**
+6. **Unknown state fails closed.**
+7. **Forecasts are immutable.**
+8. **Execution costs are measured.**
+9. **Models earn trust.**
+10. **Survival outranks activity.**
 
-For a remote/private deployment set `NOEMA_DASHBOARD_HOST` explicitly and protect access at the infrastructure layer.
+## Development
 
-Research modules now include order-flow toxicity, queue crowding, time-to-resolution pressure, probability-graph consistency and lead/lag diagnostics. These are research hypotheses, not assumed sources of profit.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+ruff check .
+pytest -q
+```
+
+## Project status
+
+```text
+forecasting core          ██████████
+Kalshi data stack         ██████████
+replay / evaluation       ██████████
+adaptive strategist       ██████████
+truth / provenance        ██████████
+execution telemetry       ██████████
+Ops Console / radar       ██████████
+agent-wallet policy       ███████░░░
+multichain adapters       ██░░░░░░░░
+mainnet autonomy          ░░░░░░░░░░
+```
+
+The unfinished pieces are intentionally unfinished until they can be validated against real provider/venue behavior.
+
+---
+
+<div align="center">
+
+### NOEMA //
+
+**Observe reality. Form beliefs. Measure edge. Protect capital.**
+
+Research software for uncertain markets. No strategy, model, or automation can guarantee profit.
+
+</div>
