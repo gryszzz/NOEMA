@@ -43,7 +43,7 @@ def find_lead_lag(
     follower_changes = _changes(follower)
 
     best_lag: int | None = None
-    best_corr = 0.0
+    best_corr = -2.0
     best_obs = 0
 
     for lag in range(max_lag + 1):
@@ -52,7 +52,7 @@ def find_lead_lag(
         else:
             a, b = leader_changes[:-lag], follower_changes[lag:]
         corr = _corr(a, b)
-        if abs(corr) > abs(best_corr):
+        if corr > best_corr:
             best_corr = corr
             best_lag = lag
             best_obs = len(a)
