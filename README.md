@@ -7,14 +7,17 @@
 ![Paper research](https://img.shields.io/badge/mode-paper%20research-57D9E3)
 ![Live execution locked](https://img.shields.io/badge/live%20execution-locked-F0B75E)
 
-**An evidence-first agent for event-driven markets.**
+**Calibrated market intelligence and an evolving agent life engine for event-driven markets.**
 
 </div>
 
 NOEMA watches markets, records time-stamped forecasts, checks its ideas against
 later outcomes, and shows its reasoning and operating costs in an Ops Console.
-Its aim is to earn greater autonomy through measured performance. It does not
-claim an edge merely because a model finds a market interesting.
+Its long-term vision includes an agent EVM economy: a dedicated wallet, bounded
+budgets, and the ability to fund its own operation if real results support it.
+Today, that economy is a policy and observation foundation. NOEMA earns greater
+autonomy through measured performance; an interesting model answer is not proof
+of an edge.
 
 > **Current mode:** autonomous **paper research**. Live orders and automatic bill
 > payment are not part of the running worker. Profitable operation has not been proven.
