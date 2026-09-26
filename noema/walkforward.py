@@ -1,10 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence, TypeVar
-
-
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -15,7 +12,7 @@ class WalkForwardFold:
     test_end: int
 
 
-def expanding_walk_forward(
+def expanding_walk_forward[T](
     rows: Sequence[T],
     *,
     min_train: int,
