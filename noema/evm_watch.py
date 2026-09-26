@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
 
 import httpx
 
@@ -45,7 +44,7 @@ class EvmWatchClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def _rpc(self, method: str, params: list[Any]) -> Any:
+    async def _rpc(self, method: str, params: list[object]) -> object:
         response = await self.client.post(
             "",
             json={
