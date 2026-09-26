@@ -103,6 +103,17 @@ of its forecast. `noema paper-audit` scores only paper quotes recorded before
 later observed settlement. No order is submitted. A quote based on displayed
 depth does not prove an order would have filled. See [evaluation](docs/evaluation.md).
 
+## Trench-1: first crypto specialty
+
+NOEMA now has a narrow, research-only Solana new-token layer instead of a generic
+"trade every coin" mandate. Trench-1 records early price/liquidity/flow growth,
+holder concentration, token-control risk, Jupiter organic activity, rejected-token
+counterfactuals, research-trial counts, purged walk-forward folds, PSR, and PBO.
+
+It produces `quarantine`, `observe`, or `research_candidate` -- never a live
+BUY/SELL instruction. Read [Trench-1](docs/trench-1.md) for the evidence base,
+data contract, training ladder, and promotion rules.
+
 ## Keep the project affordable
 
 The repository's `render.yaml` defines **one paid paper worker with a persistent
