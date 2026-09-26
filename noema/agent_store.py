@@ -121,6 +121,12 @@ class AgentStore:
                         {"status": "unconfigured", "detail": "cycle predates market health tracking"},
                     )
                 ),
+                trench=AgentConnectionState(
+                    **last_cycle_raw.get(
+                        "trench",
+                        {"status": "disabled", "detail": "cycle predates Trench collection"},
+                    )
+                ),
             )
 
         return AgentStatus(

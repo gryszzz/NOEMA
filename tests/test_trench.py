@@ -68,7 +68,13 @@ def test_clean_growth_can_become_research_candidate() -> None:
     features = extract_trench_features(ticks)
     assessment = assess_trench_candidate(
         features,
-        TokenControlState(),
+        TokenControlState(
+            mint_authority_present=False,
+            freeze_authority_present=False,
+            permanent_delegate_present=False,
+            transfer_hook_present=False,
+            transfer_fee_bps=0,
+        ),
         current_liquidity_usd=ticks[-1].liquidity_usd,
     )
 
@@ -97,3 +103,40 @@ def test_control_and_wash_risk_quarantine_candidate() -> None:
 
     assert assessment.disposition == "quarantine"
     assert assessment.survival_risk >= 0.75
+
+
+def test_unknown_control_state_is_not_treated_as_explicitly_safe() -> None:
+    ticks = _ticks()
+    features = extract_trench_features(ticks)
+    unknown = assess_trench_candidate(
+        features,
+        TokenControlState(),
+        current_liquidity_usd=ticks[-1].liquidity_usd,
+    )
+    safe = assess_trench_candidate(
+        features,
+        TokenControlState(
+            mint_authority_present=False,
+            freeze_authority_present=False,
+            permanent_delegate_present=False,
+            transfer_hook_present=False,
+            transfer_fee_bps=0,
+        ),
+        current_liquidity_usd=ticks[-1].liquidity_usd,
+    )
+
+    assert unknown.survival_risk > safe.survival_risk
+    assert any("unknown" in reason for reason in unknown.reasons)
+
+
+def test_cumulative_volume_is_not_double_counted_across_snapshots() -> None:
+    ticks = _ticks()
+    features = extract_trench_features(ticks)
+    latest = ticks[-1]
+    expected = (
+        latest.buy_volume_usd - latest.sell_volume_usd
+    ) / (
+        latest.buy_volume_usd + latest.sell_volume_usd
+    )
+
+    assert features.signed_flow_imbalance == pytest.approx(expected)

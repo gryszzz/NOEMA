@@ -20,6 +20,7 @@ from .ladder import build_ladder_report
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
 from .telemetry_report import build_telemetry_report
+from .trench_dashboard import build_trench_overview
 from .wallet_diagnostics import public_wallet_policy
 
 app = FastAPI(title="NOEMA Ops Console", docs_url="/docs", redoc_url=None)
@@ -84,6 +85,11 @@ async def bill() -> dict[str, Any]:
 @app.get("/api/radar")
 async def radar() -> list[dict[str, Any]]:
     return [row.__dict__ for row in build_radar(_db_path())]
+
+
+@app.get("/api/trench")
+async def trench() -> dict[str, Any]:
+    return build_trench_overview(_db_path())
 
 
 @app.get("/api/wallet-policy")

@@ -174,6 +174,66 @@ References:
 The goal is not to celebrate the best backtest. It is to estimate how likely the research process
 is to have selected a lucky configuration.
 
+## Continuous collector
+
+Trench-1 now has a persistent, read-only launch collector that can run inside the normal NOEMA
+agent process.
+
+Enable it explicitly:
+
+```text
+NOEMA_TRENCH_ENABLED=1
+NOEMA_JUPITER_API_KEY=...
+NOEMA_SOLANA_RPC_URL=https://...
+```
+
+The API key is optional for Jupiter keyless prototyping, but the default request pause is
+conservative for the current 0.5 RPS keyless tier. Configure the pause for the rate limit of the
+connected Jupiter plan.
+
+Operator commands:
+
+```bash
+noema trench-once
+noema trench-show
+```
+
+The Ops API exposes `GET /api/trench`.
+
+### Time-honest horizon schedule
+
+Default target ages from first pool creation:
+
+```text
+30s -> 1m -> 2m -> 5m -> 15m -> 1h -> 6h -> 24h
+```
+
+A target that is already too stale is recorded as `missed`. NOEMA does not backfill a five-minute
+state and pretend it was a 30-second observation.
+
+Each collection attempt is separate from successful immutable observations, so API/RPC failures
+remain missing data rather than becoming fake zeroes.
+
+Only one target horizon per token is collected in a cycle. The five-minute snapshot is the first
+fixed assessment point. Later launch-age observations are attached as counterfactual outcomes
+against that frozen five-minute reference.
+
+### Jupiter field semantics
+
+The collector preserves provider semantics rather than inventing features:
+
+- `numOrganicBuyers` is stored as organic net buyers, not generic unique buyers;
+- `numTraders` remains total traders;
+- regular buy/sell volume and organic buy/sell volume remain distinct;
+- `organicScore` is stored raw;
+- absent token-control audit fields remain unknown;
+- an upstream suspicious flag is preserved;
+- Token API price/liquidity unavailability causes a failed/missing snapshot, never a zero price.
+
+For launches younger than 24 hours, `stats24h` is used as a life-to-date approximation because
+their first pool did not exist before the rolling window. Raw Jupiter payloads are saved alongside
+the normalized observation for later replay.
+
 ## Initial collection protocol
 
 A practical first dataset should snapshot a token repeatedly from first tradeability.
