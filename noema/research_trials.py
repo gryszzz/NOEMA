@@ -128,6 +128,38 @@ class ResearchTrialStore:
         ).fetchone()
         return 0 if row is None else int(row[0])
 
+    def recent(
+        self,
+        *,
+        status: str | None = None,
+        family: str | None = None,
+        limit: int = 50,
+    ) -> list[ResearchTrial]:
+        if limit <= 0:
+            return []
+        clauses: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if family is not None:
+            clauses.append("family = ?")
+            params.append(family)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(limit)
+        rows = self.conn.execute(
+            f"""
+            SELECT trial_id, family, hypothesis, params_json, feature_set_version,
+                   status, created_at, parent_trial_id
+            FROM research_trials
+            {where}
+            ORDER BY created_at DESC, trial_id
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [ResearchTrial(*row) for row in rows]
+
     def get(self, trial_id: str) -> ResearchTrial | None:
         row = self.conn.execute(
             """
