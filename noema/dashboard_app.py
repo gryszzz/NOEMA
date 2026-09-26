@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
+from .agent_dashboard import build_agent_overview
 from .dashboard_data import build_overview
 from .economic_dashboard import build_economic_overview
 from .kalshi_telemetry import KalshiTelemetry
@@ -25,6 +26,11 @@ def _db_path() -> str:
 async def index() -> str:
     path = Path(__file__).with_name("static") / "index.html"
     return path.read_text()
+
+
+@app.get("/api/agent")
+async def agent() -> dict[str, Any]:
+    return build_agent_overview(_db_path())
 
 
 @app.get("/api/overview")
