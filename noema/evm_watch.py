@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from decimal import Decimal
+from re import fullmatch
 
 import httpx
-
-
-_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
 @dataclass(frozen=True)
@@ -61,15 +58,19 @@ class EvmWatchClient:
         return payload["result"]
 
     async def snapshot(self) -> EvmWalletSnapshot:
-        chain_hex = await self._rpc("eth_chainId", [])
-        block_hex = await self._rpc("eth_blockNumber", [])
-        nonce_hex = await self._rpc(
-            "eth_getTransactionCount",
-            [self.address, "latest"],
+        chain_hex = str(await self._rpc("eth_chainId", []))
+        block_hex = str(await self._rpc("eth_blockNumber", []))
+        nonce_hex = str(
+            await self._rpc(
+                "eth_getTransactionCount",
+                [self.address, "latest"],
+            )
         )
-        balance_hex = await self._rpc(
-            "eth_getBalance",
-            [self.address, "latest"],
+        balance_hex = str(
+            await self._rpc(
+                "eth_getBalance",
+                [self.address, "latest"],
+            )
         )
 
         balance_wei = int(balance_hex, 16)
