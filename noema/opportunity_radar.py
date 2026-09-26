@@ -60,7 +60,7 @@ def _attention_score(
     freshness_seconds: float,
     uncertainty_width: float,
 ) -> float:
-    edge = min(max(abs(robust_edge) / 0.10, 0.0), 1.0)
+    edge = min(max(robust_edge / 0.10, 0.0), 1.0)
     spread_quality = 0.0 if spread is None else max(0.0, 1 - min(spread / 0.10, 1.0))
     liquidity = 0.0 if not liquidity_usd else min(liquidity_usd / 10_000.0, 1.0)
     freshness = max(0.0, 1 - min(freshness_seconds / 300.0, 1.0))
