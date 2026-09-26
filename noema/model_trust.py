@@ -47,9 +47,9 @@ def derive_model_trust(
     log_advantage = performance.market_mean_log_loss - performance.mean_log_loss
     brier_advantage = performance.market_mean_brier - performance.mean_brier
 
-    # Smooth bounded score: negative or weak models stay low-trust.
+    # Trust is earned only through positive baseline-relative performance.
     combined = 3.0 * log_advantage + 2.0 * brier_advantage
-    quality = 1 / (1 + math.exp(-combined * 8))
+    quality = 1 - math.exp(-max(combined, 0.0) * 4)
     reliability = max(0.0, min(1.5, quality * evidence_strength * 1.5))
 
     reason = (
