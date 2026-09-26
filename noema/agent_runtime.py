@@ -22,6 +22,7 @@ from .kalshi_telemetry import KalshiTelemetry
 from .ledger import ForecastLedger
 from .opportunity_radar import build_radar
 from .outcomes import OutcomeStore
+from .paper_research import PaperResearchStore, collect_paper_quote
 from .provenance import EvidenceStore
 from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
@@ -182,6 +183,16 @@ async def run_cycle(
                             verified_market_ids=frozenset(verified),
                         ):
                             candidates_recorded += 1
+                            if getattr(verifier, "signer", None) is not None:
+                                try:
+                                    result = await collect_paper_quote(
+                                        verifier, PaperResearchStore(config.db_path),
+                                        market.market_id,
+                                    )
+                                    _log("agent_paper_quote", status=result.status)
+                                except (httpx.HTTPError, RuntimeError, ValueError,
+                                        TypeError, KeyError) as exc:
+                                    _log("agent_paper_quote_error", error=type(exc).__name__)
             finally:
                 await verifier.close()
 

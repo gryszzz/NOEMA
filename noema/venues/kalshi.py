@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from noema.config import KalshiConfig
 from noema.models import Action, Decision, MarketSnapshot
+from noema.paper_execution import FeeTerms
 from noema.venues.base import VenueAdapter
 
 
@@ -157,6 +158,31 @@ class KalshiVenue(VenueAdapter):
         response = await self.client.get(endpoint, params=params, headers=headers)
         response.raise_for_status()
         return response.json()
+
+    async def taker_fee_terms(self, ticker: str) -> FeeTerms:
+        """Read the current series fee terms and event overrides, fail closed."""
+        series, sep, _ = ticker.partition("-")
+        event, event_sep, _ = ticker.rpartition("-")
+        if not sep or not event_sep or not all(
+            part and all(char.isalnum() or char == "-" for char in part)
+            for part in (series, event)
+        ):
+            raise ValueError("invalid market ticker")
+        series_response = await self.client.get(f"/series/{quote(series, safe='')}")
+        series_response.raise_for_status()
+        event_response = await self.client.get(f"/events/{quote(event, safe='')}")
+        event_response.raise_for_status()
+        series_payload = series_response.json()
+        event_payload = event_response.json()
+        if not isinstance(series_payload, dict) or not isinstance(event_payload, dict):
+            raise TypeError("missing fee metadata")
+        series_data = series_payload.get("series")
+        event_data = event_payload.get("event")
+        if (not isinstance(series_data, dict) or not isinstance(event_data, dict)
+                or series_data.get("ticker") != series
+                or event_data.get("event_ticker") != event):
+            raise ValueError("fee metadata does not match the market")
+        return FeeTerms.from_api(series_data, event_data)
 
     async def exchange_status(self) -> dict[str, Any]:
         response = await self.client.get("/exchange/status")

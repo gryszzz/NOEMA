@@ -82,8 +82,36 @@ No model weights are deployed by this audit command.
 The forecast score is separate from an executable trading return. A YES buy
 pays the ask; costs depend on order size, actual venue and market fees, fills,
 slippage and subsequent settlement. The prototype engine currently uses a
-fixed fee estimate and does not verify market-specific Kalshi fee multipliers
-or an executable orderbook depth at a proposed size. Its apparent edge must
-not be reported as profit. Verify the current fee schedule, implement
-contract-level fee and fill simulation, then measure after-cost results on
-previously unseen resolved events before considering a live strategy.
+conservative paper fee placeholder and does not use verified depth or fee
+terms; it refuses Kalshi live mode. Its apparent edge must not be reported as
+profit.
+
+With read-only API credentials, the paper quote collector obtains the current
+series and event fee fields and the current orderbook. It treats NO bids as YES
+asks, checks that the spread is within the paper risk policy, walks the visible
+price levels for the requested contract count, and declines a partial fill. It
+uses the July 7, 2026 general taker rate (7% times the series/event multiplier,
+contract count, price, and one minus price) with conservative fee rounding at
+each price level. Unsupported fee types or missing fee fields fail closed. The
+schedule version and inputs are saved with an immutable first quote. The
+published [Kalshi fee schedule](https://kalshi.com/docs/kalshi-fee-schedule.pdf)
+must be rechecked if it changes.
+
+The agent can save a quote for a freshly recorded independent candidate if its
+authenticated orderbook connection works. The lower forecast bound must exceed
+the quoted price and estimated fee by at least four cents per contract: three
+cents for the risk edge threshold and one cent reserved for latency/slippage.
+`noema paper-quote TICKER --contracts 1` can inspect that same path within the
+30-second forecast validity window; it cannot replace a stale forecast with a
+new guess. Quotes above the paper risk policy's $10 stake limit are saved as
+passes. `noema paper-audit --db data/noema.db` reports hypothetical payout
+minus quoted entry costs and fees only for selected quotes and later settlements.
+It reports `no_settled_paper_quotes` when evidence is absent, and never marks
+the strategy eligible for live execution.
+
+Displayed book depth can vanish before an order arrives; account limits,
+competition, liquidity changes, and repeated correlated positions are not
+simulated. Demo-market quotes cannot establish production profitability. A
+forward paper sample with actual order latency and fill observations, calibrated
+forecast scores, position limits, and verified current fee rules is still needed
+before any claim that NOEMA can fund itself.

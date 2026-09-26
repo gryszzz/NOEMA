@@ -64,6 +64,7 @@ of NOEMA. See the [setup guide](docs/quick-connect.md).
 | Forecast | Records the YES ask for execution review and a valid bid/ask midpoint for forecast scoring. After enough earlier settled events in a comparable series, it can add an independent, exploratory frequency candidate. | Forecast ledger with timestamps and evidence |
 | Research | Ranks markets for attention and can ask a configured Foundry model to review eligible evidence. | Research packet and stated reasons to investigate or pass |
 | Score | Syncs later outcomes and compares independent candidates with the baseline from the same snapshot. | Paired Brier comparison and calibration reports |
+| Paper execution | With read-only Kalshi credentials, tests a new candidate against visible orderbook depth and event-specific taker fees; records one hypothetical quote. | Settlement-only paper net-return audit |
 | Budget | Shows the estimated monthly bill and manually recorded cash receipts/expenses; caps estimated model calls. | Operating Bill view and budget reservations |
 
 The independent candidate requires at least **30 previously observed, settled,
@@ -86,11 +87,20 @@ To inspect scored results after contracts resolve:
 noema sync-outcomes --limit 2000
 noema evaluate
 noema compare
+noema paper-audit
 ```
 
 `noema compare` reports distinct, paired settled markets; it does not turn a
 positive sample into permission for live trading. See
 [evaluation](docs/evaluation.md) and [the evidence ladder](docs/real-life-ladder.md).
+
+With Kalshi API credentials configured, the worker also records a paper quote
+for each **new** eligible independent candidate if the bid/ask book, fee terms,
+depth, and forecast freshness pass validation. To inspect a fresh candidate
+manually, run `noema paper-quote MARKET-TICKER --contracts 1` within 30 seconds
+of its forecast. `noema paper-audit` scores only paper quotes recorded before
+later observed settlement. No order is submitted. A quote based on displayed
+depth does not prove an order would have filled. See [evaluation](docs/evaluation.md).
 
 ## Keep the project affordable
 
