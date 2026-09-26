@@ -74,9 +74,10 @@ async def maybe_run_cognition(
         )
         if not store.reserve_estimated_cost(
             max_cost, daily_limit_usd=policy.max_estimated_usd_per_day,
+            hourly_call_limit=policy.max_calls_per_hour,
         ):
             await client.close()
-            return CognitionResult("idle", detail="daily estimated model budget exhausted")
+            return CognitionResult("idle", detail="model call or daily estimated budget exhausted")
     except (ValueError, KeyError, TypeError):
         await client.close()
         return CognitionResult("idle", detail="model price or daily budget unavailable")

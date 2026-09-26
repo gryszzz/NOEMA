@@ -43,6 +43,7 @@ class CognitionStore:
 
     def reserve_estimated_cost(
         self, cost_usd: float, *, daily_limit_usd: float,
+        hourly_call_limit: int = 6,
         now: datetime | None = None,
     ) -> bool:
         """Atomically reserve worst-case estimate; failed requests retain the reservation."""
@@ -51,12 +52,21 @@ class CognitionStore:
         if (
             not math.isfinite(cost_usd) or not math.isfinite(daily_limit_usd)
             or cost_usd <= 0 or daily_limit_usd <= 0
+            or hourly_call_limit <= 0
         ):
             raise ValueError("budget amounts must be positive and finite")
         now = now or datetime.now(UTC)
         day = now.astimezone(UTC).date().isoformat()
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            recent = self.conn.execute(
+                "SELECT COUNT(*) FROM cognition_budget_reservations "
+                "WHERE created_at > ? AND created_at <= ?",
+                ((now - timedelta(hours=1)).isoformat(), now.isoformat()),
+            ).fetchone()[0]
+            if recent >= hourly_call_limit:
+                self.conn.rollback()
+                return False
             spent = self.conn.execute(
                 "SELECT COALESCE(SUM(estimated_usd), 0) "
                 "FROM cognition_budget_reservations WHERE day_utc = ?", (day,),
