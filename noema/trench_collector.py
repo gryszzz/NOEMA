@@ -21,6 +21,7 @@ from .trench_features import extract_trench_features
 from .trench_models import LaunchTick, TokenControlState
 from .trench_risk import assess_trench_candidate
 from .trench_store import TrenchResearchStore
+from .trench_survival_forecast import record_candidate_survival_forecast
 
 DEFAULT_HORIZONS = (30, 60, 120, 300, 900, 3600, 21_600, 86_400)
 ASSESSMENT_HORIZON = 300
@@ -50,6 +51,7 @@ class TrenchCollectionSummary:
     failed: int
     assessments_recorded: int
     counterfactuals_recorded: int
+    survival_forecasts_recorded: int
 
 
 def _json(value: object) -> str:
@@ -467,13 +469,13 @@ async def collect_trench_cycle(
     discovered = store.register_recent(recent, now=now)
     due = store.due_observations(now=now, limit=due_limit)
     if not due:
-        return TrenchCollectionSummary(discovered, 0, 0, 0, 0, 0, 0)
+        return TrenchCollectionSummary(discovered, 0, 0, 0, 0, 0, 0, 0)
 
     if request_pause_seconds:
         await asyncio.sleep(request_pause_seconds)
 
     by_mint = await jupiter.tokens_by_mint(tuple(item.mint for item in due))
-    recorded = unavailable = failed = assessments = counterfactuals = 0
+    recorded = unavailable = failed = assessments = counterfactuals = forecasts = 0
     enrichment_used = 0
 
     for item in due:
@@ -531,6 +533,15 @@ async def collect_trench_cycle(
                 )
                 assessments += added_assessments
                 counterfactuals += added_counterfactuals
+                if added_assessments:
+                    candidate = TrenchResearchStore(db_path).candidate_for_token(item.mint)
+                    if candidate is not None:
+                        forecast = record_candidate_survival_forecast(
+                            db_path,
+                            candidate_id=candidate[0],
+                            recorded_at=now,
+                        )
+                        forecasts += int(forecast.status == "recorded")
         except (RuntimeError, ValueError, TypeError, KeyError) as exc:
             store.record_attempt(
                 item,
@@ -549,4 +560,5 @@ async def collect_trench_cycle(
         failed=failed,
         assessments_recorded=assessments,
         counterfactuals_recorded=counterfactuals,
+        survival_forecasts_recorded=forecasts,
     )
