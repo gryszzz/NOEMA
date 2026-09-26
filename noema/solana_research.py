@@ -49,7 +49,7 @@ class SolanaRpcResearchClient:
             raise RuntimeError(f"Solana RPC error: {data['error']}")
         result = data.get("result")
         if not isinstance(result, dict):
-            raise RuntimeError("Solana RPC response missing result")
+            raise TypeError("Solana RPC response missing result")
         return result
 
     async def token_supply(self, mint: str) -> TokenSupply:
@@ -113,11 +113,11 @@ class JupiterTrenchResearchClient:
     async def recent_tradeable_tokens(self) -> list[dict[str, Any]]:
         data = await self._get("/tokens/v2/recent")
         if not isinstance(data, list):
-            raise RuntimeError("unexpected Jupiter recent-token response")
+            raise TypeError("unexpected Jupiter recent-token response")
         return [item for item in data if isinstance(item, dict)]
 
     async def top_organic_tokens_5m(self) -> list[dict[str, Any]]:
         data = await self._get("/tokens/v2/toporganicscore/5m")
         if not isinstance(data, list):
-            raise RuntimeError("unexpected Jupiter organic-score response")
+            raise TypeError("unexpected Jupiter organic-score response")
         return [item for item in data if isinstance(item, dict)]
