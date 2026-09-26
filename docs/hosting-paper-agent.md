@@ -5,6 +5,7 @@ disk. It starts `noema-agent` every deploy, storing heartbeats, snapshots,
 forecasts, and outcomes in the same SQLite database. It runs a cycle every five
 minutes and synchronizes up to 500 outcomes hourly. No trading credentials,
 wallet keys, model API keys, or public dashboard are configured.
+The `.python-version` file pins Render's runtime to Python 3.12.
 
 ## Before creating the service
 
