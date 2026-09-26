@@ -15,3 +15,13 @@ def test_planner_collects_when_no_radar_exists() -> None:
         market_data_healthy=True,
     )
     assert result.goal == "collect_world_state"
+
+
+def test_planner_can_follow_ecosystem_specialist_focus() -> None:
+    result = choose_goal(
+        radar=[],
+        market_data_healthy=True,
+        ecosystem_focus="trench-1",
+    )
+    assert result.goal == "develop_specialist"
+    assert "trench-1" in result.reason
