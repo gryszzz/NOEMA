@@ -191,3 +191,25 @@ It includes:
 The strategist does **not** assume profit is guaranteed. Apparent edge must survive out-of-sample testing, costs, uncertainty, search penalties, calibration checks and survival controls before it is considered credible.
 
 See [docs/strategist.md](docs/strategist.md).
+
+
+## Truth + Timing Layer
+
+NOEMA now separates realtime truth, AI interpretation, and timing research.
+
+It includes:
+
+- append-only evidence provenance with payload hashes;
+- forecast grounding against stored evidence IDs;
+- structured AI reasoning packets with per-claim evidence requirements;
+- raw WebSocket frame journaling with receipt timestamps;
+- sequence-aware local binary order books;
+- feed/processing latency measurement;
+- edge-persistence tracking;
+- shock/spread/latency-aware entry-quality research;
+- source-authority policy;
+- deterministic truth + timing gates.
+
+The design intentionally prefers missing an opportunity over acting on stale, corrupt, unsynchronized, or ungrounded state.
+
+See [docs/truth-timing.md](docs/truth-timing.md).
