@@ -70,6 +70,18 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
     </div>
 
     <div class="card span6">
+      <h2>Wallet Topology</h2>
+      <div class="row"><span>Human treasury</span><b id="phantom-state">NOT CONNECTED</b></div>
+      <div class="row"><span>Agent signer</span><b id="agent-signer">DISABLED</b></div>
+      <div class="row"><span>Agent master halt</span><b id="agent-halt" class="warn">ON</b></div>
+      <div class="row"><span>Allowed chains</span><b id="agent-chains">—</b></div>
+      <div class="row"><span>Per-tx cap</span><b id="agent-tx-cap">—</b></div>
+      <div class="row"><span>Daily cap</span><b id="agent-day-cap">—</b></div>
+      <button class="refresh" style="margin-top:10px" onclick="connectPhantom()">CONNECT PHANTOM</button>
+      <div id="phantom-address" class="small" style="margin-top:8px">Client-only connection. NOEMA never receives your seed phrase.</div>
+    </div>
+
+    <div class="card span6">
       <h2>Execution Reconciliation</h2>
       <div class="row"><span>Order ↔ fill consistency</span><b id="order-recon">—</b></div>
       <div class="row"><span>Position ↔ fee consistency</span><b id="fee-recon">—</b></div>
@@ -106,6 +118,17 @@ function renderRadar(rows){
  el.className='';
  el.innerHTML='<table><thead><tr><th>MARKET</th><th>P(YES)</th><th>MKT</th><th>ASK</th><th>ROBUST EDGE</th><th>SPREAD</th><th>LIQUIDITY</th><th>FRESH</th><th>UNCERTAINTY</th><th>ATTN</th><th>DECISION</th></tr></thead><tbody>'+rows.slice(0,50).map(r=>{const details='<details><summary>'+r.title+'</summary><div class="small" style="margin-top:7px"><b>Raw edge:</b> '+pct(r.raw_edge)+' &nbsp; <b>Estimated cost:</b> '+pct(r.estimated_cost)+' &nbsp; <b>Uncertainty penalty:</b> '+pct(r.uncertainty_penalty)+'<br><b>Evidence:</b> '+((r.evidence_ids&&r.evidence_ids.length)?r.evidence_ids.join(', '):'none recorded')+'<br><b>Why NOEMA '+(String(r.decision).includes('pass')?'passed':'is watching')+':</b> '+(r.reason||'no reason recorded')+'</div></details>';return '<tr><td>'+details+'</td><td>'+pct(r.probability_yes)+'</td><td>'+pct(r.market_probability)+'</td><td>'+(r.yes_ask==null?'—':Number(r.yes_ask).toFixed(3))+'</td><td>'+pct(r.robust_edge)+'</td><td>'+(r.spread==null?'—':pct(r.spread))+'</td><td>'+(r.liquidity_usd==null?'—':money(r.liquidity_usd))+'</td><td>'+Math.round(r.freshness_seconds)+'s</td><td>'+pct(r.uncertainty_width)+'</td><td>'+(r.attention_score==null?'SUPPRESSED':Number(r.attention_score).toFixed(2))+'</td><td>'+r.decision+'</td></tr>'}).join('')+'</tbody></table>'
 }
+async function connectPhantom(){
+ try{
+  const provider=window.phantom?.solana;
+  if(!provider||!provider.isPhantom){document.getElementById('phantom-address').textContent='Phantom extension/provider not detected.';return}
+  const result=await provider.connect();
+  const address=result.publicKey?.toString()||'connected';
+  document.getElementById('phantom-state').textContent='CONNECTED';
+  document.getElementById('phantom-state').className='good';
+  document.getElementById('phantom-address').textContent=address;
+ }catch(e){document.getElementById('phantom-address').textContent='Connection cancelled or unavailable.'}
+}
 function renderExec(rows){
  const el=document.getElementById('exec-table');
  if(!rows||!rows.length){el.className='empty';el.textContent='No fills/orders observed yet.';return}
@@ -124,6 +147,15 @@ async function refreshAll(){
   const vf=o.soak?.valid_fraction||0;document.getElementById('valid-frac').textContent=pct(vf);document.getElementById('valid-bar').style.width=(vf*100)+'%';
   renderTrust(o.model_trust);
   try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
+  try{
+   const w=await getJSON('/api/wallet-policy');
+   document.getElementById('agent-signer').textContent=String(w.signer_state||'unknown').toUpperCase();
+   document.getElementById('agent-halt').textContent=w.master_halt?'ON':'OFF';
+   document.getElementById('agent-halt').className=w.master_halt?'warn':'good';
+   document.getElementById('agent-chains').textContent=(w.allowed_chains||[]).join(', ')||'none';
+   document.getElementById('agent-tx-cap').textContent=money(w.max_transaction_usd);
+   document.getElementById('agent-day-cap').textContent=money(w.max_daily_notional_usd);
+  }catch(e){}
  }catch(e){document.getElementById('db-pill').textContent='DB ERROR'}
  try{
   const a=await getJSON('/api/live-account');
