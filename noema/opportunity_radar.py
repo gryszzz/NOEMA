@@ -20,9 +20,31 @@ class RadarRow:
     captured_at: str
     freshness_seconds: float
     uncertainty_width: float
-    attention_score: float
+    attention_score: float | None
     decision: str
     reason: str
+
+
+_POLITICAL_TERMS = {
+    "election",
+    "president",
+    "presidential",
+    "senate",
+    "senator",
+    "congress",
+    "congressional",
+    "governor",
+    "gubernatorial",
+    "democrat",
+    "republican",
+    "ballot",
+    "primary election",
+}
+
+
+def _political_like(title: str) -> bool:
+    lowered = title.lower()
+    return any(term in lowered for term in _POLITICAL_TERMS)
 
 
 def _attention_score(
@@ -101,11 +123,22 @@ def build_radar(
         upper = float(forecast.get("upper_bound", 1.0))
         robust_edge = float(opportunity.get("robust_edge", 0.0))
 
+        title = str(snapshot.get("title") or market_id)
+        score = None
+        if not _political_like(title):
+            score = _attention_score(
+                robust_edge=robust_edge,
+                spread=spread,
+                liquidity_usd=snapshot.get("liquidity_usd"),
+                freshness_seconds=freshness,
+                uncertainty_width=max(0.0, upper - lower),
+            )
+
         radar.append(
             RadarRow(
                 venue=str(venue),
                 market_id=str(market_id),
-                title=str(snapshot.get("title") or market_id),
+                title=title,
                 probability_yes=float(forecast.get("probability_yes", 0.5)),
                 yes_ask=(None if ask is None else float(ask)),
                 robust_edge=robust_edge,
@@ -118,17 +151,17 @@ def build_radar(
                 captured_at=captured.astimezone(UTC).isoformat(),
                 freshness_seconds=freshness,
                 uncertainty_width=max(0.0, upper - lower),
-                attention_score=_attention_score(
-                    robust_edge=robust_edge,
-                    spread=spread,
-                    liquidity_usd=snapshot.get("liquidity_usd"),
-                    freshness_seconds=freshness,
-                    uncertainty_width=max(0.0, upper - lower),
-                ),
+                attention_score=score,
                 decision=str(action.get("decision") or "unknown"),
                 reason=str(action.get("reason") or ""),
             )
         )
 
-    radar.sort(key=lambda row: row.attention_score, reverse=True)
+    radar.sort(
+        key=lambda row: (
+            row.attention_score is not None,
+            row.attention_score if row.attention_score is not None else -1.0,
+        ),
+        reverse=True,
+    )
     return radar
