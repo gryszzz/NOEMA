@@ -10,6 +10,7 @@ from .cognition_store import CognitionStore
 from .foundry_client import FoundryCognitionClient
 from .foundry_config import FoundryConfig
 from .opportunity_radar import RadarRow
+from .research_queue import ResearchQueueStore
 
 
 async def maybe_run_cognition(
@@ -48,7 +49,14 @@ async def maybe_run_cognition(
         reverse=True,
     )
     target = eligible[0]
-    client = FoundryCognitionClient(config)
+    try:
+        client = FoundryCognitionClient(config)
+    except (RuntimeError, ValueError) as exc:
+        return CognitionResult(
+            "degraded",
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+
     try:
         result = await client.reason_about_market(target)
     except (
@@ -76,4 +84,12 @@ async def maybe_run_cognition(
         output_tokens=result.output_tokens,
         total_tokens=result.total_tokens,
     )
+
+    queue = ResearchQueueStore(db_path)
+    for request in result.packet.requested_research:
+        queue.enqueue(
+            market_id=result.packet.market_id,
+            request=request,
+            priority=result.packet.confidence,
+        )
     return result
