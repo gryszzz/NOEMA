@@ -27,6 +27,12 @@ ASSESSMENT_HORIZON = 300
 ENRICHMENT_HORIZONS = frozenset({300, 3600, 86_400})
 
 
+def horizon_lateness_seconds(horizon_seconds: int) -> float:
+    """Allowed observation delay before a target horizon is considered missed."""
+
+    return max(30.0, min(300.0, horizon_seconds * 0.25))
+
+
 @dataclass(frozen=True)
 class DueObservation:
     mint: str
@@ -213,6 +219,24 @@ class TrenchCollectorStore:
                 scheduled = first_pool + timedelta(seconds=horizon)
                 if scheduled > now:
                     continue
+                missed = self.conn.execute(
+                    """
+                    SELECT 1 FROM trench_collection_attempts
+                    WHERE mint = ? AND horizon_seconds = ? AND status = 'missed'
+                    LIMIT 1
+                    """,
+                    (mint, horizon),
+                ).fetchone()
+                if missed is not None:
+                    continue
+                if (now - scheduled).total_seconds() > horizon_lateness_seconds(horizon):
+                    self.record_attempt(
+                        DueObservation(str(mint), first_pool, horizon, scheduled),
+                        status="missed",
+                        detail="target horizon exceeded lateness tolerance before collection",
+                        attempted_at=now,
+                    )
+                    continue
                 exists = self.conn.execute(
                     """
                     SELECT 1 FROM trench_observations
@@ -235,6 +259,8 @@ class TrenchCollectorStore:
                 if len(due) >= limit:
                     self.conn.commit()
                     return due
+                # At most one target snapshot per mint per collector cycle.
+                break
         self.conn.commit()
         return due
 
@@ -247,7 +273,7 @@ class TrenchCollectorStore:
         raw: dict[str, Any] | None = None,
         attempted_at: datetime | None = None,
     ) -> int:
-        if status not in {"recorded", "unavailable", "error"}:
+        if status not in {"recorded", "unavailable", "error", "missed"}:
             raise ValueError("invalid collection-attempt status")
         attempted_at = attempted_at or datetime.now(UTC)
         if attempted_at.tzinfo is None:
