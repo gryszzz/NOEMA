@@ -79,6 +79,12 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
     </div>
 
     <div class="card span12">
+      <h2>Research Attention Radar</h2>
+      <div class="small" style="margin-bottom:8px">Attention score is research triage, not a trade instruction. Political/election-like markets are not automatically scored.</div>
+      <div id="radar-table" class="empty">No forecast ledger rows yet.</div>
+    </div>
+
+    <div class="card span12">
       <h2>Observed Execution</h2>
       <div id="exec-table" class="empty">No authenticated telemetry loaded.</div>
     </div>
@@ -93,6 +99,12 @@ function renderTrust(rows){
  const el=document.getElementById('trust-table');
  if(!rows||!rows.length){el.className='empty';el.textContent='No trust history yet.';return}
  el.className='';el.innerHTML='<table><thead><tr><th>MODEL</th><th>RESOLVED</th><th>LOG WEIGHT</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+r.model_name+'</td><td>'+r.resolved+'</td><td>'+Number(r.log_weight).toFixed(3)+'</td></tr>').join('')+'</tbody></table>'
+}
+function renderRadar(rows){
+ const el=document.getElementById('radar-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No forecast ledger rows yet.';return}
+ el.className='';
+ el.innerHTML='<table><thead><tr><th>MARKET</th><th>P(YES)</th><th>MKT</th><th>ASK</th><th>ROBUST EDGE</th><th>SPREAD</th><th>LIQUIDITY</th><th>FRESH</th><th>UNCERTAINTY</th><th>ATTN</th><th>DECISION</th></tr></thead><tbody>'+rows.slice(0,50).map(r=>{const details='<details><summary>'+r.title+'</summary><div class="small" style="margin-top:7px"><b>Raw edge:</b> '+pct(r.raw_edge)+' &nbsp; <b>Estimated cost:</b> '+pct(r.estimated_cost)+' &nbsp; <b>Uncertainty penalty:</b> '+pct(r.uncertainty_penalty)+'<br><b>Evidence:</b> '+((r.evidence_ids&&r.evidence_ids.length)?r.evidence_ids.join(', '):'none recorded')+'<br><b>Why NOEMA '+(String(r.decision).includes('pass')?'passed':'is watching')+':</b> '+(r.reason||'no reason recorded')+'</div></details>';return '<tr><td>'+details+'</td><td>'+pct(r.probability_yes)+'</td><td>'+pct(r.market_probability)+'</td><td>'+(r.yes_ask==null?'—':Number(r.yes_ask).toFixed(3))+'</td><td>'+pct(r.robust_edge)+'</td><td>'+(r.spread==null?'—':pct(r.spread))+'</td><td>'+(r.liquidity_usd==null?'—':money(r.liquidity_usd))+'</td><td>'+Math.round(r.freshness_seconds)+'s</td><td>'+pct(r.uncertainty_width)+'</td><td>'+(r.attention_score==null?'SUPPRESSED':Number(r.attention_score).toFixed(2))+'</td><td>'+r.decision+'</td></tr>'}).join('')+'</tbody></table>'
 }
 function renderExec(rows){
  const el=document.getElementById('exec-table');
@@ -111,6 +123,7 @@ async function refreshAll(){
   document.getElementById('snapshots').textContent=o.soak?.snapshots||0;
   const vf=o.soak?.valid_fraction||0;document.getElementById('valid-frac').textContent=pct(vf);document.getElementById('valid-bar').style.width=(vf*100)+'%';
   renderTrust(o.model_trust);
+  try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
  }catch(e){document.getElementById('db-pill').textContent='DB ERROR'}
  try{
   const a=await getJSON('/api/live-account');

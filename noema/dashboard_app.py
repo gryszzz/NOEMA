@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 
 from .dashboard_data import build_overview
 from .kalshi_telemetry import KalshiTelemetry
+from .opportunity_radar import build_radar
 from .telemetry_report import build_telemetry_report
 
 app = FastAPI(title="NOEMA Ops Console", docs_url="/docs", redoc_url=None)
@@ -27,6 +28,11 @@ async def index() -> str:
 @app.get("/api/overview")
 async def overview() -> dict[str, Any]:
     return build_overview(_db_path())
+
+
+@app.get("/api/radar")
+async def radar() -> list[dict[str, Any]]:
+    return [row.__dict__ for row in build_radar(_db_path())]
 
 
 @app.get("/api/live-account")
