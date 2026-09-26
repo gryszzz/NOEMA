@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .decision_quality import DecisionQuality, assess_decision_quality
 from .edge import CostAssumptions, EdgeComparison, compare_binary_edges
 from .research_guard import ResearchEvidence, ResearchVerdict, audit_research
-from .strategist import EnsembleBelief, ModelBelief, BayesianEnsembler
+from .strategist import BayesianEnsembler, EnsembleBelief, ModelBelief
 from .uncertainty import UncertaintyAssessment, UncertaintyInputs, assess_uncertainty
 
 
