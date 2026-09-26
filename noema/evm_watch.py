@@ -32,7 +32,7 @@ class EvmWatchClient:
     ) -> None:
         if not rpc_url:
             raise ValueError("rpc_url is required")
-        if not _ADDRESS_RE.match(address):
+        if fullmatch(r"0x[a-fA-F0-9]{40}", address) is None:
             raise ValueError("EVM address must be a 20-byte 0x-prefixed hex address")
         self.address = address
         self.client = client or httpx.AsyncClient(
