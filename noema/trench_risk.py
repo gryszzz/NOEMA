@@ -16,10 +16,15 @@ class TrenchPolicy:
     max_wash_trade_probability: float = 0.65
     min_organic_score: float = 25.0
     min_liquidity_usd: float = 5_000.0
+    unknown_control_risk: float = 0.05
 
 
 def _cap01(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def _neutral(value: float | None, *, midpoint: float = 0.5) -> float:
+    return midpoint if value is None else value
 
 
 def assess_trench_candidate(
@@ -29,30 +34,48 @@ def assess_trench_candidate(
     current_liquidity_usd: float,
     policy: TrenchPolicy | None = None,
 ) -> TrenchAssessment:
-    """Rank a launch for research attention without creating a trade instruction."""
+    """Rank a launch for research attention without creating a trade instruction.
+
+    Unknown control-plane facts are not treated as safe. They add modest uncertainty and
+    prevent a candidate from looking artificially pristine.
+    """
 
     policy = policy or TrenchPolicy()
     reasons: list[str] = []
     risk = 0.0
+    unknown_controls = 0
 
     if current_liquidity_usd < policy.min_liquidity_usd:
         reasons.append("liquidity below research floor")
         risk += 0.25
-    if control.freeze_authority_present:
-        reasons.append("freeze authority retained")
-        risk += 0.30
-    if control.mint_authority_present:
-        reasons.append("mint authority retained")
-        risk += 0.15
-    if control.permanent_delegate_present:
-        reasons.append("permanent delegate present")
-        risk += 0.30
-    if control.transfer_hook_present:
-        reasons.append("transfer hook requires explicit review")
-        risk += 0.15
-    if control.transfer_fee_bps > policy.max_transfer_fee_bps:
+
+    control_checks = (
+        ("freeze authority", control.freeze_authority_present, 0.30),
+        ("mint authority", control.mint_authority_present, 0.15),
+        ("permanent delegate", control.permanent_delegate_present, 0.30),
+        ("transfer hook", control.transfer_hook_present, 0.15),
+    )
+    for label, present, weight in control_checks:
+        if present is True:
+            reasons.append(f"{label} retained")
+            risk += weight
+        elif present is None:
+            unknown_controls += 1
+
+    if unknown_controls:
+        reasons.append(f"{unknown_controls} token-control facts unknown")
+        risk += min(0.20, unknown_controls * policy.unknown_control_risk)
+
+    if control.transfer_fee_bps is None:
+        reasons.append("transfer fee state unknown")
+        risk += policy.unknown_control_risk
+    elif control.transfer_fee_bps > policy.max_transfer_fee_bps:
         reasons.append("transfer fee above research policy")
         risk += 0.30
+
+    if control.suspicious_flag:
+        reasons.append("upstream token audit flagged suspicious")
+        risk += 0.60
 
     if (
         features.top_holder_fraction is not None
@@ -93,26 +116,40 @@ def assess_trench_candidate(
 
     survival_risk = _cap01(risk)
 
-    organic = 0.5 if features.organic_score is None else features.organic_score / 100.0
+    organic_score = (
+        0.5 if features.organic_score is None else features.organic_score / 100.0
+    )
     liquidity_growth = _cap01(0.5 + features.liquidity_growth_fraction / 2)
-    buyer_growth = _cap01(features.buyer_growth_fraction / 3)
-    acceleration = _cap01((features.buyer_acceleration + 1) / 2)
+    buyer_growth = _cap01(
+        _neutral(features.buyer_growth_fraction, midpoint=0.0) / 3
+    )
+    acceleration = _cap01(
+        (_neutral(features.buyer_acceleration, midpoint=0.0) + 1) / 2
+    )
     flow = _cap01((features.signed_flow_imbalance + 1) / 2)
-    participation = _cap01(features.participation_balance)
+    participation = _neutral(features.participation_balance)
+    organic_buyers = _neutral(features.organic_buyer_share)
+    organic_volume = _neutral(features.organic_volume_fraction)
 
     raw_opportunity = (
-        0.25 * buyer_growth
-        + 0.20 * acceleration
+        0.20 * buyer_growth
+        + 0.15 * acceleration
         + 0.20 * liquidity_growth
         + 0.15 * flow
-        + 0.10 * participation
-        + 0.10 * organic
+        + 0.05 * participation
+        + 0.10 * organic_score
+        + 0.075 * organic_buyers
+        + 0.075 * organic_volume
     )
     opportunity_score = _cap01(raw_opportunity * (1.0 - 0.80 * survival_risk))
 
     hard_quarantine = (
-        control.permanent_delegate_present
-        or control.transfer_fee_bps > policy.max_transfer_fee_bps
+        control.suspicious_flag
+        or control.permanent_delegate_present is True
+        or (
+            control.transfer_fee_bps is not None
+            and control.transfer_fee_bps > policy.max_transfer_fee_bps
+        )
         or (
             features.wash_trade_probability is not None
             and features.wash_trade_probability > policy.max_wash_trade_probability
