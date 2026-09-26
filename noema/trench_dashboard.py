@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .trench_collector import TrenchCollectorStore
+from .trench_survival_model import audit_database
 
 
 def build_trench_overview(
@@ -21,6 +22,7 @@ def build_trench_overview(
             "counts": {"launches": 0, "observations": 0, "attempts": 0},
             "recent_launches": [],
             "recent_candidates": [],
+            "survival_model": None,
         }
 
     store = TrenchCollectorStore(path)
@@ -61,6 +63,7 @@ def build_trench_overview(
             }
             for mint, first_pool_at, discovered_at, last_seen_at, active in launches
         ],
+        "survival_model": audit_database(path).as_dict(),
         "recent_candidates": [
             {
                 "mint": str(mint),
