@@ -17,6 +17,8 @@ class StrategyEvidence:
     market_baseline_brier: float
     after_cost_return: float
     max_drawdown_fraction: float
+    calibration_error: float | None = None
+    research_credible: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,18 @@ def evaluate_strategy(
         )
     if evidence.max_drawdown_fraction >= max_drawdown_fraction:
         return StrategyHealth(StrategyStatus.QUARANTINED, 0.0, "drawdown limit exceeded")
+    if evidence.research_credible is False:
+        return StrategyHealth(
+            StrategyStatus.QUARANTINED,
+            0.0,
+            "research credibility gate failed",
+        )
+    if evidence.calibration_error is not None and evidence.calibration_error > 0.10:
+        return StrategyHealth(
+            StrategyStatus.QUARANTINED,
+            0.0,
+            "calibration error above threshold",
+        )
     if evidence.after_cost_return <= 0:
         return StrategyHealth(
             StrategyStatus.QUARANTINED,
