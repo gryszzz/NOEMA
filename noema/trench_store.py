@@ -138,6 +138,41 @@ class TrenchResearchStore:
         )
         self.conn.commit()
 
+    def candidate_for_token(
+        self,
+        token_mint: str,
+    ) -> tuple[str, datetime, float] | None:
+        row = self.conn.execute(
+            """
+            SELECT candidate_id, captured_at, reference_price_usd
+            FROM trench_candidates
+            WHERE token_mint = ?
+            ORDER BY captured_at ASC
+            LIMIT 1
+            """,
+            (token_mint.strip(),),
+        ).fetchone()
+        if row is None:
+            return None
+        captured = datetime.fromisoformat(str(row[1]))
+        if captured.tzinfo is None:
+            raise ValueError("stored candidate timestamp must be timezone-aware")
+        return str(row[0]), captured.astimezone(UTC), float(row[2])
+
+    def has_counterfactual(
+        self,
+        candidate_id: str,
+        horizon_seconds: int,
+    ) -> bool:
+        return self.conn.execute(
+            """
+            SELECT 1
+            FROM trench_counterfactuals
+            WHERE candidate_id = ? AND horizon_seconds = ?
+            """,
+            (candidate_id, horizon_seconds),
+        ).fetchone() is not None
+
     def rejection_stats(self, *, horizon_seconds: int) -> dict[str, float | int]:
         rows = self.conn.execute(
             """
