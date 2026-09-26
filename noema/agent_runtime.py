@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 from .agent_config import AgentConfig
@@ -155,6 +155,24 @@ async def run_cycle(
     return status
 
 
+async def _heartbeat_loop(
+    store: AgentStore,
+    identity: AgentIdentity,
+    interval_seconds: float,
+) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        current = store.read_status(identity)
+        if not current.running:
+            continue
+        heartbeat = replace(
+            current,
+            last_heartbeat_at=datetime.now(UTC),
+        )
+        store.write_status(heartbeat)
+        store.append_heartbeat(heartbeat)
+
+
 async def run_agent(
     config: AgentConfig | None = None,
     *,
@@ -178,6 +196,14 @@ async def run_agent(
     store.append_heartbeat(starting)
     _log("agent_started", agent_id=identity.agent_id, mission=identity.mission)
 
+    heartbeat_task = asyncio.create_task(
+        _heartbeat_loop(
+            store,
+            identity,
+            config.heartbeat_interval_seconds,
+        )
+    )
+
     cycle_id = 0
     try:
         while True:
@@ -192,6 +218,12 @@ async def run_agent(
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+
         stopped = AgentStatus(
             agent_id=identity.agent_id,
             name=identity.name,
