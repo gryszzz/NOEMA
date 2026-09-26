@@ -9,6 +9,11 @@ from pathlib import Path
 from .cognition_models import CognitionPacket
 
 
+def _next_month(day: str) -> str:
+    year, month = map(int, day[:7].split("-"))
+    return f"{year + (month == 12):04d}-{(month % 12) + 1:02d}-01"
+
+
 class CognitionStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
@@ -44,6 +49,7 @@ class CognitionStore:
     def reserve_estimated_cost(
         self, cost_usd: float, *, daily_limit_usd: float,
         hourly_call_limit: int = 6,
+        monthly_limit_usd: float | None = None,
         now: datetime | None = None,
     ) -> bool:
         """Atomically reserve worst-case estimate; failed requests retain the reservation."""
@@ -53,6 +59,8 @@ class CognitionStore:
             not math.isfinite(cost_usd) or not math.isfinite(daily_limit_usd)
             or cost_usd <= 0 or daily_limit_usd <= 0
             or hourly_call_limit <= 0
+            or (monthly_limit_usd is not None and
+                (not math.isfinite(monthly_limit_usd) or monthly_limit_usd <= 0))
         ):
             raise ValueError("budget amounts must be positive and finite")
         now = now or datetime.now(UTC)
@@ -74,6 +82,15 @@ class CognitionStore:
             if spent + cost_usd > daily_limit_usd + 1e-12:
                 self.conn.rollback()
                 return False
+            if monthly_limit_usd is not None:
+                monthly_spent = self.conn.execute(
+                    "SELECT COALESCE(SUM(estimated_usd), 0) "
+                    "FROM cognition_budget_reservations WHERE day_utc >= ? AND day_utc < ?",
+                    (day[:7] + "-01", _next_month(day)),
+                ).fetchone()[0]
+                if monthly_spent + cost_usd > monthly_limit_usd + 1e-12:
+                    self.conn.rollback()
+                    return False
             self.conn.execute(
                 "INSERT INTO cognition_budget_reservations "
                 "(day_utc, estimated_usd, created_at) VALUES (?, ?, ?)",
@@ -84,7 +101,6 @@ class CognitionStore:
         except Exception:
             self.conn.rollback()
             raise
-
     def append(
         self,
         *,

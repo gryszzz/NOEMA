@@ -58,18 +58,16 @@ The console should always distinguish:
 
 Never render a research score with the same visual authority as an observed exchange fact.
 
-## Icon concept
+## Identity assets
 
-Until a dedicated artwork asset is produced, use a simple text mark:
+- [Wide repository banner](../noema/static/brand/noema-banner.png) — NOEMA wordmark,
+  core line, and the observing face. Use it as a README cover or wide header.
+- [Square face mark](../noema/static/brand/noema-face.png) — avatar and profile image.
 
-```text
-NOEMA //
-```
+The face is a visual identity, not a claim of personhood or independent legal
+agency. Keep the language plain: **NOEMA** is a research system with clear
+owners, data sources and operating limits.
 
-or
-
-```text
-NØEMA
-```
-
-The repository uses plain **NOEMA** for compatibility.
+Core colors: near-black navy, slate, cool cyan/teal, and a restrained amber
+point for uncertainty. Product status must continue to distinguish observations,
+models, research and action. Do not use the face to imply live trading is active.

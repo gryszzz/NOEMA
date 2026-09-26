@@ -8,6 +8,8 @@ def test_dashboard_root_renders_console() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "NOEMA // OPS" in response.text
+    assert "Paper research" in response.text
+    assert client.get("/static/brand/noema-face.png").status_code == 200
 
 
 def test_overview_endpoint_is_safe_without_database(monkeypatch, tmp_path) -> None:

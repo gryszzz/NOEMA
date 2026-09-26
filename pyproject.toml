@@ -31,4 +31,4 @@ line-length = 100
 target-version = "py312"
 
 [tool.setuptools.package-data]
-noema = ["static/*.html"]
+noema = ["static/*.html", "static/brand/*.png"]

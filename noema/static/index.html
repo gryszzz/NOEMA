@@ -8,7 +8,7 @@
 :root{--bg:#0b0f14;--panel:#121923;--panel2:#0f151e;--line:#253142;--text:#e7edf5;--muted:#8795a8;--good:#79e2b3;--warn:#ffd479;--bad:#ff8d8d;--accent:#8fb7ff}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#080c11,#0d1219 45%,#090d12);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
 .shell{max-width:1440px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
-.brand{font-size:22px;font-weight:800;letter-spacing:.14em}.sub{color:var(--muted);margin-top:5px}.status{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#111824;padding:6px 9px;border-radius:999px;color:var(--muted)}.pill.good{color:var(--good);border-color:#2a6b55}
+.brand-wrap{display:flex;align-items:center;gap:12px}.brand-face{width:58px;height:58px;object-fit:cover;border:1px solid var(--line);border-radius:12px}.brand{font-size:22px;font-weight:800;letter-spacing:.14em}.sub{color:var(--muted);margin-top:5px}.status{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#111824;padding:6px 9px;border-radius:999px;color:var(--muted)}.pill.good{color:var(--good);border-color:#2a6b55}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}.card{background:rgba(18,25,35,.93);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:110px}.span3{grid-column:span 3}.span4{grid-column:span 4}.span6{grid-column:span 6}.span8{grid-column:span 8}.span12{grid-column:span 12}
 .k{color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}.v{font-size:26px;font-weight:800;margin-top:8px}.small{font-size:12px;color:var(--muted)}.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}
 h2{font-size:13px;margin:0 0 12px;letter-spacing:.12em;text-transform:uppercase;color:#b7c4d6}.row{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #1d2735;padding:8px 0}.row:first-of-type{border-top:0}.mono{font-variant-numeric:tabular-nums}.bar{height:7px;border-radius:8px;background:#1a2431;overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;background:linear-gradient(90deg,#6ea6ff,#80ddc0);width:0}
@@ -20,9 +20,10 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
 <body>
 <div class="shell">
   <div class="top">
-    <div>
-      <div class="brand">NOEMA // OPS</div>
-      <div class="sub">Forecasting intelligence · execution truth · research console</div>
+    <div class="brand-wrap">
+      <img class="brand-face" src="/static/brand/noema-face.png" alt="NOEMA face mark">
+      <div><div class="brand">NOEMA // OPS</div>
+      <div class="sub">Observe · Infer · Verify · Act</div></div>
     </div>
     <div class="status">
       <span class="pill" id="agent-pill">AGENT …</span>
@@ -33,6 +34,9 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
   </div>
 
   <div class="grid">
+    <div class="card span12" style="min-height:60px">
+      <b>Paper research</b><span class="small"> · NOEMA gathers market evidence, tests forecasts against later outcomes and reports operating costs. Live execution remains locked.</span>
+    </div>
     <div class="card span12">
       <h2>NOEMA Agent Runtime</h2>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
@@ -137,6 +141,18 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
         <div class="row"><span>Treasury sweep</span><b id="econ-sweep">—</b></div>
       </div>
       <div class="small" style="margin-top:10px">Survival capital, strategy capital, R&D, infrastructure and treasury sweep are accounted separately. Promotions are gradual; demotions are immediate.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Operating Bill</h2>
+      <div class="grid" style="grid-template-columns:repeat(12,1fr);gap:10px">
+        <div class="card span3"><div class="k">Monthly estimate</div><div class="v mono" id="bill-estimate">—</div></div>
+        <div class="card span3"><div class="k">Recorded receipts</div><div class="v mono" id="bill-receipts">—</div></div>
+        <div class="card span3"><div class="k">Recorded expenses</div><div class="v mono" id="bill-expenses">—</div></div>
+        <div class="card span3"><div class="k">Uncovered estimate</div><div class="v mono" id="bill-uncovered">—</div></div>
+      </div>
+      <div class="small" id="bill-status" style="margin-top:10px">Set the monthly estimate and owner limit with noema bill-config.</div>
+      <div class="small">Operator-reported cash entries only. Paper returns and internal capital do not pay invoices. This tracker does not stop provider billing or make payments.</div>
     </div>
 
     <div class="card span12">
@@ -267,6 +283,15 @@ async function refreshAll(){
     document.getElementById('econ-transition').textContent=review.transition_reason||'Economic review recorded.';
    }
   }catch(e){}
+  try{
+   const bill=await getJSON('/api/bill');
+   if(bill.estimated_monthly_bill_usd!==null)document.getElementById('bill-estimate').textContent=money(bill.estimated_monthly_bill_usd);
+   document.getElementById('bill-receipts').textContent=money(bill.recorded_receipts_usd);
+   document.getElementById('bill-expenses').textContent=money(bill.recorded_expenses_usd);
+   if(bill.uncovered_estimate_usd!==null)document.getElementById('bill-uncovered').textContent=money(bill.uncovered_estimate_usd);
+   const messages={estimate_missing:'Monthly bill estimate missing',over_owner_limit:'Estimated owner exposure exceeds your limit',covered_by_reported_receipts:'Estimated bill covered by reported receipts; verify invoices',within_owner_limit:'Estimated owner exposure within your limit'};
+   document.getElementById('bill-status').textContent=bill.month_utc+' UTC · '+(messages[bill.status]||bill.status)+' · owner limit '+(bill.owner_limit_usd===null?'unset':money(bill.owner_limit_usd));
+  }catch(e){document.getElementById('bill-status').textContent='Bill tracking unavailable.'}
   try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
   try{
    const c=await getJSON('/api/compare');

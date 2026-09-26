@@ -6,8 +6,10 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .agent_dashboard import build_agent_overview
+from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview
 from .dashboard_data import build_overview
 from .doctor import doctor_report
@@ -20,6 +22,7 @@ from .telemetry_report import build_telemetry_report
 from .wallet_diagnostics import public_wallet_policy
 
 app = FastAPI(title="NOEMA Ops Console", docs_url="/docs", redoc_url=None)
+app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
 
 def _db_path() -> str:
@@ -65,6 +68,11 @@ async def overview() -> dict[str, Any]:
 @app.get("/api/economy")
 async def economy() -> dict[str, Any]:
     return build_economic_overview(_db_path())
+
+
+@app.get("/api/bill")
+async def bill() -> dict[str, Any]:
+    return BillTracker(_db_path()).overview()
 
 
 @app.get("/api/radar")
