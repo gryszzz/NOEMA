@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from math import isfinite
-from typing import Sequence
 
 from .trench_models import LaunchTick, TrenchFeatures
 
@@ -21,8 +21,7 @@ def _max_drawdown(prices: Sequence[float]) -> float:
     peak = 0.0
     worst = 0.0
     for price in prices:
-        if price > peak:
-            peak = price
+        peak = max(peak, price)
         if peak > 0:
             worst = max(worst, (peak - price) / peak)
     return worst
