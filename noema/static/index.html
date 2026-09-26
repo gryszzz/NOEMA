@@ -121,10 +121,8 @@ async function refreshAll(){
   document.getElementById('positions').textContent=a.positions||0;
   document.getElementById('order-recon').textContent=a.order_fill_reconciliation?.ok?'OK':'CHECK';
   document.getElementById('fee-recon').textContent=a.position_fee_reconciliation?.ok?'OK':'CHECK';
-  let pnl=0,fees=0;
-  // P&L/fee cards remain blank until exchange position values are added to the report payload.
-  document.getElementById('pnl').textContent=money(pnl);
-  document.getElementById('fees').textContent=money(fees);
+  document.getElementById('pnl').textContent=money(a.realized_pnl);
+  document.getElementById('fees').textContent=money(a.fees_paid);
   renderExec(a.execution);
   document.getElementById('recon-note').textContent='Live authenticated telemetry loaded. Read-only.';
  }catch(e){
