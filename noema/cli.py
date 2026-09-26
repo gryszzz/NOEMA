@@ -24,6 +24,7 @@ from .setup_wizard import run_setup_wizard
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
 from .soak_runner import collect_market_snapshot_batch, run_soak_loop
+from .specialist_model import audit_database
 from .sync import sync_kalshi_outcomes
 from .telemetry_report import build_telemetry_report
 from .venues.kalshi import KalshiVenue
@@ -211,6 +212,9 @@ def main() -> None:
     compare = sub.add_parser("compare")
     compare.add_argument("--db", default="data/noema.db")
 
+    model_audit = sub.add_parser("model-audit")
+    model_audit.add_argument("--db", default="data/noema.db")
+
     sub.add_parser("account")
     sub.add_parser("check-config")
     sub.add_parser("telemetry")
@@ -266,6 +270,8 @@ def main() -> None:
         asyncio.run(_telemetry())
     elif args.command == "compare":
         print(json.dumps(compare_history_to_market(args.db).as_dict(), sort_keys=True))
+    elif args.command == "model-audit":
+        print(json.dumps(audit_database(args.db), sort_keys=True))
     elif args.command == "setup":
         run_setup_wizard()
     elif args.command == "doctor":
