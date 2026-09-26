@@ -11,6 +11,7 @@ from .history_forecaster import MODEL_VERSION
 from .paired_evaluation import compare_history_to_market
 from .paper_performance import settled_paper_performance
 from .specialist_evolution import SpecialistEvidence
+from .trench_survival_forecast import audit_forward_forecasts
 from .trench_survival_model import audit_database as audit_trench_survival
 
 
@@ -147,6 +148,28 @@ def trench1_evidence(
         return SpecialistEvidence(0, None, None, None, None, None, None)
 
     if horizon_seconds == 3600:
+        forward = audit_forward_forecasts(path)
+        if forward.resolved_forecasts > 0:
+            method_credible = (
+                True
+                if forward.status in {
+                    "research_review_required",
+                    "forward_model_not_better",
+                }
+                else None
+            )
+            return SpecialistEvidence(
+                resolved=forward.resolved_forecasts,
+                brier=forward.model_brier,
+                market_baseline_brier=forward.baseline_brier,
+                after_cost_return=None,
+                max_drawdown_fraction=None,
+                calibration_error=forward.calibration_error,
+                research_credible=method_credible,
+                probability_backtest_overfit=None,
+                probabilistic_sharpe=None,
+            )
+
         audit = audit_trench_survival(path)
         method_credible = (
             True
