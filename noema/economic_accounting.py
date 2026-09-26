@@ -37,6 +37,9 @@ def apply_profit_plan(
 ) -> EconomicSnapshot:
     validate_snapshot(snapshot)
 
+    if plan.profit_above_high_water_usd == 0:
+        return snapshot
+
     expected = max(
         Decimal(0),
         snapshot.current_equity_usd - snapshot.high_water_equity_usd,
