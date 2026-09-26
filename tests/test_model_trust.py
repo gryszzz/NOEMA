@@ -27,3 +27,17 @@ def test_strong_large_sample_gets_more_trust() -> None:
         )
     )
     assert trust.reliability > 0.5
+
+
+def test_market_equivalent_model_earns_no_trust() -> None:
+    trust = derive_model_trust(
+        ModelPerformance(
+            name="flat",
+            resolved=500,
+            mean_log_loss=0.50,
+            market_mean_log_loss=0.50,
+            mean_brier=0.18,
+            market_mean_brier=0.18,
+        )
+    )
+    assert trust.reliability == 0.0
