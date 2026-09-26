@@ -9,7 +9,6 @@ from .cognition_models import CognitionPacket, CognitionResult
 from .foundry_config import FoundryConfig, responses_url
 from .opportunity_radar import RadarRow
 
-
 _PACKET_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
