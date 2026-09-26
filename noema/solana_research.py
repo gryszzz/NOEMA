@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Any
 
 import httpx
@@ -30,7 +31,7 @@ def _optional_float(value: object) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number else None
+    return number if isfinite(number) else None
 
 
 def _optional_int(value: object) -> int | None:
@@ -64,7 +65,7 @@ def parse_jupiter_time(value: object) -> datetime | None:
         except (ValueError, OSError, OverflowError):
             return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value))
     except ValueError:
         return None
     if parsed.tzinfo is None:
