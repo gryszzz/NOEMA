@@ -1,8 +1,18 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from noema.cognition import maybe_run_cognition
 from noema.foundry_config import FoundryConfig
-from tests.test_foundry_client import row
+from noema.opportunity_radar import RadarRow
+
+
+def row() -> RadarRow:
+    return RadarRow(
+        "kalshi:production", "SERIES-1-A", "Test market", 0.65, 0.55, 0.56,
+        0.09, 0.01, 0.02, 0.06, 0.02, 5000,
+        datetime.now(UTC).isoformat(), 5, 0.1, 0.85, "pass", "research", ("e1",),
+    )
 
 
 @pytest.mark.asyncio

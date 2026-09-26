@@ -4,8 +4,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from noema.llm_evidence import context_for_row
+from noema.opportunity_radar import RadarRow
 from noema.provenance import EvidenceStore
-from tests.test_foundry_client import row
+
+
+def row() -> RadarRow:
+    return RadarRow(
+        "kalshi:production", "SERIES-1-A", "Test market", 0.65, 0.55, 0.56,
+        0.09, 0.01, 0.02, 0.06, 0.02, 5000,
+        datetime.now(UTC).isoformat(), 5, 0.1, 0.85, "pass", "research", ("e1",),
+    )
 
 
 def test_verified_summary_excludes_raw_samples_and_instructions(tmp_path) -> None:
