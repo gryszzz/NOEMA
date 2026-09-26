@@ -30,6 +30,25 @@ It is designed to become more selective as it becomes more capable.
 
 Most markets should end in **PASS**.
 
+## Quick connect
+
+The easiest first-time setup is:
+
+```bash
+noema setup
+noema doctor
+noema agent-once
+```
+
+Then run the persistent agent and dashboard:
+
+```bash
+noema-agent
+noema-dashboard
+```
+
+`noema setup` writes secrets/config to a git-ignored, owner-only `.env.local` file. The wizard covers Kalshi, the dedicated EVM wallet connection, and Microsoft Foundry cognition. See [docs/quick-connect.md](docs/quick-connect.md).
+
 ## System map
 
 ```mermaid

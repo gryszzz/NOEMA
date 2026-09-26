@@ -41,6 +41,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
         <div class="row"><span>Active goal</span><b id="runtime-goal">—</b></div>
         <div class="row"><span>Kalshi</span><b id="runtime-kalshi">—</b></div>
         <div class="row"><span>EVM wallet</span><b id="runtime-evm">—</b></div>
+        <div class="row"><span>Foundry cognition</span><b id="runtime-cognition">—</b></div>
       </div>
       <div class="small" id="runtime-note" style="margin-top:10px">Start with <code>noema-agent</code>.</div>
     </div>
@@ -101,6 +102,16 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
       <div class="row"><span>Orders observed</span><b id="orders">—</b></div>
       <div class="row"><span>Positions observed</span><b id="positions">—</b></div>
       <div id="recon-note" class="small" style="margin-top:8px">Connect demo credentials to populate live read-only telemetry.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Setup Readiness</h2>
+      <div id="doctor-table" class="empty">Run <code>noema setup</code> then <code>noema doctor</code>.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Latest Cognition</h2>
+      <div id="cognition-panel" class="empty">No Foundry cognition packet yet.</div>
     </div>
 
     <div class="card span12">
@@ -177,6 +188,24 @@ async function refreshAll(){
   document.getElementById('snapshots').textContent=o.soak?.snapshots||0;
   const vf=o.soak?.valid_fraction||0;document.getElementById('valid-frac').textContent=pct(vf);document.getElementById('valid-bar').style.width=(vf*100)+'%';
   renderTrust(o.model_trust);
+  try{
+   const doctor=await getJSON('/api/doctor');
+   const checks=doctor.checks||[];
+   document.getElementById('doctor-table').className='';
+   document.getElementById('doctor-table').innerHTML='<table><thead><tr><th>SYSTEM</th><th>STATUS</th><th>DETAIL</th></tr></thead><tbody>'+checks.map(c=>'<tr><td>'+c.name+'</td><td>'+String(c.status).toUpperCase()+'</td><td>'+c.detail+'</td></tr>').join('')+'</tbody></table>';
+  }catch(e){}
+  try{
+   const cognition=await getJSON('/api/cognition');
+   const el=document.getElementById('cognition-panel');
+   if(cognition.latest){
+    const p=cognition.latest.packet;
+    el.className='';
+    el.innerHTML='<div class="row"><span>Deployment</span><b>'+String(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+cognition.latest.market_id+'</b></div><div class="row"><span>Mode</span><b>'+p.recommended_mode+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+String(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+String(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+p.thesis+'<br><b>Unknowns:</b> '+(p.unknowns||[]).join('; ')+'</div>';
+   }else{
+    el.className='empty';
+    el.textContent=cognition.configured?'Foundry configured; waiting for an eligible market.':'Foundry not configured yet.';
+   }
+  }catch(e){}
   try{
    const econ=await getJSON('/api/economy');
    const snap=econ.snapshot;

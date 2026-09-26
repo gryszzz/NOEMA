@@ -21,6 +21,7 @@ class AgentCycleState:
     evm_wallet: AgentConnectionState
     radar_markets: int
     economic_state: str
+    cognition: AgentConnectionState = AgentConnectionState("unconfigured")
     note: str | None = None
 
 
