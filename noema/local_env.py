@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 DEFAULT_LOCAL_ENV = ".env.local"
 
 
