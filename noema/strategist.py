@@ -5,7 +5,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import mean
 
-
 _EPSILON = 1e-9
 
 
