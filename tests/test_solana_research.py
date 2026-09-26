@@ -1,6 +1,6 @@
-import pytest
-
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from noema.solana_research import (
     JupiterTrenchResearchClient,
