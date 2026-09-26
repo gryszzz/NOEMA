@@ -14,6 +14,9 @@ from .economic_dashboard import build_economic_overview
 from .evm_watch import EvmWatchClient
 from .kalshi_telemetry import KalshiTelemetry
 from .opportunity_radar import build_radar
+from .soak import SoakStore
+from .soak_runner import collect_market_snapshot_batch
+from .venues.kalshi import KalshiVenue
 
 
 def _log(event: str, **fields: object) -> None:
@@ -83,6 +86,20 @@ async def run_cycle(
     store = store or AgentStore(config.db_path)
     started = datetime.now(UTC)
 
+    soak_store = SoakStore(config.db_path)
+    venue = KalshiVenue()
+    try:
+        collection = await collect_market_snapshot_batch(
+            venue,
+            soak_store,
+            max_markets=config.max_markets_per_cycle,
+        )
+    except Exception as exc:
+        collection = None
+        _log("agent_market_collection_error", error=type(exc).__name__)
+    finally:
+        await venue.close()
+
     kalshi, evm = await asyncio.gather(
         _kalshi_state(),
         _evm_state(config),
@@ -114,7 +131,14 @@ async def run_cycle(
         evm_wallet=evm,
         radar_markets=len(radar),
         economic_state="initialized" if economic_initialized else "uninitialized",
-        note=goal.reason,
+        note=(
+            goal.reason
+            if collection is None
+            else (
+                f"{goal.reason}; collected={collection.scanned} "
+                f"valid={collection.valid} invalid={collection.invalid}"
+            )
+        ),
     )
     status = AgentStatus(
         agent_id=identity.agent_id,
