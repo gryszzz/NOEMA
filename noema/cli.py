@@ -7,11 +7,13 @@ import json
 from .account import KalshiAccount
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
+from .kalshi_telemetry import KalshiTelemetry
 from .outcomes import OutcomeStore
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
 from .soak_runner import collect_market_snapshot_batch, run_soak_loop
 from .sync import sync_kalshi_outcomes
+from .telemetry_report import build_telemetry_report
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
@@ -82,6 +84,29 @@ async def _account() -> None:
         await account.close()
 
 
+async def _telemetry() -> None:
+    telemetry = KalshiTelemetry()
+    try:
+        orders, fills, positions = await asyncio.gather(
+            telemetry.orders(),
+            telemetry.fills(),
+            telemetry.positions(),
+        )
+        print(
+            json.dumps(
+                build_telemetry_report(
+                    orders=orders,
+                    fills=fills,
+                    positions=positions,
+                ),
+                sort_keys=True,
+                default=str,
+            )
+        )
+    finally:
+        await telemetry.close()
+
+
 async def _soak_once(db: str, limit: int | None) -> None:
     store = SoakStore(db)
     venue = KalshiVenue()
@@ -140,6 +165,7 @@ def main() -> None:
 
     sub.add_parser("account")
     sub.add_parser("check-config")
+    sub.add_parser("telemetry")
 
     sync = sub.add_parser("sync-outcomes")
     sync.add_argument("--db", default="data/noema.db")
@@ -172,6 +198,8 @@ def main() -> None:
         _soak_report(args.db)
     elif args.command == "account":
         asyncio.run(_account())
+    elif args.command == "telemetry":
+        asyncio.run(_telemetry())
     elif args.command == "check-config":
         print(json.dumps(diagnostic_dict(), sort_keys=True))
     else:
