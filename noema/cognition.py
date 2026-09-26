@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import httpx
 
@@ -62,6 +63,26 @@ async def maybe_run_cognition(
             "degraded",
             detail=f"{type(exc).__name__}: model setup failed",
         )
+
+    try:
+        body = client.request_body(target, evidence_context=context)
+        instructions = str(body["instructions"])
+        inputs = str(body["input"])
+        max_cost = policy.estimated_max_call_usd(
+            input_bytes=len((instructions + inputs).encode("utf-8")),
+            max_output_tokens=config.max_output_tokens,
+        )
+        if not store.reserve_estimated_cost(
+            max_cost, daily_limit_usd=policy.max_estimated_usd_per_day,
+        ):
+            await client.close()
+            return CognitionResult("idle", detail="daily estimated model budget exhausted")
+    except (ValueError, KeyError, TypeError):
+        await client.close()
+        return CognitionResult("idle", detail="model price or daily budget unavailable")
+    except sqlite3.Error:
+        await client.close()
+        return CognitionResult("degraded", detail="model budget store unavailable")
 
     try:
         result = await client.reason_about_market(target, evidence_context=context)

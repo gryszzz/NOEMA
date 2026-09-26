@@ -33,3 +33,7 @@ def test_doctor_never_returns_foundry_secret(tmp_path, monkeypatch) -> None:
     report = doctor_report(str(tmp_path / "noema.db"))
     assert "super-secret" not in str(report)
     assert any(check["name"] == "foundry" for check in report["checks"])
+    assert any(
+        check["name"] == "model_budget" and check["status"] == "missing"
+        for check in report["checks"]
+    )

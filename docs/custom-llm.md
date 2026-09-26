@@ -13,6 +13,15 @@ confidence do not authorize an order, set risk, or become a market probability.
    telemetry and verified evidence summaries; the full raw settlement sample
    and any wallet/account secrets stay out of prompts. Calls and tokens are
    capped. Keep the deployment and API key in the local environment only.
+   Set `NOEMA_FOUNDRY_INPUT_USD_PER_MILLION` and
+   `NOEMA_FOUNDRY_OUTPUT_USD_PER_MILLION` to the current **full** provider
+   rates for your chosen model. Without both positive rates, automatic paid
+   calls remain idle. `NOEMA_COGNITION_MAX_ESTIMATED_USD_PER_DAY` defaults to
+   `0.50` (about $15 over 30 days). Before each request, NOEMA reserves a
+   conservative input-byte and maximum-output-token estimate in SQLite;
+   even failed requests keep their reservation. Use provider billing limits
+   as the final spending control: token accounting, price changes, other
+   resources, and external billing are outside this local estimate.
 2. **Evaluation set:** Have a reviewer approve research packets for distinct,
    time-stamped events. Include adversarial cases: missing or conflicting
    evidence, misleading market titles, stale quotes, incomplete event groups,

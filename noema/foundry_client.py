@@ -96,9 +96,9 @@ class FoundryCognitionClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def reason_about_market(
+    def request_body(
         self, row: RadarRow, *, evidence_context: list[dict[str, object]],
-    ) -> CognitionResult:
+    ) -> dict[str, Any]:
         observed = {
             "market_id": row.market_id,
             "title": row.title,
@@ -129,7 +129,7 @@ class FoundryCognitionClient:
             "collect_more, or investigate. Evidence IDs must come from the input."
         )
         inputs = {"market": observed, "verified_evidence": evidence_context}
-        body = {
+        return {
             "model": self.config.deployment,
             "reasoning": {"effort": self.config.reasoning_effort},
             "instructions": instructions,
@@ -145,6 +145,11 @@ class FoundryCognitionClient:
                 }
             },
         }
+
+    async def reason_about_market(
+        self, row: RadarRow, *, evidence_context: list[dict[str, object]],
+    ) -> CognitionResult:
+        body = self.request_body(row, evidence_context=evidence_context)
         response = await self.client.post(
             responses_url(str(self.config.endpoint)),
             json=body,

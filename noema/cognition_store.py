@@ -29,7 +29,51 @@ class CognitionStore:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cognition_budget_reservations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day_utc TEXT NOT NULL,
+                estimated_usd REAL NOT NULL CHECK (estimated_usd > 0),
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         self.conn.commit()
+
+    def reserve_estimated_cost(
+        self, cost_usd: float, *, daily_limit_usd: float,
+        now: datetime | None = None,
+    ) -> bool:
+        """Atomically reserve worst-case estimate; failed requests retain the reservation."""
+        import math
+
+        if (
+            not math.isfinite(cost_usd) or not math.isfinite(daily_limit_usd)
+            or cost_usd <= 0 or daily_limit_usd <= 0
+        ):
+            raise ValueError("budget amounts must be positive and finite")
+        now = now or datetime.now(UTC)
+        day = now.astimezone(UTC).date().isoformat()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            spent = self.conn.execute(
+                "SELECT COALESCE(SUM(estimated_usd), 0) "
+                "FROM cognition_budget_reservations WHERE day_utc = ?", (day,),
+            ).fetchone()[0]
+            if spent + cost_usd > daily_limit_usd + 1e-12:
+                self.conn.rollback()
+                return False
+            self.conn.execute(
+                "INSERT INTO cognition_budget_reservations "
+                "(day_utc, estimated_usd, created_at) VALUES (?, ?, ?)",
+                (day, cost_usd, now.isoformat()),
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def append(
         self,

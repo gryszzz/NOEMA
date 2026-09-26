@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .cognition_policy import CognitionPolicy
 from .economic_ledger import EconomicLedger
 from .foundry_config import FoundryConfig
 from .local_env import env_local_present
@@ -49,6 +50,19 @@ def doctor_report(db_path: str = "data/noema.db") -> dict[str, Any]:
                     "endpoint, deployment and API key are required",
                 )
             )
+
+    try:
+        budget = CognitionPolicy.from_env()
+        budget.estimated_max_call_usd(input_bytes=1, max_output_tokens=1)
+        checks.append(DoctorCheck(
+            "model_budget", "ready",
+            f"daily estimated limit=${budget.max_estimated_usd_per_day:.2f}",
+        ))
+    except ValueError:
+        checks.append(DoctorCheck(
+            "model_budget", "missing",
+            "positive daily budget and Foundry input/output token prices required",
+        ))
 
     kalshi_id = os.getenv("KALSHI_API_KEY_ID")
     kalshi_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
