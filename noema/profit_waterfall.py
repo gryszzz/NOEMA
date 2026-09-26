@@ -13,7 +13,7 @@ class ProfitWaterfallPolicy:
     research_fraction: Decimal = Decimal("0.15")
     infrastructure_fraction: Decimal = Decimal("0.10")
     treasury_sweep_fraction: Decimal = Decimal("0.10")
-    minimum_profit_to_allocate_usd: Decimal = Decimal("1")
+    minimum_profit_to_allocate_usd: Decimal = Decimal(1)
 
 
 def _validate_policy(policy: ProfitWaterfallPolicy) -> None:
