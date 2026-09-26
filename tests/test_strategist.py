@@ -39,3 +39,13 @@ def test_bad_probability_rejected() -> None:
             market_probability=0.5,
             beliefs=[ModelBelief("bad", 1.2, 1.0, 100)],
         )
+
+
+def test_zero_reliability_model_has_no_ensemble_influence() -> None:
+    result = BayesianEnsembler().combine(
+        market_probability=0.40,
+        beliefs=[ModelBelief("untrusted", 0.99, reliability=0.0, sample_size=1000)],
+    )
+    assert result.probability_yes == pytest.approx(0.40)
+    assert result.effective_models == 0.0
+    assert result.contributors == ()
