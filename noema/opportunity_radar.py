@@ -119,7 +119,7 @@ def build_radar(
             spread = float(ask) - float(bid)
 
         captured_raw = snapshot.get("captured_at") or created_at
-        captured = datetime.fromisoformat(str(captured_raw).replace("Z", "+00:00"))
+        captured = datetime.fromisoformat(str(captured_raw))
         if captured.tzinfo is None:
             captured = captured.replace(tzinfo=UTC)
         freshness = max(0.0, (now - captured.astimezone(UTC)).total_seconds())
