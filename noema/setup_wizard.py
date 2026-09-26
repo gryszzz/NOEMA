@@ -3,11 +3,10 @@ from __future__ import annotations
 import getpass
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .local_env import DEFAULT_LOCAL_ENV, load_local_env
-
 
 _NON_SECRET_FIELDS = (
     ("NOEMA_KALSHI_ENV", "Kalshi environment", "demo"),
