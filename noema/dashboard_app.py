@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from .dashboard_data import build_overview
+from .economic_dashboard import build_economic_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .opportunity_radar import build_radar
 from .telemetry_report import build_telemetry_report
@@ -29,6 +30,11 @@ async def index() -> str:
 @app.get("/api/overview")
 async def overview() -> dict[str, Any]:
     return build_overview(_db_path())
+
+
+@app.get("/api/economy")
+async def economy() -> dict[str, Any]:
+    return build_economic_overview(_db_path())
 
 
 @app.get("/api/radar")
