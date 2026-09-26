@@ -81,6 +81,7 @@ async def run_cycle(
     config: AgentConfig,
     identity: AgentIdentity | None = None,
     store: AgentStore | None = None,
+    runtime_running: bool = True,
 ) -> AgentStatus:
     identity = identity or AgentIdentity()
     store = store or AgentStore(config.db_path)
@@ -145,7 +146,7 @@ async def run_cycle(
         name=identity.name,
         version=identity.version,
         mission=identity.mission,
-        running=True,
+        running=runtime_running,
         last_heartbeat_at=datetime.now(UTC),
         last_cycle=cycle,
     )
