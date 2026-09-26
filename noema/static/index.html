@@ -200,7 +200,7 @@ async function refreshAll(){
    if(cognition.latest){
     const p=cognition.latest.packet;
     el.className='';
-    el.innerHTML='<div class="row"><span>Deployment</span><b>'+String(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+cognition.latest.market_id+'</b></div><div class="row"><span>Mode</span><b>'+p.recommended_mode+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+p.thesis+'<br><b>Unknowns:</b> '+(p.unknowns||[]).join('; ')+'</div>';
+    el.innerHTML='<div class="row"><span>Deployment</span><b>'+String(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+cognition.latest.market_id+'</b></div><div class="row"><span>Mode</span><b>'+p.recommended_mode+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+String(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+String(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+p.thesis+'<br><b>Unknowns:</b> '+(p.unknowns||[]).join('; ')+'</div>';
    }else{
     el.className='empty';
     el.textContent=cognition.configured?'Foundry configured; waiting for an eligible market.':'Foundry not configured yet.';
