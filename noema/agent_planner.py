@@ -16,6 +16,7 @@ def choose_goal(
     *,
     radar: list[RadarRow],
     market_data_healthy: bool,
+    ecosystem_focus: str | None = None,
 ) -> AgentGoalSelection:
     if not market_data_healthy:
         return AgentGoalSelection(
@@ -28,6 +29,12 @@ def choose_goal(
         return AgentGoalSelection(
             "investigate_high_attention_market",
             f"research radar attention={scored[0].attention_score:.3f}",
+        )
+
+    if ecosystem_focus:
+        return AgentGoalSelection(
+            "develop_specialist",
+            f"ecosystem attention currently favors {ecosystem_focus}",
         )
 
     if radar:
