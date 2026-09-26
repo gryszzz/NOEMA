@@ -34,7 +34,7 @@ def example(index: int, survived: int) -> TrenchSurvivalExample:
         },
         control={
             "token_program": "Token",
-            "mint_authority_present": False if good else True,
+            "mint_authority_present": not good,
             "freeze_authority_present": False,
             "permanent_delegate_present": False,
             "transfer_hook_present": False,
