@@ -4,7 +4,6 @@ import asyncio
 import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
-from functools import partial
 
 import httpx
 
@@ -18,12 +17,17 @@ from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .economic_dashboard import build_economic_overview
 from .evm_watch import EvmWatchClient
+from .history_forecaster import MODEL_VERSION, record_history_candidate
 from .kalshi_telemetry import KalshiTelemetry
 from .ledger import ForecastLedger
 from .opportunity_radar import build_radar
+from .outcomes import OutcomeStore
+from .provenance import EvidenceStore
 from .soak import SoakStore
 from .soak_runner import collect_market_snapshot_batch
+from .sync import sync_kalshi_outcomes
 from .venues.kalshi import KalshiVenue
+from .venues.kalshi_history import KalshiHistory
 
 
 def _log(event: str, **fields: object) -> None:
@@ -41,7 +45,7 @@ async def _kalshi_state() -> AgentConnectionState:
     try:
         telemetry = KalshiTelemetry()
     except (RuntimeError, ValueError, OSError, TypeError) as exc:
-        return AgentConnectionState("unconfigured", str(exc))
+        return AgentConnectionState("unconfigured", f"{type(exc).__name__}: account unavailable")
 
     try:
         orders, fills, positions = await asyncio.gather(
@@ -54,7 +58,7 @@ async def _kalshi_state() -> AgentConnectionState:
             f"orders={len(orders)} fills={len(fills)} positions={len(positions)}",
         )
     except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
-        return AgentConnectionState("degraded", str(exc))
+        return AgentConnectionState("degraded", f"{type(exc).__name__}: account check failed")
     finally:
         await telemetry.close()
 
@@ -63,10 +67,13 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
     if not config.evm_rpc_url or not config.evm_address:
         return AgentConnectionState("unconfigured", "dedicated EVM wallet not configured")
 
-    client = EvmWatchClient(
-        rpc_url=config.evm_rpc_url,
-        address=config.evm_address,
-    )
+    try:
+        client = EvmWatchClient(
+            rpc_url=config.evm_rpc_url,
+            address=config.evm_address,
+        )
+    except (httpx.HTTPError, RuntimeError, ValueError, TypeError) as exc:
+        return AgentConnectionState("degraded", f"{type(exc).__name__}: wallet setup failed")
     try:
         snapshot = await client.snapshot()
         return AgentConnectionState(
@@ -77,7 +84,7 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
             ),
         )
     except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
-        return AgentConnectionState("degraded", str(exc))
+        return AgentConnectionState("degraded", f"{type(exc).__name__}: wallet RPC failed")
     finally:
         await client.close()
 
@@ -96,19 +103,87 @@ async def run_cycle(
 
     soak_store = SoakStore(config.db_path)
     forecast_ledger = ForecastLedger(config.db_path)
-    venue = KalshiVenue()
+    outcome_store = OutcomeStore(config.db_path)
+    evidence_store = EvidenceStore(config.db_path)
+    candidates_recorded = 0
+    observed_markets = []
+
+    def record_forecasts(market):
+        record_market_baseline(market, forecast_ledger)
+        observed_markets.append(market)
+
     try:
-        collection = await collect_market_snapshot_batch(
-            venue,
-            soak_store,
-            max_markets=config.max_markets_per_cycle,
-            on_valid=partial(record_market_baseline, ledger=forecast_ledger),
-        )
-    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        venue = KalshiVenue()
+    except (httpx.HTTPError, RuntimeError, ValueError, OSError, TypeError) as exc:
+        venue = None
         collection = None
-        _log("agent_market_collection_error", error=type(exc).__name__)
-    finally:
-        await venue.close()
+        _log("agent_market_setup_error", error=type(exc).__name__)
+    if venue is not None:
+        try:
+            collection = await collect_market_snapshot_batch(
+                venue,
+                soak_store,
+                max_markets=config.max_markets_per_cycle,
+                on_valid=record_forecasts,
+            )
+        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+            collection = None
+            _log("agent_market_collection_error", error=type(exc).__name__)
+        finally:
+            await venue.close()
+
+    # Verify complete event membership via the official public event endpoint.
+    groups: dict[str, list] = {}
+    for market in observed_markets:
+        groups.setdefault(market.market_id.rsplit("-", 1)[0], []).append(market)
+    if groups:
+        try:
+            verifier = KalshiVenue()
+        except (httpx.HTTPError, RuntimeError, ValueError, OSError, TypeError) as exc:
+            verifier = None
+            _log("agent_event_setup_error", error=type(exc).__name__)
+        if verifier is not None:
+            try:
+                event_items = list(groups.items())
+                start = (cycle_id * config.max_event_checks_per_cycle) % len(event_items)
+                rotated = event_items[start:] + event_items[:start]
+                checks_used = 0
+                for event_ticker, group in rotated:
+                    if len(group) not in {1, 2}:
+                        continue
+                    if all(forecast_ledger.has_model_forecast(
+                        m.venue, m.market_id, MODEL_VERSION
+                    ) for m in group):
+                        continue
+                    series = event_ticker.split("-", 1)[0]
+                    prior_events = outcome_store.conn.execute(
+                        """
+                        SELECT COUNT(DISTINCT json_extract(raw_json, '$.event_ticker'))
+                        FROM outcomes WHERE venue = ? AND market_id LIKE ?
+                        """,
+                        (group[0].venue, series + "-%"),
+                    ).fetchone()[0]
+                    if prior_events < 30:
+                        continue
+                    if checks_used >= config.max_event_checks_per_cycle:
+                        break
+                    checks_used += 1
+                    try:
+                        verified = await verifier.event_market_tickers(event_ticker)
+                    except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+                        _log("agent_event_check_error", error=type(exc).__name__)
+                        continue
+                    if verified != {m.market_id for m in group}:
+                        continue
+                    for market in group:
+                        if record_history_candidate(
+                            market, outcomes=outcome_store, evidence=evidence_store,
+                            ledger=forecast_ledger, current_event_size=len(verified),
+                            verified_market_ids=frozenset(verified),
+                        ):
+                            candidates_recorded += 1
+            finally:
+                await verifier.close()
 
     if collection is None:
         market_data = AgentConnectionState("degraded", "market collection failed")
@@ -180,7 +255,8 @@ async def run_cycle(
             else (
                 f"{goal.reason}; cognition={cognition_result.status}; "
                 f"collected={collection.scanned} "
-                f"valid={collection.valid} invalid={collection.invalid}"
+                f"valid={collection.valid} invalid={collection.invalid} "
+                f"history_candidates={candidates_recorded}"
             )
         ),
     )
@@ -217,6 +293,18 @@ async def _heartbeat_loop(
         store.append_heartbeat(heartbeat)
 
 
+async def _sync_outcomes(config: AgentConfig) -> None:
+    history = KalshiHistory()
+    try:
+        result = await sync_kalshi_outcomes(
+            OutcomeStore(config.db_path), history,
+            max_markets=config.max_outcomes_per_sync,
+        )
+        _log("agent_outcome_sync", **asdict(result))
+    finally:
+        await history.close()
+
+
 async def run_agent(
     config: AgentConfig | None = None,
     *,
@@ -249,10 +337,17 @@ async def run_agent(
     )
 
     cycle_id = 0
+    next_outcome_sync = 0.0
     try:
         while True:
             cycle_id += 1
             started = asyncio.get_running_loop().time()
+            if started >= next_outcome_sync:
+                next_outcome_sync = started + config.outcome_sync_interval_seconds
+                try:
+                    await _sync_outcomes(config)
+                except (httpx.HTTPError, RuntimeError, ValueError, OSError, KeyError) as exc:
+                    _log("agent_outcome_sync_error", error=type(exc).__name__)
             await run_cycle(
                 cycle_id=cycle_id,
                 config=config,

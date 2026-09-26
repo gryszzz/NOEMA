@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from .outcomes import OutcomeStore
 from .venues.kalshi_history import KalshiHistory, resolved_outcome
@@ -22,16 +23,22 @@ async def sync_kalshi_outcomes(
     scanned = 0
     imported = 0
     skipped = 0
+    venue = f"kalshi:{history.config.environment}"
 
     async for raw in history.settled_markets():
         scanned += 1
         outcome = resolved_outcome(raw)
         ticker = raw.get("ticker")
-        if outcome is None or not ticker:
+        settled = raw.get("settlement_ts")
+        try:
+            valid_settlement = bool(settled and datetime.fromisoformat(settled).tzinfo)
+        except (TypeError, ValueError):
+            valid_settlement = False
+        if outcome is None or not ticker or not valid_settlement:
             skipped += 1
         else:
             store.upsert(
-                venue="kalshi",
+                venue=venue,
                 market_id=str(ticker),
                 outcome_yes=outcome,
                 resolved_at=raw.get("settlement_ts"),

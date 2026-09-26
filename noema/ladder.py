@@ -1,10 +1,33 @@
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 from .agent_dashboard import build_agent_overview
 from .dashboard_data import build_overview
 from .doctor import doctor_report
+from .history_forecaster import MODEL_VERSION
+from .outcomes import OutcomeStore
+from .paired_evaluation import compare_history_to_market
+
+
+def _candidate_count(path: str) -> int:
+    if not Path(path).exists():
+        return 0
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(
+            """
+            SELECT COUNT(*) FROM forecast_ledger
+            WHERE json_extract(forecast_json, '$.model_version') = ?
+            """,
+            (MODEL_VERSION,),
+        ).fetchone()[0]
+    except sqlite3.OperationalError:
+        return 0
+    finally:
+        conn.close()
 
 
 def build_ladder_report(path: str = "data/noema.db") -> dict[str, Any]:
@@ -13,6 +36,9 @@ def build_ladder_report(path: str = "data/noema.db") -> dict[str, Any]:
     cycle = agent.get("last_cycle") or {}
     checks = {item["name"]: item for item in doctor_report(path)["checks"]}
     overview = build_overview(path)
+    scored = OutcomeStore(path).evaluate_ledger()
+    paired = compare_history_to_market(path)
+    candidates = _candidate_count(path)
     market = cycle.get("market_data") or {}
     kalshi = cycle.get("kalshi") or {}
     wallet = cycle.get("evm_wallet") or {}
@@ -33,10 +59,20 @@ def build_ladder_report(path: str = "data/noema.db") -> dict[str, Any]:
         },
         {
             "rung": "forecast_and_score",
-            "status": "observed" if overview.get("forecasts", 0) > 0 else "pending",
+            "status": "observed" if scored.count > 0 else "pending",
             "evidence": f"{overview.get('forecasts', 0)} recorded forecasts; "
-                        f"{overview.get('resolved_markets', 0)} resolved markets",
-            "next_action": "noema sync-outcomes && noema evaluate",
+                        f"{scored.count} distinct market/model pairs scored",
+            "next_action": "noema sync-outcomes --limit 2000 && noema evaluate"
+                           if scored.count == 0 else None,
+        },
+        {
+            "rung": "independent_forecast",
+            "status": "observed" if candidates > 0 else "pending",
+            "evidence": f"{candidates} paper-only history forecasts; "
+                        f"{paired.distinct_resolved_markets} paired markets in "
+                        f"{paired.distinct_resolved_events} resolved events",
+            "next_action": "noema sync-outcomes --limit 2000 && noema agent-once"
+                           if candidates == 0 else "noema sync-outcomes && noema compare",
         },
         {
             "rung": "model_research",

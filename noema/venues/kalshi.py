@@ -8,6 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
@@ -82,6 +83,7 @@ class KalshiVenue(VenueAdapter):
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.config = config or KalshiConfig.from_env()
+        self.name = f"kalshi:{self.config.environment}"
         self.client = client or httpx.AsyncClient(
             base_url=self.config.base_url,
             timeout=httpx.Timeout(15.0),
@@ -125,7 +127,7 @@ class KalshiVenue(VenueAdapter):
             payload = response.json()
 
             for raw in payload.get("markets", []):
-                snapshot = self._market_snapshot(raw)
+                snapshot = self._market_snapshot(raw, environment=self.config.environment)
                 if snapshot is not None:
                     yield snapshot
 
@@ -148,6 +150,25 @@ class KalshiVenue(VenueAdapter):
         response = await self.client.get("/exchange/status")
         response.raise_for_status()
         return response.json()
+
+    async def event_market_tickers(self, event_ticker: str) -> set[str]:
+        """Read the full current event membership before treating it as binary."""
+        if not event_ticker or not all(c.isalnum() or c == "-" for c in event_ticker):
+            raise ValueError("invalid event ticker")
+        response = await self.client.get(
+            f"/events/{quote(event_ticker, safe='')}",
+            params={"with_nested_markets": "true"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        event = payload.get("event") or {}
+        if event.get("event_ticker") != event_ticker:
+            raise ValueError("event ticker mismatch")
+        markets = event.get("markets") or payload.get("markets") or []
+        tickers = {m.get("ticker") for m in markets}
+        if not tickers or None in tickers:
+            raise ValueError("event markets missing tickers")
+        return tickers
 
     async def execute_demo(self, action: Action) -> str:
         if not self.supports_demo_execution:
@@ -203,7 +224,9 @@ class KalshiVenue(VenueAdapter):
         return str(payload["order_id"])
 
     @staticmethod
-    def _market_snapshot(raw: dict[str, Any]) -> MarketSnapshot | None:
+    def _market_snapshot(
+        raw: dict[str, Any], *, environment: str = "demo"
+    ) -> MarketSnapshot | None:
         ticker = raw.get("ticker")
         if not ticker:
             return None
@@ -212,7 +235,7 @@ class KalshiVenue(VenueAdapter):
             part for part in [raw.get("rules_primary"), raw.get("rules_secondary")] if part
         )
         return MarketSnapshot(
-            venue="kalshi",
+            venue=f"kalshi:{environment}",
             market_id=str(ticker),
             title=str(raw.get("title") or ticker),
             yes_bid=_decimal(raw.get("yes_bid_dollars")),

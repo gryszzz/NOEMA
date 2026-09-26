@@ -35,7 +35,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
   <div class="grid">
     <div class="card span12">
       <h2>NOEMA Agent Runtime</h2>
-      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
         <div class="row"><span>State</span><b id="runtime-state">OFFLINE</b></div>
         <div class="row"><span>Health</span><b id="runtime-health">—</b></div>
         <div class="row"><span>Active goal</span><b id="runtime-goal">—</b></div>
@@ -146,6 +146,11 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
     </div>
 
     <div class="card span12">
+      <h2>Independent Forecast Check</h2>
+      <div id="comparison-panel" class="small">Waiting for resolved, paired markets.</div>
+    </div>
+
+    <div class="card span12">
       <h2>Observed Execution</h2>
       <div id="exec-table" class="empty">No authenticated telemetry loaded.</div>
     </div>
@@ -155,17 +160,18 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
 <script>
 const money=x=>x===null||x===undefined?'—':'$'+Number(x).toFixed(2);
 const pct=x=>x===null||x===undefined?'—':(Number(x)*100).toFixed(1)+'%';
+const esc=x=>String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 async function getJSON(url){const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(await r.text());return r.json()}
 function renderTrust(rows){
  const el=document.getElementById('trust-table');
  if(!rows||!rows.length){el.className='empty';el.textContent='No trust history yet.';return}
- el.className='';el.innerHTML='<table><thead><tr><th>MODEL</th><th>RESOLVED</th><th>LOG WEIGHT</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+r.model_name+'</td><td>'+r.resolved+'</td><td>'+Number(r.log_weight).toFixed(3)+'</td></tr>').join('')+'</tbody></table>'
+ el.className='';el.innerHTML='<table><thead><tr><th>MODEL</th><th>RESOLVED</th><th>LOG WEIGHT</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.model_name)+'</td><td>'+esc(r.resolved)+'</td><td>'+Number(r.log_weight).toFixed(3)+'</td></tr>').join('')+'</tbody></table>'
 }
 function renderRadar(rows){
  const el=document.getElementById('radar-table');
  if(!rows||!rows.length){el.className='empty';el.textContent='No forecast ledger rows yet.';return}
  el.className='';
- el.innerHTML='<table><thead><tr><th>MARKET</th><th>P(YES)</th><th>MKT</th><th>ASK</th><th>ROBUST EDGE</th><th>SPREAD</th><th>LIQUIDITY</th><th>FRESH</th><th>UNCERTAINTY</th><th>ATTN</th><th>DECISION</th></tr></thead><tbody>'+rows.slice(0,50).map(r=>{const details='<details><summary>'+r.title+'</summary><div class="small" style="margin-top:7px"><b>Raw edge:</b> '+pct(r.raw_edge)+' &nbsp; <b>Estimated cost:</b> '+pct(r.estimated_cost)+' &nbsp; <b>Uncertainty penalty:</b> '+pct(r.uncertainty_penalty)+'<br><b>Evidence:</b> '+((r.evidence_ids&&r.evidence_ids.length)?r.evidence_ids.join(', '):'none recorded')+'<br><b>Why NOEMA '+(String(r.decision).includes('pass')?'passed':'is watching')+':</b> '+(r.reason||'no reason recorded')+'</div></details>';return '<tr><td>'+details+'</td><td>'+pct(r.probability_yes)+'</td><td>'+pct(r.market_probability)+'</td><td>'+(r.yes_ask==null?'—':Number(r.yes_ask).toFixed(3))+'</td><td>'+pct(r.robust_edge)+'</td><td>'+(r.spread==null?'—':pct(r.spread))+'</td><td>'+(r.liquidity_usd==null?'—':money(r.liquidity_usd))+'</td><td>'+Math.round(r.freshness_seconds)+'s</td><td>'+pct(r.uncertainty_width)+'</td><td>'+(r.attention_score==null?'SUPPRESSED':Number(r.attention_score).toFixed(2))+'</td><td>'+r.decision+'</td></tr>'}).join('')+'</tbody></table>'
+ el.innerHTML='<table><thead><tr><th>MARKET</th><th>MODEL</th><th>P(YES)</th><th>MKT</th><th>ASK</th><th>ROBUST EDGE</th><th>SPREAD</th><th>LIQUIDITY</th><th>FRESH</th><th>UNCERTAINTY</th><th>ATTN</th><th>DECISION</th></tr></thead><tbody>'+rows.slice(0,50).map(r=>{const details='<details><summary>'+esc(r.title)+'</summary><div class="small" style="margin-top:7px"><b>Raw edge:</b> '+pct(r.raw_edge)+' &nbsp; <b>Estimated cost:</b> '+pct(r.estimated_cost)+' &nbsp; <b>Uncertainty penalty:</b> '+pct(r.uncertainty_penalty)+'<br><b>Evidence:</b> '+((r.evidence_ids&&r.evidence_ids.length)?r.evidence_ids.map(esc).join(', '):'none recorded')+'<br><b>Why NOEMA '+(String(r.decision).includes('pass')?'passed':'is watching')+':</b> '+esc(r.reason||'no reason recorded')+'</div></details>';return '<tr><td>'+details+'</td><td>'+esc(r.model_version)+'</td><td>'+pct(r.probability_yes)+'</td><td>'+pct(r.market_probability)+'</td><td>'+(r.yes_ask==null?'—':Number(r.yes_ask).toFixed(3))+'</td><td>'+pct(r.robust_edge)+'</td><td>'+(r.spread==null?'—':pct(r.spread))+'</td><td>'+(r.liquidity_usd==null?'—':money(r.liquidity_usd))+'</td><td>'+Math.round(r.freshness_seconds)+'s</td><td>'+pct(r.uncertainty_width)+'</td><td>'+(r.attention_score==null?'SUPPRESSED':Number(r.attention_score).toFixed(2))+'</td><td>'+esc(r.decision)+'</td></tr>'}).join('')+'</tbody></table>'
 }
 async function connectPhantom(){
  try{
@@ -181,7 +187,7 @@ async function connectPhantom(){
 function renderExec(rows){
  const el=document.getElementById('exec-table');
  if(!rows||!rows.length){el.className='empty';el.textContent='No fills/orders observed yet.';return}
- el.className='';el.innerHTML='<table><thead><tr><th>ORDER</th><th>FILLED</th><th>REMAINING</th><th>AVG PRICE</th><th>FEES</th><th>MAKER %</th></tr></thead><tbody>'+rows.slice(0,100).map(r=>'<tr><td>'+r.order_id+'</td><td>'+r.observed_filled_count+'</td><td>'+r.remaining_count+'</td><td>'+String(r.average_fill_price??'—')+'</td><td>'+String(r.fees_paid??'—')+'</td><td>'+(r.maker_fraction==null?'—':pct(r.maker_fraction))+'</td></tr>').join('')+'</tbody></table>'
+ el.className='';el.innerHTML='<table><thead><tr><th>ORDER</th><th>FILLED</th><th>REMAINING</th><th>AVG PRICE</th><th>FEES</th><th>MAKER %</th></tr></thead><tbody>'+rows.slice(0,100).map(r=>'<tr><td>'+esc(r.order_id)+'</td><td>'+esc(r.observed_filled_count)+'</td><td>'+esc(r.remaining_count)+'</td><td>'+esc(r.average_fill_price??'—')+'</td><td>'+esc(r.fees_paid??'—')+'</td><td>'+(r.maker_fraction==null?'—':pct(r.maker_fraction))+'</td></tr>').join('')+'</tbody></table>'
 }
 async function refreshAll(){
  try{
@@ -226,7 +232,7 @@ async function refreshAll(){
    const doctor=await getJSON('/api/doctor');
    const checks=doctor.checks||[];
    document.getElementById('doctor-table').className='';
-   document.getElementById('doctor-table').innerHTML='<table><thead><tr><th>SYSTEM</th><th>STATUS</th><th>DETAIL</th></tr></thead><tbody>'+checks.map(c=>'<tr><td>'+c.name+'</td><td>'+String(c.status).toUpperCase()+'</td><td>'+c.detail+'</td></tr>').join('')+'</tbody></table>';
+   document.getElementById('doctor-table').innerHTML='<table><thead><tr><th>SYSTEM</th><th>STATUS</th><th>DETAIL</th></tr></thead><tbody>'+checks.map(c=>'<tr><td>'+esc(c.name)+'</td><td>'+esc(String(c.status).toUpperCase())+'</td><td>'+esc(c.detail)+'</td></tr>').join('')+'</tbody></table>';
   }catch(e){}
   try{
    const cognition=await getJSON('/api/cognition');
@@ -234,7 +240,7 @@ async function refreshAll(){
    if(cognition.latest){
     const p=cognition.latest.packet;
     el.className='';
-    el.innerHTML='<div class="row"><span>Deployment</span><b>'+String(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+cognition.latest.market_id+'</b></div><div class="row"><span>Mode</span><b>'+p.recommended_mode+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+String(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+String(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+p.thesis+'<br><b>Unknowns:</b> '+(p.unknowns||[]).join('; ')+'</div>';
+    el.innerHTML='<div class="row"><span>Deployment</span><b>'+esc(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+esc(cognition.latest.market_id)+'</b></div><div class="row"><span>Mode</span><b>'+esc(p.recommended_mode)+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+esc(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+esc(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+esc(p.thesis)+'<br><b>Unknowns:</b> '+(p.unknowns||[]).map(esc).join('; ')+'</div>';
    }else{
     el.className='empty';
     el.textContent=cognition.configured?'Foundry configured; waiting for an eligible market.':'Foundry not configured yet.';
@@ -262,6 +268,10 @@ async function refreshAll(){
    }
   }catch(e){}
   try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
+  try{
+   const c=await getJSON('/api/compare');
+   document.getElementById('comparison-panel').textContent=c.distinct_resolved_markets+' paired markets in '+c.distinct_resolved_events+' resolved events · candidate Brier '+(c.candidate_brier==null?'—':Number(c.candidate_brier).toFixed(4))+' · market baseline '+(c.market_baseline_brier==null?'—':Number(c.market_baseline_brier).toFixed(4))+' · status '+c.status.toUpperCase()+' · live locked';
+  }catch(e){document.getElementById('comparison-panel').textContent='Comparison unavailable.'}
   try{
    const w=await getJSON('/api/wallet-policy');
    document.getElementById('agent-signer').textContent=String(w.signer_state||'unknown').toUpperCase();

@@ -57,3 +57,14 @@ class ForecastLedger:
             ),
         )
         self.conn.commit()
+
+    def has_model_forecast(self, venue: str, market_id: str, model_version: str) -> bool:
+        return self.conn.execute(
+            """
+            SELECT 1 FROM forecast_ledger
+            WHERE venue = ? AND market_id = ?
+              AND json_extract(forecast_json, '$.model_version') = ?
+            LIMIT 1
+            """,
+            (venue, market_id, model_version),
+        ).fetchone() is not None

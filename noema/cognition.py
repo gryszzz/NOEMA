@@ -54,7 +54,7 @@ async def maybe_run_cognition(
     except (RuntimeError, ValueError) as exc:
         return CognitionResult(
             "degraded",
-            detail=f"{type(exc).__name__}: {exc}",
+            detail=f"{type(exc).__name__}: model setup failed",
         )
 
     try:
@@ -68,7 +68,7 @@ async def maybe_run_cognition(
     ) as exc:
         return CognitionResult(
             "degraded",
-            detail=f"{type(exc).__name__}: {exc}",
+            detail=f"{type(exc).__name__}: model request failed",
         )
     finally:
         await client.close()
