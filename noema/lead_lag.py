@@ -24,6 +24,10 @@ def _corr(a: list[float], b: list[float]) -> float:
     return cov / (va * vb) ** 0.5
 
 
+def _changes(values: list[float]) -> list[float]:
+    return [values[i] - values[i - 1] for i in range(1, len(values))]
+
+
 def find_lead_lag(
     leader: list[float],
     follower: list[float],
@@ -35,15 +39,18 @@ def find_lead_lag(
     if max_lag < 0:
         raise ValueError("max_lag must be non-negative")
 
+    leader_changes = _changes(leader)
+    follower_changes = _changes(follower)
+
     best_lag: int | None = None
     best_corr = 0.0
     best_obs = 0
 
     for lag in range(max_lag + 1):
         if lag == 0:
-            a, b = leader, follower
+            a, b = leader_changes, follower_changes
         else:
-            a, b = leader[:-lag], follower[lag:]
+            a, b = leader_changes[:-lag], follower_changes[lag:]
         corr = _corr(a, b)
         if abs(corr) > abs(best_corr):
             best_corr = corr
