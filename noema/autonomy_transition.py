@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from .economic_models import AutonomyLevel
 
-
 _LEVELS = (
     AutonomyLevel.SHADOW,
     AutonomyLevel.PAPER,
