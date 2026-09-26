@@ -23,7 +23,9 @@ class TrustState:
 
     @property
     def reliability(self) -> float:
-        quality = 1 / (1 + math.exp(-self.log_weight))
+        if self.log_weight <= 0:
+            return 0.0
+        quality = math.tanh(self.log_weight)
         return min(1.5, quality * self.evidence_strength * 1.5)
 
 
