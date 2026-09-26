@@ -39,6 +39,8 @@ noema agent-once
 noema ladder
 ```
 
+For an always-on paper research worker, see [Render hosting](docs/hosting-paper-agent.md).
+
 The first research cycle uses public Kalshi market data and needs no account or wallet
 credentials. It records market-price baseline forecasts for later scoring. Baselines
 always PASS and are suppressed from Opportunity Radar attention; they do not imply edge.

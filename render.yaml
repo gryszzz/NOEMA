@@ -1,0 +1,25 @@
+# Paper research only. Deploy one worker with a persistent SQLite database.
+# Do not add trading credentials or expose the dashboard through this Blueprint.
+services:
+  - type: worker
+    name: noema-paper-agent
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: pip install .
+    startCommand: noema-agent
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    disk:
+      name: noema-paper-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: NOEMA_DB_PATH
+        value: /opt/render/project/src/data/noema.db
+      - key: NOEMA_AGENT_CYCLE_SECONDS
+        value: 300
+      - key: NOEMA_AGENT_OUTCOME_SYNC_SECONDS
+        value: 3600
+      - key: NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC
+        value: 500
