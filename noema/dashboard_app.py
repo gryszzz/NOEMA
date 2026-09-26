@@ -8,7 +8,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from .agent_dashboard import build_agent_overview
+from .cognition_dashboard import build_cognition_overview
 from .dashboard_data import build_overview
+from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .opportunity_radar import build_radar
@@ -31,6 +33,16 @@ async def index() -> str:
 @app.get("/api/agent")
 async def agent() -> dict[str, Any]:
     return build_agent_overview(_db_path())
+
+
+@app.get("/api/doctor")
+async def doctor() -> dict[str, Any]:
+    return doctor_report(_db_path())
+
+
+@app.get("/api/cognition")
+async def cognition() -> dict[str, Any]:
+    return build_cognition_overview(_db_path())
 
 
 @app.get("/api/overview")
