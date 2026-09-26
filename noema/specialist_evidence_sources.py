@@ -9,6 +9,7 @@ from .backtest_overfit import probabilistic_sharpe_ratio
 from .evaluation import expected_calibration_error
 from .history_forecaster import MODEL_VERSION
 from .paired_evaluation import compare_history_to_market
+from .paper_performance import settled_paper_performance
 from .specialist_evolution import SpecialistEvidence
 
 
@@ -109,15 +110,10 @@ def kalshi_history_evidence(path: str = "data/noema.db") -> SpecialistEvidence:
 
     paired = compare_history_to_market(path)
     calibration = _candidate_calibration(path)
-    paper_returns = _paper_returns(path)
-    after_cost = (
-        sum(paper_returns) / len(paper_returns)
-        if paper_returns
-        else None
-    )
+    paper = settled_paper_performance(path)
     psr = (
-        probabilistic_sharpe_ratio(paper_returns).probabilistic_sharpe
-        if len(paper_returns) >= 3
+        probabilistic_sharpe_ratio(paper.per_trade_returns).probabilistic_sharpe
+        if len(paper.per_trade_returns) >= 3
         else None
     )
 
@@ -130,8 +126,8 @@ def kalshi_history_evidence(path: str = "data/noema.db") -> SpecialistEvidence:
         resolved=paired.distinct_resolved_events,
         brier=paired.candidate_brier,
         market_baseline_brier=paired.market_baseline_brier,
-        after_cost_return=after_cost,
-        max_drawdown_fraction=None,
+        after_cost_return=paper.after_cost_return,
+        max_drawdown_fraction=paper.max_drawdown_fraction if paper.observations else None,
         calibration_error=calibration,
         research_credible=credible,
         probability_backtest_overfit=None,
