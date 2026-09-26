@@ -102,3 +102,28 @@ def test_database_requires_verified_matching_snapshot_and_later_outcome(tmp_path
     assert audit_database(path)["kalshi:production/SERIES"]["status"] == (
         "insufficient_resolved_events"
     )
+
+
+def test_partial_two_market_settlement_is_excluded(tmp_path) -> None:
+    path = str(tmp_path / "partial.db")
+    ledger, outcomes = ForecastLedger(path), OutcomeStore(path)
+    captured = datetime(2026, 1, 1, tzinfo=UTC)
+    for side in ("A", "B"):
+        ticker = f"SERIES-1-{side}"
+        market = MarketSnapshot(
+            "kalshi:production", ticker, "test", 0.4, 0.5, 0.5, 0.6,
+            100.0, captured + timedelta(days=1), "settles yes/no", captured,
+        )
+        record_market_baseline(market, ledger)
+        forecast = Forecast(ticker, market.venue, 0.5, 0.3, 0.7, "series-frequency-v1")
+        ledger.append(
+            market, forecast, Opportunity(forecast, market, 0.5, 0, 0, 0, 0),
+            Action(Decision.PASS, ticker, market.venue, None, 0, "paper"),
+        )
+        if side == "A":
+            outcomes.upsert(
+                venue=market.venue, market_id=ticker, outcome_yes=1,
+                resolved_at=(captured + timedelta(days=1)).isoformat(),
+                raw={"event_ticker": "SERIES-1"}, seen_at=captured + timedelta(days=2),
+            )
+    assert load_verified_examples(path) == []

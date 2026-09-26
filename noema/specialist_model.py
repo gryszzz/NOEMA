@@ -126,6 +126,12 @@ def load_verified_examples(path: str) -> list[Example]:
             ORDER BY f.id
             """
         ).fetchall()
+        expected = conn.execute(
+            """
+            SELECT venue, market_id FROM forecast_ledger
+            WHERE json_extract(forecast_json, '$.model_version') = 'series-frequency-v1'
+            """
+        ).fetchall()
     except sqlite3.OperationalError:
         return []
     finally:
@@ -143,6 +149,8 @@ def load_verified_examples(path: str) -> list[Example]:
             first_seen = _parse_time(seen)
             price = float(forecast.get("probability_yes"))
         except (ValueError, TypeError, AttributeError):
+            continue
+        if not all(isinstance(value, dict) for value in (snapshot, forecast, raw)):
             continue
         event = raw.get("event_ticker")
         if (
@@ -162,9 +170,19 @@ def load_verified_examples(path: str) -> list[Example]:
                 key, Example(venue, event.split("-", 1)[0], event, ticker,
                              captured, resolved, first_seen, price, int(outcome)),
             )
-    return [
+    expected_by_event: dict[tuple[str, str], set[str]] = {}
+    for venue, ticker in expected:
+        expected_by_event.setdefault((venue, ticker.rsplit("-", 1)[0]), set()).add(ticker)
+    eligible = [
         replace(baselines[key], history_probability=historical)
         for key, historical in verified.items() if key in baselines
+    ]
+    observed_by_event: dict[tuple[str, str], set[str]] = {}
+    for row in eligible:
+        observed_by_event.setdefault((row.venue, row.event), set()).add(row.ticker)
+    return [
+        row for row in eligible
+        if observed_by_event[(row.venue, row.event)] == expected_by_event[(row.venue, row.event)]
     ]
 
 
