@@ -30,6 +30,9 @@ from .provenance import EvidenceStore
 from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
 from .sync import sync_kalshi_outcomes
+from .trench_collector import collect_trench_cycle
+from .trench_config import TrenchCollectorConfig
+from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 
@@ -91,6 +94,44 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
         return AgentConnectionState("degraded", f"{type(exc).__name__}: wallet RPC failed")
     finally:
         await client.close()
+
+
+async def _trench_state(db_path: str) -> AgentConnectionState:
+    config = TrenchCollectorConfig.from_env()
+    if not config.enabled:
+        return AgentConnectionState("disabled", "Trench collector disabled")
+    try:
+        config.validate()
+        summary = await collect_trench_cycle(
+            db_path=db_path,
+            jupiter=JupiterTrenchResearchClient(api_key=config.jupiter_api_key),
+            solana=SolanaRpcResearchClient(rpc_url=config.solana_rpc_url),
+            due_limit=config.due_limit,
+            enrichment_limit=config.enrichment_limit,
+            request_pause_seconds=config.request_pause_seconds,
+        )
+        return AgentConnectionState(
+            "connected",
+            (
+                f"discovered={summary.discovered} due={summary.due} "
+                f"recorded={summary.recorded} unavailable={summary.unavailable} "
+                f"failed={summary.failed} assessments={summary.assessments_recorded} "
+                f"counterfactuals={summary.counterfactuals_recorded}"
+            ),
+        )
+    except (
+        httpx.HTTPError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        sqlite3.Error,
+        OSError,
+    ) as exc:
+        return AgentConnectionState(
+            "degraded",
+            f"{type(exc).__name__}: Trench collection failed",
+        )
 
 
 async def run_cycle(
@@ -212,9 +253,10 @@ async def run_cycle(
             "connected", f"scanned={collection.scanned} valid={collection.valid}"
         )
 
-    kalshi, evm = await asyncio.gather(
+    kalshi, evm, trench = await asyncio.gather(
         _kalshi_state(),
         _evm_state(config),
+        _trench_state(config.db_path),
     )
     radar = build_radar(config.db_path, limit=config.max_radar_rows)
     economic = build_economic_overview(config.db_path)
@@ -271,6 +313,7 @@ async def run_cycle(
         or evm.status == "degraded"
         or cognition_result.status == "degraded"
         or ecosystem_state == "degraded"
+        or trench.status == "degraded"
     ):
         health = "degraded"
     elif kalshi.status == "unconfigured" or evm.status == "unconfigured":
@@ -290,6 +333,7 @@ async def run_cycle(
         ecosystem_focus=ecosystem_focus,
         cognition=cognition_state,
         market_data=market_data,
+        trench=trench,
         note=(
             goal.reason
             if collection is None
@@ -299,6 +343,7 @@ async def run_cycle(
                 f"ecosystem_idle={0.0 if ecosystem_plan is None else ecosystem_plan.idle_fraction:.3f}; "
                 f"evolution_reviews={evolution_reviews}; "
                 f"challengers_registered={challenger_count}; "
+                f"trench={trench.status}; "
                 f"collected={collection.scanned} "
                 f"valid={collection.valid} invalid={collection.invalid} "
                 f"history_candidates={candidates_recorded}"
