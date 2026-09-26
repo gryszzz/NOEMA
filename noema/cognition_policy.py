@@ -17,6 +17,9 @@ class CognitionPolicy:
     cooldown_seconds: float = 300.0
     max_calls_per_hour: int = 6
     max_tokens_per_hour: int = 20000
+    max_estimated_usd_per_day: float = 0.50
+    input_usd_per_million: float | None = None
+    output_usd_per_million: float | None = None
 
     @classmethod
     def from_env(cls) -> CognitionPolicy:
@@ -42,7 +45,34 @@ class CognitionPolicy:
             max_tokens_per_hour=int(
                 os.getenv("NOEMA_COGNITION_MAX_TOKENS_PER_HOUR", "20000")
             ),
+            max_estimated_usd_per_day=float(
+                os.getenv("NOEMA_COGNITION_MAX_ESTIMATED_USD_PER_DAY", "0.50")
+            ),
+            input_usd_per_million=(
+                float(value) if (value := os.getenv("NOEMA_FOUNDRY_INPUT_USD_PER_MILLION"))
+                else None
+            ),
+            output_usd_per_million=(
+                float(value) if (value := os.getenv("NOEMA_FOUNDRY_OUTPUT_USD_PER_MILLION"))
+                else None
+            ),
         )
+
+    def estimated_max_call_usd(self, *, input_bytes: int, max_output_tokens: int) -> float:
+        """Use UTF-8 bytes as a conservative input-token estimate."""
+        if (
+            self.max_estimated_usd_per_day <= 0
+            or self.input_usd_per_million is None
+            or self.output_usd_per_million is None
+            or self.input_usd_per_million <= 0
+            or self.output_usd_per_million <= 0
+            or input_bytes <= 0 or max_output_tokens <= 0
+        ):
+            raise ValueError("model prices and a positive daily budget are required")
+        return (
+            input_bytes * self.input_usd_per_million
+            + max_output_tokens * self.output_usd_per_million
+        ) / 1_000_000
 
 
 @dataclass(frozen=True)
