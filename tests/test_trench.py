@@ -58,7 +58,7 @@ def test_trench_features_capture_growth_and_concentration() -> None:
     assert features.liquidity_growth_fraction > 1
     assert features.buyer_growth_fraction > 5
     assert features.buyer_acceleration > 0
-    assert features.top5_holder_fraction == 0.20
+    assert features.top5_holder_fraction == pytest.approx(0.20)
 
 
 def test_clean_growth_can_become_research_candidate() -> None:
