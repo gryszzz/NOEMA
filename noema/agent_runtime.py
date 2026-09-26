@@ -116,7 +116,8 @@ async def _trench_state(db_path: str) -> AgentConnectionState:
                 f"discovered={summary.discovered} due={summary.due} "
                 f"recorded={summary.recorded} unavailable={summary.unavailable} "
                 f"failed={summary.failed} assessments={summary.assessments_recorded} "
-                f"counterfactuals={summary.counterfactuals_recorded}"
+                f"counterfactuals={summary.counterfactuals_recorded} "
+                f"survival_forecasts={summary.survival_forecasts_recorded}"
             ),
         )
     except (
