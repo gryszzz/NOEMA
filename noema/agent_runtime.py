@@ -5,6 +5,8 @@ import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
+import httpx
+
 from .agent_config import AgentConfig
 from .agent_identity import AgentIdentity
 from .agent_models import AgentConnectionState, AgentCycleState, AgentStatus
@@ -33,7 +35,7 @@ def _log(event: str, **fields: object) -> None:
 async def _kalshi_state() -> AgentConnectionState:
     try:
         telemetry = KalshiTelemetry()
-    except Exception as exc:
+    except (RuntimeError, ValueError, OSError, TypeError) as exc:
         return AgentConnectionState("unconfigured", str(exc))
 
     try:
@@ -46,7 +48,7 @@ async def _kalshi_state() -> AgentConnectionState:
             "connected",
             f"orders={len(orders)} fills={len(fills)} positions={len(positions)}",
         )
-    except Exception as exc:
+    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
         return AgentConnectionState("degraded", str(exc))
     finally:
         await telemetry.close()
@@ -69,7 +71,7 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
                 f"native={snapshot.native_balance}"
             ),
         )
-    except Exception as exc:
+    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
         return AgentConnectionState("degraded", str(exc))
     finally:
         await client.close()
@@ -95,7 +97,7 @@ async def run_cycle(
             soak_store,
             max_markets=config.max_markets_per_cycle,
         )
-    except Exception as exc:
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
         collection = None
         _log("agent_market_collection_error", error=type(exc).__name__)
     finally:
