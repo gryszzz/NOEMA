@@ -30,3 +30,33 @@ def test_profitable_calibrated_strategy_can_activate() -> None:
     )
     assert result.status is StrategyStatus.ACTIVE
     assert result.risk_multiplier == 1.0
+
+
+def test_bad_calibration_quarantines_strategy() -> None:
+    result = evaluate_strategy(
+        StrategyEvidence(
+            resolved_forecasts=500,
+            brier=0.15,
+            market_baseline_brier=0.20,
+            after_cost_return=0.12,
+            max_drawdown_fraction=0.04,
+            calibration_error=0.15,
+            research_credible=True,
+        )
+    )
+    assert result.status is StrategyStatus.QUARANTINED
+
+
+def test_failed_research_credibility_quarantines_strategy() -> None:
+    result = evaluate_strategy(
+        StrategyEvidence(
+            resolved_forecasts=500,
+            brier=0.15,
+            market_baseline_brier=0.20,
+            after_cost_return=0.12,
+            max_drawdown_fraction=0.04,
+            calibration_error=0.03,
+            research_credible=False,
+        )
+    )
+    assert result.status is StrategyStatus.QUARANTINED
