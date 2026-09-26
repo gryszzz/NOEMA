@@ -1,3 +1,5 @@
+import pytest
+
 from noema.edge import CostAssumptions, Side, compare_binary_edges
 
 
@@ -10,8 +12,8 @@ def test_edge_math_is_symmetric() -> None:
     )
     assert result.yes is not None
     assert result.no is not None
-    assert result.yes.after_cost_edge == 0.09
-    assert result.no.after_cost_edge == -0.06
+    assert result.yes.after_cost_edge == pytest.approx(0.09)
+    assert result.no.after_cost_edge == pytest.approx(-0.06)
     assert result.best is not None
     assert result.best.side is Side.YES
 
