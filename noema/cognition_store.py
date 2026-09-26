@@ -76,6 +76,21 @@ class CognitionStore:
         now = now or datetime.now(UTC)
         return self.calls_since(now - timedelta(hours=1))
 
+    def tokens_since(self, since: datetime) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COALESCE(SUM(total_tokens), 0)
+            FROM cognition_packets
+            WHERE created_at >= ?
+            """,
+            (since.astimezone(UTC).isoformat(),),
+        ).fetchone()
+        return 0 if row is None else int(row[0])
+
+    def tokens_last_hour(self, *, now: datetime | None = None) -> int:
+        now = now or datetime.now(UTC)
+        return self.tokens_since(now - timedelta(hours=1))
+
     def seconds_since_market_call(
         self,
         market_id: str,
