@@ -16,6 +16,7 @@ class CognitionPolicy:
     max_uncertainty_width: float = 0.20
     cooldown_seconds: float = 300.0
     max_calls_per_hour: int = 6
+    max_tokens_per_hour: int = 20000
 
     @classmethod
     def from_env(cls) -> "CognitionPolicy":
@@ -37,6 +38,9 @@ class CognitionPolicy:
             ),
             max_calls_per_hour=int(
                 os.getenv("NOEMA_COGNITION_MAX_CALLS_PER_HOUR", "6")
+            ),
+            max_tokens_per_hour=int(
+                os.getenv("NOEMA_COGNITION_MAX_TOKENS_PER_HOUR", "20000")
             ),
         )
 
@@ -68,7 +72,9 @@ def assess_cognition(
     if row.uncertainty_width > policy.max_uncertainty_width:
         reasons.append("forecast uncertainty too wide")
     if store.calls_last_hour(now=now) >= policy.max_calls_per_hour:
-        reasons.append("hourly cognition budget exhausted")
+        reasons.append("hourly cognition call budget exhausted")
+    if store.tokens_last_hour(now=now) >= policy.max_tokens_per_hour:
+        reasons.append("hourly cognition token budget exhausted")
 
     since = store.seconds_since_market_call(row.market_id, now=now)
     if since is not None and since < policy.cooldown_seconds:
