@@ -24,6 +24,6 @@ def test_naive_timestamp_rejected(tmp_path) -> None:
             evidence_id="e1",
             source="x",
             source_type="market_data",
-            observed_at=datetime.now(),
+            observed_at=datetime.now(UTC).replace(tzinfo=None),
             payload={},
         )
