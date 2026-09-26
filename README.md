@@ -150,3 +150,20 @@ See [docs/kalshi-core.md](docs/kalshi-core.md).
 8. Only after sufficient out-of-sample evidence: tightly capped live execution
 
 NOEMA is research software. Prediction markets and sports betting involve real financial risk; paper performance can differ materially from live results.
+
+
+## Demo Soak Lab
+
+NOEMA now includes a replayable data-collection lab for long-running demo/paper research.
+
+```bash
+noema soak-once --limit 100
+noema soak-loop --interval 60
+noema soak-report
+noema sync-outcomes --limit 2000
+noema evaluate
+```
+
+The lab persists normalized market snapshots, validation failures, collector heartbeats, and settled outcomes into SQLite. A Docker worker is included for an always-on deployment with a persistent `/data` volume.
+
+See [docs/soak-lab.md](docs/soak-lab.md).
