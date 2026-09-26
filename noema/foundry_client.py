@@ -128,6 +128,7 @@ class FoundryCognitionClient:
             "model": self.config.deployment,
             "reasoning": {"effort": self.config.reasoning_effort},
             "input": prompt,
+            "max_output_tokens": self.config.max_output_tokens,
             "store": False,
             "text": {
                 "format": {
