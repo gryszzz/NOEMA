@@ -19,3 +19,8 @@ def test_trust_store_roundtrip(tmp_path) -> None:
     state = TrustState("m", 5, 0.2, 1.0, 1.2)
     store.put(state)
     assert store.get("m") == state
+
+
+def test_neutral_adaptive_state_has_no_reliability() -> None:
+    state = TrustState("neutral", 500, 0.0, 100.0, 100.0)
+    assert state.reliability == 0.0
