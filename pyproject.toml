@@ -20,6 +20,7 @@ dev = [
 
 [project.scripts]
 noema = "noema.cli:main"
+noema-dashboard = "noema.dashboard_server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
