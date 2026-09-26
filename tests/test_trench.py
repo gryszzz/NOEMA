@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from noema.trench_features import extract_trench_features
 from noema.trench_models import LaunchTick, TokenControlState
 from noema.trench_risk import assess_trench_candidate
