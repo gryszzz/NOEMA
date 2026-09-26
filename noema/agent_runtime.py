@@ -29,10 +29,10 @@ from .paper_research import PaperResearchStore, collect_paper_quote
 from .provenance import EvidenceStore
 from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
+from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .sync import sync_kalshi_outcomes
 from .trench_collector import collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
-from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 
