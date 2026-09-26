@@ -12,10 +12,10 @@ class AgentWalletPolicy:
     allowed_chains: frozenset[Chain] = frozenset({Chain.SOLANA, Chain.BASE})
     allowed_venues: frozenset[str] = frozenset()
     allowed_contracts: frozenset[str] = frozenset()
-    max_transaction_usd: Decimal = Decimal("25")
-    max_daily_notional_usd: Decimal = Decimal("100")
-    max_slippage_bps: Decimal = Decimal("75")
-    minimum_reserve_usd: Decimal = Decimal("100")
+    max_transaction_usd: Decimal = Decimal(25)
+    max_daily_notional_usd: Decimal = Decimal(100)
+    max_slippage_bps: Decimal = Decimal(75)
+    minimum_reserve_usd: Decimal = Decimal(100)
     require_evidence: bool = True
     master_halt: bool = True
 
