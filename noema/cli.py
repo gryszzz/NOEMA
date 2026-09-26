@@ -13,9 +13,12 @@ from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
 from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
+from .doctor import doctor_report
 from .economic_ledger import EconomicLedger
 from .kalshi_telemetry import KalshiTelemetry
+from .local_env import load_local_env
 from .outcomes import OutcomeStore
+from .setup_wizard import run_setup_wizard
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
 from .soak_runner import collect_market_snapshot_batch, run_soak_loop
@@ -187,6 +190,7 @@ async def _sync_outcomes(db: str, limit: int | None) -> None:
 
 
 def main() -> None:
+    load_local_env()
     parser = argparse.ArgumentParser(prog="noema")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -202,6 +206,9 @@ def main() -> None:
     sub.add_parser("account")
     sub.add_parser("check-config")
     sub.add_parser("telemetry")
+    sub.add_parser("setup")
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument("--db", default="data/noema.db")
 
     agent_once = sub.add_parser("agent-once")
     agent_once.add_argument("--db", default="data/noema.db")
@@ -246,6 +253,10 @@ def main() -> None:
         asyncio.run(_account())
     elif args.command == "telemetry":
         asyncio.run(_telemetry())
+    elif args.command == "setup":
+        run_setup_wizard()
+    elif args.command == "doctor":
+        print(json.dumps(doctor_report(args.db), sort_keys=True))
     elif args.command == "agent-once":
         asyncio.run(_agent_once(args.db))
     elif args.command == "economy-init":
