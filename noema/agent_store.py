@@ -106,6 +106,12 @@ class AgentStore:
                 evm_wallet=AgentConnectionState(**last_cycle_raw["evm_wallet"]),
                 radar_markets=int(last_cycle_raw["radar_markets"]),
                 economic_state=str(last_cycle_raw["economic_state"]),
+                cognition=AgentConnectionState(
+                    **last_cycle_raw.get(
+                        "cognition",
+                        {"status": "unconfigured", "detail": None},
+                    )
+                ),
                 note=last_cycle_raw.get("note"),
             )
 
