@@ -103,6 +103,17 @@ of its forecast. `noema paper-audit` scores only paper quotes recorded before
 later observed settlement. No order is submitted. A quote based on displayed
 depth does not prove an order would have filled. See [evaluation](docs/evaluation.md).
 
+## Agent ecosystem
+
+NOEMA now coordinates persistent specialist profiles through a research-only ecosystem kernel.
+New specialists receive bounded exploration, proven research can earn more attention, quarantined
+specialists receive none, and one family cannot silently consume the whole research loop.
+The current runtime bootstraps Kalshi paper research and Trench-1 shadow research and records the
+dominant specialist in each agent cycle.
+
+This allocates research attention only; it does not move money or relax wallet limits. See
+[Agent ecosystem](docs/agent-ecosystem.md).
+
 ## Trench-1: first crypto specialty
 
 NOEMA now has a narrow, research-only Solana new-token layer instead of a generic

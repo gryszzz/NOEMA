@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
@@ -16,6 +17,7 @@ from .baseline_recording import record_market_baseline
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .economic_dashboard import build_economic_overview
+from .ecosystem_controller import review_research_ecosystem
 from .evm_watch import EvmWatchClient
 from .history_forecaster import MODEL_VERSION, record_history_candidate
 from .kalshi_telemetry import KalshiTelemetry
@@ -217,9 +219,20 @@ async def run_cycle(
     economic = build_economic_overview(config.db_path)
     economic_initialized = economic.get("snapshot") is not None
 
+    try:
+        ecosystem_plan = review_research_ecosystem(config.db_path)
+        ecosystem_state = "active"
+        ecosystem_focus = ecosystem_plan.dominant_specialist
+    except (sqlite3.Error, ValueError, OSError) as exc:
+        ecosystem_plan = None
+        ecosystem_state = "degraded"
+        ecosystem_focus = None
+        _log("agent_ecosystem_error", error=type(exc).__name__)
+
     goal = choose_goal(
         radar=radar,
         market_data_healthy=market_data.status == "connected",
+        ecosystem_focus=ecosystem_focus,
     )
 
     if market_data.status == "connected":
@@ -245,6 +258,7 @@ async def run_cycle(
         or kalshi.status == "degraded"
         or evm.status == "degraded"
         or cognition_result.status == "degraded"
+        or ecosystem_state == "degraded"
     ):
         health = "degraded"
     elif kalshi.status == "unconfigured" or evm.status == "unconfigured":
@@ -260,6 +274,8 @@ async def run_cycle(
         evm_wallet=evm,
         radar_markets=len(radar),
         economic_state="initialized" if economic_initialized else "uninitialized",
+        ecosystem_state=ecosystem_state,
+        ecosystem_focus=ecosystem_focus,
         cognition=cognition_state,
         market_data=market_data,
         note=(
@@ -267,6 +283,8 @@ async def run_cycle(
             if collection is None
             else (
                 f"{goal.reason}; cognition={cognition_result.status}; "
+                f"ecosystem_focus={ecosystem_focus or 'none'}; "
+                f"ecosystem_idle={0.0 if ecosystem_plan is None else ecosystem_plan.idle_fraction:.3f}; "
                 f"collected={collection.scanned} "
                 f"valid={collection.valid} invalid={collection.invalid} "
                 f"history_candidates={candidates_recorded}"

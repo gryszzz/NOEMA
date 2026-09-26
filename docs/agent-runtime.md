@@ -75,7 +75,8 @@ A cycle:
 3. checks authenticated Kalshi account telemetry;
 4. observes the dedicated EVM wallet;
 5. reads recent Opportunity Radar state and the Economic OS;
-6. chooses the current operating goal and records a heartbeat.
+6. reviews the persistent specialist ecosystem and chooses a research focus;
+7. chooses the current operating goal and records a heartbeat.
 
 ## Identity
 
@@ -99,9 +100,14 @@ Priority:
 ```text
 broken public market perception
   -> high-attention independent research market
+  -> dominant ecosystem specialist
   -> calibration/data collection
   -> world-state collection
 ```
+
+The ecosystem focus is research attention, not trading authority. The specialist registry keeps
+Kalshi paper research and Trench-1 shadow research separate and applies bounded exploration plus
+family concentration limits. See [Agent ecosystem](agent-ecosystem.md).
 
 This is the first layer of the agent's operational self-direction. Future planners can become richer without changing the fail-closed wallet or risk layers.
 
