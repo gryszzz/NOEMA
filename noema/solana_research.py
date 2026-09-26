@@ -91,22 +91,27 @@ def jupiter_control_state(token: dict[str, Any]) -> TokenControlState:
     audit = audit if isinstance(audit, dict) else {}
 
     suspicious = bool(audit.get("isSus") is True)
+    token_program = (
+        str(token["tokenProgram"])
+        if token.get("tokenProgram") is not None
+        else None
+    )
+    token_2022 = token_program is not None and "2022" in token_program.lower()
+    extension_unknown = token_program is None or token_2022
+
     return TokenControlState(
-        token_program=(
-            str(token["tokenProgram"])
-            if token.get("tokenProgram") is not None
-            else None
-        ),
+        token_program=token_program,
         mint_authority_present=_authority_present(audit, "mintAuthorityDisabled"),
         freeze_authority_present=_authority_present(audit, "freezeAuthorityDisabled"),
         permanent_delegate_present=(
             bool(audit["permanentDelegate"])
             if isinstance(audit.get("permanentDelegate"), bool)
-            else None
+            else None if extension_unknown else False
         ),
-        # Tokens V2 does not establish these extension details by itself.
-        transfer_hook_present=None,
-        transfer_fee_bps=None,
+        # Standard SPL Token cannot use Token-2022-only transfer extensions.
+        # For Token-2022, the Tokens V2 payload alone does not establish their state.
+        transfer_hook_present=None if extension_unknown else False,
+        transfer_fee_bps=None if extension_unknown else 0,
         suspicious_flag=suspicious,
     )
 
