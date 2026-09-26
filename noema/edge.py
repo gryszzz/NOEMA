@@ -15,6 +15,10 @@ class CostAssumptions:
     slippage_fraction: float = 0.0
     uncertainty_haircut: float = 0.0
 
+    def __post_init__(self) -> None:
+        if min(self.fee_fraction, self.slippage_fraction, self.uncertainty_haircut) < 0:
+            raise ValueError("cost assumptions must be non-negative")
+
     @property
     def total(self) -> float:
         return self.fee_fraction + self.slippage_fraction + self.uncertainty_haircut
@@ -45,6 +49,9 @@ def compare_binary_edges(
 ) -> EdgeComparison:
     if not 0 <= probability_yes <= 1:
         raise ValueError("probability_yes must be in [0, 1]")
+    for name, price in (("yes_ask", yes_ask), ("no_ask", no_ask)):
+        if price is not None and not 0 <= price <= 1:
+            raise ValueError(f"{name} must be in [0, 1]")
 
     yes_edge: SideEdge | None = None
     no_edge: SideEdge | None = None
