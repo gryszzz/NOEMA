@@ -11,9 +11,9 @@ from .agent_config import AgentConfig
 from .agent_runtime import run_cycle
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
+from .doctor import doctor_report
 from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
-from .doctor import doctor_report
 from .economic_ledger import EconomicLedger
 from .kalshi_telemetry import KalshiTelemetry
 from .local_env import load_local_env
