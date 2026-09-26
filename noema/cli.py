@@ -32,6 +32,10 @@ from .soak_runner import collect_market_snapshot_batch, run_soak_loop
 from .specialist_model import audit_database
 from .sync import sync_kalshi_outcomes
 from .telemetry_report import build_telemetry_report
+from .trench_collector import collect_trench_cycle
+from .trench_config import TrenchCollectorConfig
+from .trench_dashboard import build_trench_overview
+from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
@@ -161,6 +165,24 @@ def _ecosystem_show(db: str) -> None:
     print(json.dumps(build_ecosystem_overview(db), sort_keys=True, default=str))
 
 
+def _trench_show(db: str) -> None:
+    print(json.dumps(build_trench_overview(db), sort_keys=True, default=str))
+
+
+async def _trench_once(db: str) -> None:
+    config = TrenchCollectorConfig.from_env()
+    config.validate()
+    summary = await collect_trench_cycle(
+        db_path=db,
+        jupiter=JupiterTrenchResearchClient(api_key=config.jupiter_api_key),
+        solana=SolanaRpcResearchClient(rpc_url=config.solana_rpc_url),
+        due_limit=config.due_limit,
+        enrichment_limit=config.enrichment_limit,
+        request_pause_seconds=config.request_pause_seconds,
+    )
+    print(json.dumps(asdict(summary), sort_keys=True))
+
+
 async def _soak_once(db: str, limit: int | None) -> None:
     store = SoakStore(db)
     venue = KalshiVenue()
@@ -271,6 +293,12 @@ def main() -> None:
     ecosystem_show = sub.add_parser("ecosystem-show")
     ecosystem_show.add_argument("--db", default="data/noema.db")
 
+    trench_once = sub.add_parser("trench-once")
+    trench_once.add_argument("--db", default="data/noema.db")
+
+    trench_show = sub.add_parser("trench-show")
+    trench_show.add_argument("--db", default="data/noema.db")
+
     bill_config = sub.add_parser("bill-config")
     bill_config.add_argument("--db", default="data/noema.db")
     bill_config.add_argument("--hosting", type=Decimal, required=True)
@@ -343,6 +371,10 @@ def main() -> None:
         _economy_show(args.db)
     elif args.command == "ecosystem-show":
         _ecosystem_show(args.db)
+    elif args.command == "trench-once":
+        asyncio.run(_trench_once(args.db))
+    elif args.command == "trench-show":
+        _trench_show(args.db)
     elif args.command == "bill-config":
         tracker = BillTracker(args.db)
         tracker.configure(hosting_usd=args.hosting, other_usd=args.other,
