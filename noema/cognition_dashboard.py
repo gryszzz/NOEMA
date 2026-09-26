@@ -18,6 +18,7 @@ def build_cognition_overview(path: str = "data/noema.db") -> dict[str, Any]:
         "deployment": config.deployment,
         "reasoning_effort": config.reasoning_effort,
         "calls_last_hour": store.calls_last_hour(),
+        "tokens_last_hour": store.tokens_last_hour(),
         "latest": store.latest(),
         "pending_research_count": queue.pending_count(),
         "pending_research": [task.__dict__ for task in pending],
