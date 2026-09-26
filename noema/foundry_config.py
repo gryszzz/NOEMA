@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-
 _ALLOWED_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 
@@ -18,7 +17,7 @@ class FoundryConfig:
     max_output_tokens: int = 1500
 
     @classmethod
-    def from_env(cls) -> "FoundryConfig":
+    def from_env(cls) -> FoundryConfig:
         return cls(
             endpoint=os.getenv("NOEMA_FOUNDRY_ENDPOINT"),
             api_key=os.getenv("NOEMA_FOUNDRY_API_KEY"),
