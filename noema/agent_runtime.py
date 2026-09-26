@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from functools import partial
 
 import httpx
 
@@ -12,11 +13,13 @@ from .agent_identity import AgentIdentity
 from .agent_models import AgentConnectionState, AgentCycleState, AgentStatus
 from .agent_planner import choose_goal, refine_goal_with_cognition
 from .agent_store import AgentStore
+from .baseline_recording import record_market_baseline
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .economic_dashboard import build_economic_overview
 from .evm_watch import EvmWatchClient
 from .kalshi_telemetry import KalshiTelemetry
+from .ledger import ForecastLedger
 from .opportunity_radar import build_radar
 from .soak import SoakStore
 from .soak_runner import collect_market_snapshot_batch
@@ -92,18 +95,31 @@ async def run_cycle(
     started = datetime.now(UTC)
 
     soak_store = SoakStore(config.db_path)
+    forecast_ledger = ForecastLedger(config.db_path)
     venue = KalshiVenue()
     try:
         collection = await collect_market_snapshot_batch(
             venue,
             soak_store,
             max_markets=config.max_markets_per_cycle,
+            on_valid=partial(record_market_baseline, ledger=forecast_ledger),
         )
     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
         collection = None
         _log("agent_market_collection_error", error=type(exc).__name__)
     finally:
         await venue.close()
+
+    if collection is None:
+        market_data = AgentConnectionState("degraded", "market collection failed")
+    elif collection.valid == 0:
+        market_data = AgentConnectionState(
+            "degraded", f"scanned={collection.scanned} valid=0"
+        )
+    else:
+        market_data = AgentConnectionState(
+            "connected", f"scanned={collection.scanned} valid={collection.valid}"
+        )
 
     kalshi, evm = await asyncio.gather(
         _kalshi_state(),
@@ -115,12 +131,10 @@ async def run_cycle(
 
     goal = choose_goal(
         radar=radar,
-        kalshi_healthy=kalshi.status == "connected",
-        wallet_healthy=evm.status == "connected",
-        economic_initialized=economic_initialized,
+        market_data_healthy=market_data.status == "connected",
     )
 
-    if kalshi.status == "connected" and economic_initialized:
+    if market_data.status == "connected":
         cognition_result = await maybe_run_cognition(
             radar,
             db_path=config.db_path,
@@ -128,7 +142,7 @@ async def run_cycle(
     else:
         cognition_result = CognitionResult(
             "skipped",
-            detail="core market/economic state not ready for cognition",
+            detail="public market collection is not healthy",
         )
 
     goal = refine_goal_with_cognition(goal, cognition_result)
@@ -139,7 +153,8 @@ async def run_cycle(
 
     health = "healthy"
     if (
-        kalshi.status == "degraded"
+        market_data.status == "degraded"
+        or kalshi.status == "degraded"
         or evm.status == "degraded"
         or cognition_result.status == "degraded"
     ):
@@ -158,6 +173,7 @@ async def run_cycle(
         radar_markets=len(radar),
         economic_state="initialized" if economic_initialized else "uninitialized",
         cognition=cognition_state,
+        market_data=market_data,
         note=(
             goal.reason
             if collection is None

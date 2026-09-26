@@ -23,6 +23,7 @@ class AgentCycleState:
     economic_state: str
     cognition: AgentConnectionState = AgentConnectionState("unconfigured")
     note: str | None = None
+    market_data: AgentConnectionState = AgentConnectionState("unconfigured")
 
 
 @dataclass(frozen=True)

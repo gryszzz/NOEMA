@@ -113,6 +113,12 @@ class AgentStore:
                     )
                 ),
                 note=last_cycle_raw.get("note"),
+                market_data=AgentConnectionState(
+                    **last_cycle_raw.get(
+                        "market_data",
+                        {"status": "unconfigured", "detail": "cycle predates market health tracking"},
+                    )
+                ),
             )
 
         return AgentStatus(

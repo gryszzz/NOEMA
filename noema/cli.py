@@ -16,6 +16,7 @@ from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
 from .economic_ledger import EconomicLedger
 from .kalshi_telemetry import KalshiTelemetry
+from .ladder import build_ladder_report
 from .local_env import load_local_env
 from .outcomes import OutcomeStore
 from .setup_wizard import run_setup_wizard
@@ -210,6 +211,9 @@ def main() -> None:
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--db", default="data/noema.db")
 
+    ladder = sub.add_parser("ladder")
+    ladder.add_argument("--db", default="data/noema.db")
+
     agent_once = sub.add_parser("agent-once")
     agent_once.add_argument("--db", default="data/noema.db")
 
@@ -257,6 +261,8 @@ def main() -> None:
         run_setup_wizard()
     elif args.command == "doctor":
         print(json.dumps(doctor_report(args.db), sort_keys=True))
+    elif args.command == "ladder":
+        print(json.dumps(build_ladder_report(args.db), sort_keys=True))
     elif args.command == "agent-once":
         asyncio.run(_agent_once(args.db))
     elif args.command == "economy-init":

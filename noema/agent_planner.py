@@ -15,24 +15,12 @@ class AgentGoalSelection:
 def choose_goal(
     *,
     radar: list[RadarRow],
-    kalshi_healthy: bool,
-    wallet_healthy: bool,
-    economic_initialized: bool,
+    market_data_healthy: bool,
 ) -> AgentGoalSelection:
-    if not kalshi_healthy:
+    if not market_data_healthy:
         return AgentGoalSelection(
             "restore_market_perception",
-            "Kalshi/account perception is degraded",
-        )
-    if not wallet_healthy:
-        return AgentGoalSelection(
-            "restore_wallet_perception",
-            "dedicated EVM wallet perception is degraded",
-        )
-    if not economic_initialized:
-        return AgentGoalSelection(
-            "initialize_economic_memory",
-            "Economic OS has no initialized snapshot",
+            "Public market collection has no valid current observations",
         )
 
     scored = [row for row in radar if row.attention_score is not None]
@@ -61,7 +49,7 @@ def refine_goal_with_cognition(
     if cognition.status != "completed" or cognition.packet is None:
         return goal
 
-    if goal.goal.startswith("restore_") or goal.goal == "initialize_economic_memory":
+    if goal.goal == "restore_market_perception":
         return goal
 
     if cognition.packet.recommended_mode == "investigate":

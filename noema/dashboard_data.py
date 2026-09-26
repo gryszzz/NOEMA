@@ -6,7 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .soak_report import build_soak_quality_report
+from .soak_report import SoakQualityReport, build_soak_quality_report
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -42,7 +42,11 @@ def build_overview(path: str = "data/noema.db") -> dict[str, Any]:
     conn = sqlite3.connect(path)
     overview: dict[str, Any] = {
         "database_present": True,
-        "soak": asdict(build_soak_quality_report(path)),
+        "soak": asdict(
+            build_soak_quality_report(path)
+            if _table_exists(conn, "market_snapshots")
+            else SoakQualityReport(0, 0.0, 0.0, 0)
+        ),
         "forecasts": (
             int(_safe_scalar(conn, "SELECT COUNT(*) FROM forecast_ledger"))
             if _table_exists(conn, "forecast_ledger")

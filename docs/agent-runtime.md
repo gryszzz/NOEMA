@@ -20,6 +20,9 @@ The one-shot command records a cycle but does not claim the agent is persistentl
 
 ### Kalshi
 
+Public Kalshi market collection and baseline recording can run without credentials.
+Account telemetry is a separate optional connection:
+
 Configure the existing Kalshi variables:
 
 ```text
@@ -31,6 +34,8 @@ KALSHI_PRIVATE_KEY_PATH=/secure/path/key.pem
 The runtime uses authenticated read-only telemetry for account health and bounded public market collection for perception.
 
 ### Dedicated EVM wallet
+
+Wallet observation is optional for market research.
 
 Configure the public address and an RPC endpoint:
 
@@ -59,7 +64,7 @@ NOEMA_AGENT_MAX_MARKETS_PER_CYCLE=100
 
 A cycle:
 
-1. collects a bounded market snapshot batch;
+1. collects a bounded public market snapshot batch and records PASS-only market baselines;
 2. checks authenticated Kalshi account telemetry;
 3. observes the dedicated EVM wallet;
 4. reads recent Opportunity Radar state;
@@ -87,15 +92,18 @@ The current planner is deliberately simple and deterministic.
 Priority:
 
 ```text
-broken Kalshi perception
-  -> broken EVM perception
-  -> missing economic memory
-  -> high-attention research market
+broken public market perception
+  -> high-attention independent research market
   -> calibration/data collection
   -> world-state collection
 ```
 
 This is the first layer of the agent's operational self-direction. Future planners can become richer without changing the fail-closed wallet or risk layers.
+
+Unconfigured account and wallet observation appear in health/status and the ladder,
+but do not prevent public market research. Market baselines cannot trigger cognition
+or trade attention; an independently validated forecast source is still needed
+before the radar can surface actual research opportunities.
 
 ## Persistent heartbeats
 

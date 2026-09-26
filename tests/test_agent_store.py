@@ -25,6 +25,7 @@ def test_agent_status_roundtrip(tmp_path) -> None:
             radar_markets=0,
             economic_state="initialized",
             note=None,
+            market_data=AgentConnectionState("connected", "valid=5"),
         ),
     )
     store.write_status(status)
@@ -32,3 +33,4 @@ def test_agent_status_roundtrip(tmp_path) -> None:
     assert loaded.running is True
     assert loaded.last_cycle is not None
     assert loaded.last_cycle.cycle_id == 1
+    assert loaded.last_cycle.market_data.status == "connected"
