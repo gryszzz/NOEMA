@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .ledger import ForecastLedger
-from .models import Forecast, MarketSnapshot, Opportunity
+from .models import Forecast, MarketSnapshot, Mode, Opportunity
 from .risk import RiskEngine
 from .validation import validate_market_snapshot
 from .venues.base import VenueAdapter
@@ -17,13 +17,11 @@ class Forecaster(Protocol):
 @dataclass
 class CostModel:
     slippage: float = 0.01
-    fees: float = 0.005
+    fees: float = 0.03  # Paper fallback only; not a verified market-specific quote.
 
     def estimate(self, market: MarketSnapshot) -> float:
-        spread = 0.0
-        if market.yes_bid is not None and market.yes_ask is not None:
-            spread = max(0.0, market.yes_ask - market.yes_bid)
-        return self.slippage + self.fees + spread / 2
+        # The raw YES edge already subtracts the ask, so spread is paid there.
+        return self.slippage + self.fees
 
 
 class NoemaEngine:
@@ -36,6 +34,11 @@ class NoemaEngine:
         cost_model: CostModel | None = None,
     ) -> None:
         self.venue = venue
+        if risk.policy.mode is Mode.LIVE and venue.name.startswith("kalshi"):
+            raise RuntimeError(
+                "Kalshi live execution requires verified fee and depth integration; "
+                "paper quote research cannot authorize orders"
+            )
         self.forecaster = forecaster
         self.risk = risk
         self.ledger = ledger

@@ -6,6 +6,8 @@ import json
 from dataclasses import asdict
 from decimal import Decimal
 
+import httpx
+
 from .account import KalshiAccount
 from .agent_config import AgentConfig
 from .agent_runtime import run_cycle
@@ -21,6 +23,7 @@ from .ladder import build_ladder_report
 from .local_env import load_local_env
 from .outcomes import OutcomeStore
 from .paired_evaluation import compare_history_to_market
+from .paper_research import PaperResearchStore, collect_paper_quote
 from .setup_wizard import run_setup_wizard
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
@@ -181,6 +184,22 @@ async def _soak_loop(db: str, interval: float, limit: int | None) -> None:
         await venue.close()
 
 
+async def _paper_quote(db: str, ticker: str, contracts: Decimal) -> None:
+    venue = KalshiVenue()
+    try:
+        try:
+            result = await collect_paper_quote(
+                venue, PaperResearchStore(db), ticker, contracts=contracts,
+            )
+            print(json.dumps(result.as_dict(), sort_keys=True))
+        except (httpx.HTTPError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+            print(json.dumps({"status": "unavailable", "ticker": ticker,
+                              "detail": f"paper quote failed: {type(exc).__name__}"},
+                             sort_keys=True))
+    finally:
+        await venue.close()
+
+
 def _soak_report(db: str) -> None:
     report = build_soak_quality_report(db)
     print(json.dumps(report.__dict__, sort_keys=True))
@@ -215,6 +234,14 @@ def main() -> None:
 
     model_audit = sub.add_parser("model-audit")
     model_audit.add_argument("--db", default="data/noema.db")
+
+    paper_quote = sub.add_parser("paper-quote")
+    paper_quote.add_argument("ticker")
+    paper_quote.add_argument("--db", default="data/noema.db")
+    paper_quote.add_argument("--contracts", type=Decimal, default=Decimal(1))
+
+    paper_audit = sub.add_parser("paper-audit")
+    paper_audit.add_argument("--db", default="data/noema.db")
 
     sub.add_parser("account")
     sub.add_parser("check-config")
@@ -290,6 +317,10 @@ def main() -> None:
         print(json.dumps(compare_history_to_market(args.db).as_dict(), sort_keys=True))
     elif args.command == "model-audit":
         print(json.dumps(audit_database(args.db), sort_keys=True))
+    elif args.command == "paper-quote":
+        asyncio.run(_paper_quote(args.db, args.ticker, args.contracts))
+    elif args.command == "paper-audit":
+        print(json.dumps(PaperResearchStore(args.db).audit(), sort_keys=True))
     elif args.command == "setup":
         run_setup_wizard()
     elif args.command == "doctor":

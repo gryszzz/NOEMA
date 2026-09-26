@@ -15,7 +15,8 @@ Perpetual-futures REST uses the `/margin/` namespace and is intentionally treate
 The initial adapter supports:
 
 - public open-market discovery;
-- cursor pagination;
+- cursor pagination with a persisted page cursor across agent cycles, so a
+  bounded worker advances through open markets instead of revisiting the first page;
 - exchange status;
 - current orderbook retrieval;
 - normalized binary quotes;

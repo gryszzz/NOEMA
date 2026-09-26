@@ -5,7 +5,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from noema.config import KalshiConfig
 from noema.models import Action, Decision, MarketSnapshot
+from noema.paper_execution import FeeTerms
 from noema.venues.base import VenueAdapter
 
 
@@ -114,26 +115,38 @@ class KalshiVenue(VenueAdapter):
     async def markets(self) -> AsyncIterator[MarketSnapshot]:
         cursor: str | None = None
         while True:
-            params: dict[str, Any] = {
-                "status": "open",
-                "limit": 1000,
-                "mve_filter": "exclude",
-            }
-            if cursor:
-                params["cursor"] = cursor
-
-            response = await self.client.get("/markets", params=params)
-            response.raise_for_status()
-            payload = response.json()
-
-            for raw in payload.get("markets", []):
-                snapshot = self._market_snapshot(raw, environment=self.config.environment)
-                if snapshot is not None:
-                    yield snapshot
-
-            cursor = payload.get("cursor") or None
+            markets, cursor = await self.market_page(cursor=cursor, limit=1000)
+            for market in markets:
+                yield market
             if not cursor:
                 break
+
+    async def market_page(
+        self, *, cursor: str | None = None, limit: int = 100,
+    ) -> tuple[list[MarketSnapshot], str | None]:
+        """Fetch one official API page; callers can persist its opaque cursor."""
+        if not 1 <= limit <= 1000:
+            raise ValueError("Kalshi market page limit must be 1..1000")
+        params: dict[str, Any] = {"status": "open", "limit": limit,
+                                  "mve_filter": "exclude"}
+        if cursor:
+            params["cursor"] = cursor
+        response = await self.client.get("/markets", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise TypeError("Kalshi market page is malformed")
+        raw_markets = payload.get("markets")
+        next_cursor = payload.get("cursor")
+        if (not isinstance(raw_markets, list)
+                or any(not isinstance(m, dict) for m in raw_markets)
+                or next_cursor is not None and not isinstance(next_cursor, str)):
+            raise ValueError("Kalshi market page is malformed")
+        snapshots = [self._market_snapshot(m, environment=self.config.environment)
+                     for m in raw_markets]
+        if any(snapshot is None for snapshot in snapshots):
+            raise ValueError("Kalshi market page contains a market without a ticker")
+        return [snapshot for snapshot in snapshots if snapshot is not None], next_cursor or None
 
     async def orderbook(self, ticker: str, depth: int | None = None) -> dict[str, Any]:
         if self.signer is None:
@@ -145,6 +158,65 @@ class KalshiVenue(VenueAdapter):
         response = await self.client.get(endpoint, params=params, headers=headers)
         response.raise_for_status()
         return response.json()
+
+    async def paper_book(self, ticker: str) -> tuple[dict[str, Any], str]:
+        """Use full authenticated depth, or a fresh public top-of-book quote."""
+        if self.signer is not None:
+            return await self.orderbook(ticker), "authenticated_orderbook"
+        if not ticker or not all(char.isalnum() or char == "-" for char in ticker):
+            raise ValueError("invalid market ticker")
+        response = await self.client.get(f"/markets/{quote(ticker, safe='')}")
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("market"), dict):
+            raise TypeError("missing current market")
+        market = payload["market"]
+        if (market.get("ticker") != ticker or market.get("status") != "open"
+                or market.get("mve_collection_ticker")):
+            raise ValueError("market is not an open standalone contract")
+        # The public endpoint exposes prices and quantities only at the best
+        # level. A larger proposed fill must fail instead of assuming depth.
+        try:
+            bid, ask, bid_size, ask_size = (
+                Decimal(str(market[key])) for key in
+                ("yes_bid_dollars", "yes_ask_dollars", "yes_bid_size_fp", "yes_ask_size_fp")
+            )
+        except (KeyError, InvalidOperation, TypeError) as exc:
+            raise ValueError("missing valid public best bid/ask and size") from exc
+        if (not all(value.is_finite() for value in (bid, ask, bid_size, ask_size))
+                or not 0 < bid <= ask < 1 or bid_size <= 0 or ask_size <= 0):
+            raise ValueError("missing valid public best bid/ask and size")
+        return {
+            "orderbook_fp": {
+                "yes_dollars": [[str(bid), str(bid_size)]],
+                "no_dollars": [[str(1 - ask), str(ask_size)]],
+            },
+        }, "public_top_of_book"
+
+    async def taker_fee_terms(self, ticker: str) -> FeeTerms:
+        """Read the current series fee terms and event overrides, fail closed."""
+        series, sep, _ = ticker.partition("-")
+        event, event_sep, _ = ticker.rpartition("-")
+        if not sep or not event_sep or not all(
+            part and all(char.isalnum() or char == "-" for char in part)
+            for part in (series, event)
+        ):
+            raise ValueError("invalid market ticker")
+        series_response = await self.client.get(f"/series/{quote(series, safe='')}")
+        series_response.raise_for_status()
+        event_response = await self.client.get(f"/events/{quote(event, safe='')}")
+        event_response.raise_for_status()
+        series_payload = series_response.json()
+        event_payload = event_response.json()
+        if not isinstance(series_payload, dict) or not isinstance(event_payload, dict):
+            raise TypeError("missing fee metadata")
+        series_data = series_payload.get("series")
+        event_data = event_payload.get("event")
+        if (not isinstance(series_data, dict) or not isinstance(event_data, dict)
+                or series_data.get("ticker") != series
+                or event_data.get("event_ticker") != event):
+            raise ValueError("fee metadata does not match the market")
+        return FeeTerms.from_api(series_data, event_data)
 
     async def exchange_status(self) -> dict[str, Any]:
         response = await self.client.get("/exchange/status")

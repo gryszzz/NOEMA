@@ -4,7 +4,10 @@
 disk. It starts `noema-agent` every deploy, storing heartbeats, snapshots,
 forecasts, and outcomes in the same SQLite database. It runs a cycle every five
 minutes and synchronizes up to 500 outcomes hourly. No trading credentials,
-wallet keys, model API keys, or public dashboard are configured.
+wallet keys, model API keys, or public dashboard are configured. New paper
+candidates can still record a hypothetical one-contract quote from Kalshi's
+public best bid, ask and displayed size. The settlement sync saves cursors for
+current and historical data and directly checks selected paper positions.
 The `.python-version` file pins Render's runtime to Python 3.12.
 
 ## Track the bill before increasing spend

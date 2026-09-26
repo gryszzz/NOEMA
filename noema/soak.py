@@ -57,6 +57,28 @@ class SoakStore:
             )
             """
         )
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS market_scan_state (
+                source TEXT PRIMARY KEY,
+                cursor TEXT,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        self.conn.commit()
+
+    def scan_cursor(self, source: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT cursor FROM market_scan_state WHERE source = ?", (source,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_scan_cursor(self, source: str, cursor: str | None) -> None:
+        self.conn.execute(
+            """INSERT INTO market_scan_state (source, cursor, updated_at)
+            VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET
+            cursor = excluded.cursor, updated_at = excluded.updated_at""",
+            (source, cursor, datetime.now(UTC).isoformat()),
+        )
         self.conn.commit()
 
     def append_market(

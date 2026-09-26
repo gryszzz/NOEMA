@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .evaluation import score_forecast
 from .history_forecaster import MODEL_VERSION
+from .market_probability import snapshot_midpoint
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,11 @@ def compare_history_to_market(path: str = "data/noema.db") -> PairedEvaluation:
         key = (venue, ticker)
         model = forecast.get("model_version")
         if model == "market-baseline-v1":
-            baselines.setdefault((*key, capture_key), float(forecast["probability_yes"]))
+            # Archived snapshots contain both quotes, so the same-timestamp
+            # midpoint can be reconstructed without introducing lookahead.
+            midpoint = snapshot_midpoint(snapshot)
+            if midpoint is not None:
+                baselines.setdefault((*key, capture_key), midpoint)
         elif model == MODEL_VERSION and key not in candidates:
             candidates[key] = (float(forecast["probability_yes"]), capture_key, int(outcome))
 
