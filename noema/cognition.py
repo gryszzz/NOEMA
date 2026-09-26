@@ -9,7 +9,9 @@ from .cognition_policy import CognitionPolicy, assess_cognition
 from .cognition_store import CognitionStore
 from .foundry_client import FoundryCognitionClient
 from .foundry_config import FoundryConfig
+from .llm_evidence import context_for_row
 from .opportunity_radar import RadarRow
+from .provenance import EvidenceStore
 from .research_queue import ResearchQueueStore
 
 
@@ -50,6 +52,10 @@ async def maybe_run_cognition(
     )
     target = eligible[0]
     try:
+        context = context_for_row(target, EvidenceStore(db_path))
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return CognitionResult("idle", detail="candidate evidence unavailable or invalid")
+    try:
         client = FoundryCognitionClient(config)
     except (RuntimeError, ValueError) as exc:
         return CognitionResult(
@@ -58,7 +64,7 @@ async def maybe_run_cognition(
         )
 
     try:
-        result = await client.reason_about_market(target)
+        result = await client.reason_about_market(target, evidence_context=context)
     except (
         httpx.HTTPError,
         RuntimeError,
