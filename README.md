@@ -37,6 +37,7 @@ The easiest first-time setup is:
 ```bash
 noema agent-once
 noema ladder
+noema model-audit  # learned calibration audit after enough markets resolve
 ```
 
 For an always-on paper research worker, see [Render hosting](docs/hosting-paper-agent.md).

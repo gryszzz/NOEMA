@@ -55,3 +55,20 @@ only that the candidate scored better on that sample. It never unlocks live mode
 A new specialist remains paper-only until enough resolved observations exist to make its calibration and cost-adjusted performance meaningful.
 
 There is no fixed universal sample size: required evidence depends on market frequency, dependence between observations, regime stability, and model complexity.
+
+## Learned calibration research
+
+`noema model-audit` trains `noema-calibration-v1` on the earliest market-price
+snapshots that also have a verified, paper-only history candidate and a later
+observed settlement. It learns a regularized blend of the market's log odds and
+the historical candidate's log odds, separately for each venue and series,
+shrunk toward the original quote. This is a learned **forecast blend** with an
+independent historical input, not an LLM. Foundry research does not set its probability.
+
+The audit requires at least 100 training events and 30 later test events in a
+series. At each test event it trains only on outcomes resolved and first seen
+before that event's first market snapshot. It averages scores within events,
+and reports both Brier score and log loss versus the original quote. Fewer
+eligible events produce an explicit insufficient-data status. A better score
+calls for research review; it never unlocks trading or claims profitability.
+No model weights are deployed by this audit command.
