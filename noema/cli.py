@@ -7,6 +7,8 @@ from dataclasses import asdict
 from decimal import Decimal
 
 from .account import KalshiAccount
+from .agent_config import AgentConfig
+from .agent_runtime import run_cycle
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
 from .economic_bootstrap import bootstrap_economy
@@ -22,6 +24,22 @@ from .telemetry_report import build_telemetry_report
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
+
+
+async def _agent_once(db: str) -> None:
+    config = AgentConfig.from_env()
+    config = AgentConfig(
+        db_path=db,
+        cycle_interval_seconds=config.cycle_interval_seconds,
+        heartbeat_interval_seconds=config.heartbeat_interval_seconds,
+        max_radar_rows=config.max_radar_rows,
+        max_markets_per_cycle=config.max_markets_per_cycle,
+        evm_rpc_url=config.evm_rpc_url,
+        evm_address=config.evm_address,
+    )
+    config.validate()
+    status = await run_cycle(cycle_id=1, config=config, runtime_running=False)
+    print(json.dumps(asdict(status), sort_keys=True, default=str))
 
 
 async def _markets(limit: int) -> None:
@@ -185,6 +203,9 @@ def main() -> None:
     sub.add_parser("check-config")
     sub.add_parser("telemetry")
 
+    agent_once = sub.add_parser("agent-once")
+    agent_once.add_argument("--db", default="data/noema.db")
+
     economy_init = sub.add_parser("economy-init")
     economy_init.add_argument("--db", default="data/noema.db")
     economy_init.add_argument("--capital", type=Decimal, required=True)
@@ -225,6 +246,8 @@ def main() -> None:
         asyncio.run(_account())
     elif args.command == "telemetry":
         asyncio.run(_telemetry())
+    elif args.command == "agent-once":
+        asyncio.run(_agent_once(args.db))
     elif args.command == "economy-init":
         _economy_init(args.db, args.capital)
     elif args.command == "economy-show":

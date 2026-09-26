@@ -74,6 +74,44 @@ flowchart TD
 | **Wallet foundation** | Multichain intents, policy gate, daily budget, provider-neutral signer |
 | **Economic OS** | High-water accounting, capital buckets, earned autonomy, profit waterfall, R&D/infrastructure budgets |
 
+## Agent runtime
+
+NOEMA can now run as one persistent process instead of a collection of independent modules.
+
+```bash
+noema-agent
+```
+
+A single diagnostic cycle is also available:
+
+```bash
+noema agent-once
+```
+
+The runtime owns:
+
+- identity and mission;
+- persistent heartbeat/state;
+- bounded Kalshi market perception;
+- authenticated Kalshi account health;
+- dedicated EVM wallet observation;
+- Opportunity Radar awareness;
+- Economic OS awareness;
+- goal selection based on degraded/healthy subsystems.
+
+Configure the dedicated EVM wallet with its **public address** and an RPC endpoint:
+
+```text
+NOEMA_EVM_RPC_URL=...
+NOEMA_EVM_ADDRESS=0x...
+```
+
+The runtime does not require the EVM private key for observation, and the default wallet signer remains fail-closed.
+
+NOEMA OPS computes liveness from heartbeat age, so a crashed process cannot remain falsely displayed as alive forever.
+
+See [docs/agent-runtime.md](docs/agent-runtime.md).
+
 ## Opportunity Radar
 
 The Ops Console contains an expandable **Research Attention Radar**.
