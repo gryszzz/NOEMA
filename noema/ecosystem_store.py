@@ -145,6 +145,17 @@ class EcosystemStore:
 
     def record_plan(self, plan: EcosystemPlan) -> int:
         payload = json.dumps(asdict(plan), sort_keys=True, default=str)
+        previous = self.conn.execute(
+            """
+            SELECT id, payload_json
+            FROM ecosystem_reviews
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if previous is not None and str(previous[1]) == payload:
+            return int(previous[0])
+
         cursor = self.conn.execute(
             """
             INSERT INTO ecosystem_reviews (
