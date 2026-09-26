@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import websockets
@@ -16,6 +17,7 @@ from noema.venues.kalshi import KalshiSigner
 class KalshiStreamMessage:
     type: str
     payload: dict[str, Any]
+    received_at: datetime
 
 
 class KalshiStream:
@@ -70,7 +72,11 @@ class KalshiStream:
                                 f"Kalshi WebSocket error "
                                 f"{message.get('code')}: {message.get('msg')}"
                             )
-                        yield KalshiStreamMessage(type=msg_type, payload=data)
+                        yield KalshiStreamMessage(
+                            type=msg_type,
+                            payload=data,
+                            received_at=datetime.now(UTC),
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception:
