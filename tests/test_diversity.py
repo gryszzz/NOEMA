@@ -26,4 +26,4 @@ def test_family_cap_holds_after_normalization() -> None:
         max_family_fraction=0.50,
     )
     news_share = result["a"] + result["b"]
-    assert news_share <= pytest.approx(0.50, abs=1e-12)
+    assert news_share == pytest.approx(0.50, abs=1e-12)
