@@ -13,7 +13,11 @@ class RadarRow:
     market_id: str
     title: str
     probability_yes: float
+    market_probability: float
     yes_ask: float | None
+    raw_edge: float
+    estimated_cost: float
+    uncertainty_penalty: float
     robust_edge: float
     spread: float | None
     liquidity_usd: float | None
@@ -23,6 +27,7 @@ class RadarRow:
     attention_score: float | None
     decision: str
     reason: str
+    evidence_ids: tuple[str, ...]
 
 
 _POLITICAL_TERMS = {
@@ -140,7 +145,13 @@ def build_radar(
                 market_id=str(market_id),
                 title=title,
                 probability_yes=float(forecast.get("probability_yes", 0.5)),
+                market_probability=float(opportunity.get("market_probability", 0.5)),
                 yes_ask=(None if ask is None else float(ask)),
+                raw_edge=float(opportunity.get("raw_edge", 0.0)),
+                estimated_cost=float(opportunity.get("estimated_cost", 0.0)),
+                uncertainty_penalty=float(
+                    opportunity.get("uncertainty_penalty", 0.0)
+                ),
                 robust_edge=robust_edge,
                 spread=spread,
                 liquidity_usd=(
@@ -154,6 +165,7 @@ def build_radar(
                 attention_score=score,
                 decision=str(action.get("decision") or "unknown"),
                 reason=str(action.get("reason") or ""),
+                evidence_ids=tuple(forecast.get("evidence_ids") or ()),
             )
         )
 
