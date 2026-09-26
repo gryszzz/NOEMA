@@ -38,7 +38,7 @@ async def _agent_once(db: str) -> None:
         evm_address=config.evm_address,
     )
     config.validate()
-    status = await run_cycle(cycle_id=1, config=config)
+    status = await run_cycle(cycle_id=1, config=config, runtime_running=False)
     print(json.dumps(asdict(status), sort_keys=True, default=str))
 
 
