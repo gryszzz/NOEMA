@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 _SOURCE_WEIGHTS = {
     "official_exchange": 1.00,
     "official_resolution": 1.00,
