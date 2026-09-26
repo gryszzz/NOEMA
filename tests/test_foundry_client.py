@@ -86,7 +86,10 @@ async def test_foundry_uses_structured_responses_and_filters_evidence() -> None:
         client=http,
     )
     try:
-        result = await client.reason_about_market(row())
+        result = await client.reason_about_market(row(), evidence_context=[{
+            "evidence_id": "e1", "source_type": "historical_outcomes",
+            "events": 31, "yes_outcomes": 15,
+        }])
     finally:
         await client.close()
 
@@ -99,6 +102,7 @@ async def test_foundry_uses_structured_responses_and_filters_evidence() -> None:
     assert body["model"] == "astra-deploy"
     assert body["reasoning"]["effort"] == "high"
     assert body["text"]["format"]["type"] == "json_schema"
+    assert "verified_evidence" in body["input"]
     assert result.packet is not None
     assert result.packet.evidence_ids == ("e1",)
     assert result.total_tokens == 140

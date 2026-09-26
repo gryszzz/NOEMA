@@ -41,6 +41,7 @@ noema model-audit  # learned calibration audit after enough markets resolve
 ```
 
 For an always-on paper research worker, see [Render hosting](docs/hosting-paper-agent.md).
+For NOEMA's language-model path, see [custom LLM](docs/custom-llm.md).
 
 The first research cycle uses public Kalshi market data and needs no account or wallet
 credentials. It records market-price baseline forecasts for later scoring. Baselines
