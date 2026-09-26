@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -40,6 +41,48 @@ class KalshiHistory:
             "/historical/markets", {"limit": 1000, "mve_filter": "exclude"}
         ):
             yield market
+
+    async def settled_page(
+        self, partition: str, *, cursor: str | None, limit: int,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """One bounded, cursor-addressable page from live or historical settlements."""
+        if partition not in {"live", "historical"} or not 1 <= limit <= 1000:
+            raise ValueError("invalid settlement partition or page limit")
+        endpoint = "/markets" if partition == "live" else "/historical/markets"
+        params: dict[str, Any] = {"limit": limit, "mve_filter": "exclude"}
+        if partition == "live":
+            params["status"] = "settled"
+        if cursor:
+            params["cursor"] = cursor
+        response = await self.client.get(endpoint, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise TypeError("malformed settlement page")
+        markets, next_cursor = payload.get("markets"), payload.get("cursor")
+        if (not isinstance(markets, list) or any(not isinstance(m, dict) for m in markets)
+                or next_cursor is not None and not isinstance(next_cursor, str)):
+            raise ValueError("malformed settlement page")
+        return markets, next_cursor or None
+
+    async def market_by_ticker(self, ticker: str) -> dict[str, Any] | None:
+        """Check a pending forecast across Kalshi's live and archived partitions."""
+        if not ticker or not all(char.isalnum() or char == "-" for char in ticker):
+            raise ValueError("invalid market ticker")
+        for endpoint in (f"/markets/{quote(ticker, safe='')}",
+                         f"/historical/markets/{quote(ticker, safe='')}"):
+            response = await self.client.get(endpoint)
+            if response.status_code == 404:
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("market"), dict):
+                raise TypeError("malformed individual market")
+            market = payload["market"]
+            if market.get("ticker") != ticker:
+                raise ValueError("individual market ticker mismatch")
+            return market
+        return None
 
     async def _paged(
         self,

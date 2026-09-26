@@ -45,7 +45,7 @@ class PaperVenue(Protocol):
 
     async def taker_fee_terms(self, ticker: str) -> FeeTerms: ...
 
-    async def orderbook(self, ticker: str, depth: int | None = None) -> dict[str, Any]: ...
+    async def paper_book(self, ticker: str) -> tuple[dict[str, Any], str]: ...
 
 
 class PaperResearchStore:
@@ -176,13 +176,13 @@ async def collect_paper_quote(
     if age < 0 or age > max_forecast_age_seconds:
         return PaperQuoteResult("unavailable", "independent forecast is stale", ticker)
     terms = await venue.taker_fee_terms(ticker)
-    book = await venue.orderbook(ticker)
+    book, source = await venue.paper_book(ticker)
     quoted_at = datetime.now(UTC)
     if (quoted_at - candidate.forecast_at).total_seconds() > max_forecast_age_seconds:
         return PaperQuoteResult("unavailable", "quote arrived after forecast expired", ticker)
     quote = quote_yes_taker(
         book, contracts=contracts, probability_yes=candidate.probability_yes,
-        fee_terms=terms,
+        fee_terms=terms, quote_source=source,
     )
     # The forecast's lower bound must clear average price, taker fees, a
     # 1-cent latency reserve, and the risk engine's minimum edge and stake gates.

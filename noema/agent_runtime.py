@@ -183,7 +183,9 @@ async def run_cycle(
                             verified_market_ids=frozenset(verified),
                         ):
                             candidates_recorded += 1
-                            if getattr(verifier, "signer", None) is not None:
+                            if hasattr(verifier, "paper_book") and hasattr(
+                                verifier, "taker_fee_terms",
+                            ):
                                 try:
                                     result = await collect_paper_quote(
                                         verifier, PaperResearchStore(config.db_path),
@@ -357,7 +359,8 @@ async def run_agent(
                 next_outcome_sync = started + config.outcome_sync_interval_seconds
                 try:
                     await _sync_outcomes(config)
-                except (httpx.HTTPError, RuntimeError, ValueError, OSError, KeyError) as exc:
+                except (httpx.HTTPError, RuntimeError, ValueError,
+                        OSError, KeyError, TypeError) as exc:
                     _log("agent_outcome_sync_error", error=type(exc).__name__)
             await run_cycle(
                 cycle_id=cycle_id,

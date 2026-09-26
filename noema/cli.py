@@ -187,10 +187,6 @@ async def _soak_loop(db: str, interval: float, limit: int | None) -> None:
 async def _paper_quote(db: str, ticker: str, contracts: Decimal) -> None:
     venue = KalshiVenue()
     try:
-        if venue.signer is None:
-            print(json.dumps({"status": "unavailable", "ticker": ticker,
-                              "detail": "read-only orderbook requires Kalshi API credentials"}))
-            return
         try:
             result = await collect_paper_quote(
                 venue, PaperResearchStore(db), ticker, contracts=contracts,

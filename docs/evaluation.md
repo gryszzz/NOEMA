@@ -86,10 +86,12 @@ conservative paper fee placeholder and does not use verified depth or fee
 terms; it refuses Kalshi live mode. Its apparent edge must not be reported as
 profit.
 
-With read-only API credentials, the paper quote collector obtains the current
-series and event fee fields and the current orderbook. It treats NO bids as YES
-asks, checks that the spread is within the paper risk policy, walks the visible
-price levels for the requested contract count, and declines a partial fill. It
+The paper quote collector obtains the current series and event fee fields and
+the public current market's best bid, ask, and displayed sizes. An authenticated
+Kalshi key can also supply full orderbook depth. It treats NO bids as YES asks
+when using the full book, checks that the spread is within the paper risk policy,
+and declines any fill beyond the observed size. Public data supplies only the
+best price level, so a larger quote must fail if it exceeds that level. It
 uses the July 7, 2026 general taker rate (7% times the series/event multiplier,
 contract count, price, and one minus price) with conservative fee rounding at
 each price level. Unsupported fee types or missing fee fields fail closed. The
@@ -115,3 +117,9 @@ simulated. Demo-market quotes cannot establish production profitability. A
 forward paper sample with actual order latency and fill observations, calibrated
 forecast scores, position limits, and verified current fee rules is still needed
 before any claim that NOEMA can fund itself.
+
+Outcome sync divides a bounded page budget between current and archived
+settlements. Each partition saves its own cursor between runs, and new selected
+paper quotes get a small, direct lookup by ticker so they need not wait for a
+broad scan. A failed request keeps its cursor for retry. `noema paper-audit`
+stays empty until the quoted market settles and that later result is observed.

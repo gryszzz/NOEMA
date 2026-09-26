@@ -35,6 +35,11 @@ class OutcomeStore:
             )
             """
         )
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS outcome_scan_state (
+                source TEXT PRIMARY KEY, cursor TEXT, updated_at TEXT NOT NULL
+            )
+        """)
         if "first_seen_at" not in {
             row[1] for row in self.conn.execute("PRAGMA table_info(outcomes)")
         }:
@@ -45,6 +50,50 @@ class OutcomeStore:
                 (datetime.now(UTC).isoformat(),),
             )
         self.conn.commit()
+
+    def scan_cursor(self, source: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT cursor FROM outcome_scan_state WHERE source = ?", (source,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_scan_cursor(self, source: str, cursor: str | None) -> None:
+        self.conn.execute("""
+            INSERT INTO outcome_scan_state (source, cursor, updated_at)
+            VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET
+                cursor = excluded.cursor, updated_at = excluded.updated_at
+        """, (source, cursor, datetime.now(UTC).isoformat()))
+        self.conn.commit()
+
+    def pending_paper_quotes(
+        self, venue: str, *, limit: int,
+    ) -> list[tuple[int, str]]:
+        """Round-robin unresolved paper positions before broad settlement scans."""
+        if limit <= 0:
+            return []
+        source = f"{venue}:settlements:pending_id"
+        try:
+            last_id = int(self.scan_cursor(source) or "0")
+        except ValueError:
+            last_id = 0
+        sql = """
+            SELECT q.id, q.market_id FROM paper_quotes q
+            WHERE q.venue = ? AND q.selected = 1 AND q.id {comparison} ?
+              AND NOT EXISTS (
+                SELECT 1 FROM outcomes o
+                WHERE o.venue = q.venue AND o.market_id = q.market_id
+              )
+            ORDER BY q.id LIMIT ?
+        """
+        try:
+            rows = self.conn.execute(sql.format(comparison=">"), (venue, last_id, limit)).fetchall()
+            if len(rows) < limit:
+                rows += self.conn.execute(
+                    sql.format(comparison="<="), (venue, last_id, limit - len(rows)),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []  # Older databases have no paper quote table yet.
+        return rows
 
     def upsert(
         self,

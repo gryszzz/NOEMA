@@ -87,6 +87,7 @@ class PaperQuote:
     best_yes_ask: Decimal
     best_yes_bid: Decimal
     schedule_version: str
+    quote_source: str = "authenticated_orderbook"
 
     def as_dict(self) -> dict[str, str]:
         return {key: str(value) for key, value in asdict(self).items()}
@@ -95,6 +96,7 @@ class PaperQuote:
 def quote_yes_taker(
     orderbook: dict[str, Any], *, contracts: Decimal,
     probability_yes: float, fee_terms: FeeTerms,
+    quote_source: str = "authenticated_orderbook",
 ) -> PaperQuote:
     """Walk NO bids (YES asks) and require enough visible depth for a full fill."""
     contracts = _decimal(contracts)
@@ -104,6 +106,8 @@ def quote_yes_taker(
         raise TypeError("invalid independent probability")
     if not math.isfinite(probability_yes) or not 0 <= probability_yes <= 1:
         raise ValueError("invalid independent probability")
+    if quote_source not in {"authenticated_orderbook", "public_top_of_book"}:
+        raise ValueError("unknown paper quote source")
     if not isinstance(orderbook, dict) or not isinstance(orderbook.get("orderbook_fp"), dict):
         raise TypeError("missing current orderbook")
     book = orderbook["orderbook_fp"]
@@ -152,7 +156,7 @@ def quote_yes_taker(
         total_debit_usd=cost + fees,
         expected_net_pnl_usd=Decimal(str(probability_yes)) * contracts - cost - fees,
         best_yes_ask=asks[0][0], best_yes_bid=best_yes_bid,
-        schedule_version=fee_terms.schedule_version,
+        schedule_version=fee_terms.schedule_version, quote_source=quote_source,
     )
 
 

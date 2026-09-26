@@ -55,6 +55,38 @@ async def test_fee_lookup_applies_event_override_only_for_matching_tickers():
         await venue.close()
 
 
+@pytest.mark.asyncio
+async def test_public_top_of_book_supports_small_quotes_without_credentials():
+    response = {"market": {
+        "ticker": "KXTEST-EVENT-A", "status": "open",
+        "yes_bid_dollars": "0.4900", "yes_bid_size_fp": "4.00",
+        "yes_ask_dollars": "0.5000", "yes_ask_size_fp": "1.00",
+    }}
+
+    def handler(request):
+        assert request.url.path == "/markets/KXTEST-EVENT-A"
+        return httpx.Response(200, json=response)
+
+    client = httpx.AsyncClient(base_url="https://example.test",
+                               transport=httpx.MockTransport(handler))
+    venue = KalshiVenue(config=KalshiConfig(), client=client)
+    try:
+        book, source = await venue.paper_book("KXTEST-EVENT-A")
+        assert source == "public_top_of_book"
+        quote = quote_yes_taker(book, contracts=Decimal(1), probability_yes=.8,
+                                fee_terms=FeeTerms("quadratic", Decimal(1)),
+                                quote_source=source)
+        assert quote.average_yes_price == Decimal("0.5000")
+        with pytest.raises(ValueError, match="insufficient visible"):
+            quote_yes_taker(book, contracts=Decimal(2), probability_yes=.8,
+                            fee_terms=FeeTerms("quadratic", Decimal(1)))
+        response["market"].pop("yes_ask_size_fp")
+        with pytest.raises(ValueError, match="missing valid public"):
+            await venue.paper_book("KXTEST-EVENT-A")
+    finally:
+        await venue.close()
+
+
 def test_quote_walks_no_bids_for_yes_asks_and_requires_full_visible_depth():
     book = {"orderbook_fp": {"yes_dollars": [["0.49", "10.00"]], "no_dollars": [
         ["0.40", "1.00"], ["0.50", "1.00"],
@@ -103,16 +135,17 @@ async def test_first_quote_is_immutable_and_audit_uses_only_later_settlement(tmp
             assert market_ticker == ticker
             return FeeTerms("quadratic", Decimal(1))
 
-        async def orderbook(self, market_ticker, depth=None):
+        async def paper_book(self, market_ticker):
             assert market_ticker == ticker
             return {"orderbook_fp": {"yes_dollars": [["0.49", "2.00"]],
-                                     "no_dollars": [["0.50", "1.00"]]}}
+                                     "no_dollars": [["0.50", "1.00"]]}}, "public_top_of_book"
 
     store = PaperResearchStore(db)
     first = await collect_paper_quote(Venue(), store, ticker)
     assert first.status == "paper_candidate"
     assert first.quote is not None
     assert first.quote.total_debit_usd == Decimal("0.52")
+    assert first.quote.quote_source == "public_top_of_book"
     assert (await collect_paper_quote(Venue(), store, ticker)).status == "already_recorded"
     assert store.audit()["status"] == "no_settled_paper_quotes"
 
@@ -156,9 +189,9 @@ async def test_oversized_paper_quote_is_recorded_as_pass(tmp_path):
         async def taker_fee_terms(self, market_ticker):
             return FeeTerms("quadratic", Decimal(1))
 
-        async def orderbook(self, market_ticker, depth=None):
+        async def paper_book(self, market_ticker):
             return {"orderbook_fp": {"yes_dollars": [["0.49", "100.00"]],
-                                     "no_dollars": [["0.50", "100.00"]]}}
+                                     "no_dollars": [["0.50", "100.00"]]}}, "public_top_of_book"
 
     store = PaperResearchStore(db)
     result = await collect_paper_quote(Venue(), store, ticker, contracts=Decimal(25))

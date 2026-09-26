@@ -5,7 +5,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -158,6 +158,40 @@ class KalshiVenue(VenueAdapter):
         response = await self.client.get(endpoint, params=params, headers=headers)
         response.raise_for_status()
         return response.json()
+
+    async def paper_book(self, ticker: str) -> tuple[dict[str, Any], str]:
+        """Use full authenticated depth, or a fresh public top-of-book quote."""
+        if self.signer is not None:
+            return await self.orderbook(ticker), "authenticated_orderbook"
+        if not ticker or not all(char.isalnum() or char == "-" for char in ticker):
+            raise ValueError("invalid market ticker")
+        response = await self.client.get(f"/markets/{quote(ticker, safe='')}")
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("market"), dict):
+            raise TypeError("missing current market")
+        market = payload["market"]
+        if (market.get("ticker") != ticker or market.get("status") != "open"
+                or market.get("mve_collection_ticker")):
+            raise ValueError("market is not an open standalone contract")
+        # The public endpoint exposes prices and quantities only at the best
+        # level. A larger proposed fill must fail instead of assuming depth.
+        try:
+            bid, ask, bid_size, ask_size = (
+                Decimal(str(market[key])) for key in
+                ("yes_bid_dollars", "yes_ask_dollars", "yes_bid_size_fp", "yes_ask_size_fp")
+            )
+        except (KeyError, InvalidOperation, TypeError) as exc:
+            raise ValueError("missing valid public best bid/ask and size") from exc
+        if (not all(value.is_finite() for value in (bid, ask, bid_size, ask_size))
+                or not 0 < bid <= ask < 1 or bid_size <= 0 or ask_size <= 0):
+            raise ValueError("missing valid public best bid/ask and size")
+        return {
+            "orderbook_fp": {
+                "yes_dollars": [[str(bid), str(bid_size)]],
+                "no_dollars": [[str(1 - ask), str(ask_size)]],
+            },
+        }, "public_top_of_book"
 
     async def taker_fee_terms(self, ticker: str) -> FeeTerms:
         """Read the current series fee terms and event overrides, fail closed."""

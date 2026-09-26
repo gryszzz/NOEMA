@@ -7,9 +7,11 @@ from noema.sync import sync_kalshi_outcomes
 
 class FakeHistory:
     config = KalshiConfig(environment="demo")
-    async def settled_markets(self):
-        yield {"ticker": "BAD", "result": "yes", "settlement_ts": None}
-        yield {"ticker": "GOOD", "result": "no", "settlement_ts": "2026-01-01T00:00:00Z"}
+    async def settled_page(self, partition, *, cursor, limit):
+        return ([
+            {"ticker": "BAD", "result": "yes", "settlement_ts": None},
+            {"ticker": "GOOD", "result": "no", "settlement_ts": "2026-01-01T00:00:00Z"},
+        ], None) if partition == "live" else ([], None)
 
 
 @pytest.mark.asyncio

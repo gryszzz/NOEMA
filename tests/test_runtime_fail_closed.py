@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import httpx
@@ -12,6 +13,8 @@ from noema.agent_store import AgentStore
 from noema.models import MarketSnapshot
 from noema.outcomes import OutcomeStore
 from noema.paired_evaluation import compare_history_to_market
+from noema.paper_execution import FeeTerms
+from noema.paper_research import PaperResearchStore
 
 
 @pytest.mark.asyncio
@@ -113,6 +116,13 @@ async def test_cycle_rejects_incomplete_event_then_records_verified_paper_pair(
             result = {"KXTEST-NEW-A", "KXTEST-NEW-B"}
             return result if self.complete else result | {"KXTEST-NEW-C"}
 
+        async def taker_fee_terms(self, ticker):
+            return FeeTerms("quadratic", Decimal(1))
+
+        async def paper_book(self, ticker):
+            return {"orderbook_fp": {"yes_dollars": [["0.49", "2.00"]],
+                                     "no_dollars": [["0.50", "2.00"]]}}, "public_top_of_book"
+
         async def close(self):
             pass
 
@@ -127,4 +137,5 @@ async def test_cycle_rejects_incomplete_event_then_records_verified_paper_pair(
     FakeVenue.complete = True
     accepted = await run_cycle(cycle_id=2, config=config, runtime_running=False)
     assert "history_candidates=2" in accepted.last_cycle.note
+    assert PaperResearchStore(db).audit()["observed_quote_count"] == 2
     assert compare_history_to_market(db).distinct_resolved_markets == 0
