@@ -84,13 +84,13 @@ class FoundryCognitionClient:
         self.config.validate()
         if not self.config.ready:
             raise RuntimeError("Foundry cognition is not fully configured")
+        self._headers = {
+            "api-key": str(self.config.api_key),
+            "Content-Type": "application/json",
+            "User-Agent": "NOEMA/0.1",
+        }
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(self.config.request_timeout_seconds),
-            headers={
-                "api-key": str(self.config.api_key),
-                "Content-Type": "application/json",
-                "User-Agent": "NOEMA/0.1",
-            },
         )
 
     async def close(self) -> None:
@@ -141,6 +141,7 @@ class FoundryCognitionClient:
         response = await self.client.post(
             responses_url(str(self.config.endpoint)),
             json=body,
+            headers=self._headers,
         )
         response.raise_for_status()
         payload = response.json()
