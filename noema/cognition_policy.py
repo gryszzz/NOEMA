@@ -19,7 +19,7 @@ class CognitionPolicy:
     max_tokens_per_hour: int = 20000
 
     @classmethod
-    def from_env(cls) -> "CognitionPolicy":
+    def from_env(cls) -> CognitionPolicy:
         return cls(
             min_attention=float(
                 os.getenv("NOEMA_COGNITION_MIN_ATTENTION", "0.70")
