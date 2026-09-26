@@ -114,6 +114,17 @@ dominant specialist in each agent cycle.
 This allocates research attention only; it does not move money or relax wallet limits. See
 [Agent ecosystem](docs/agent-ecosystem.md).
 
+## Evolution loop
+
+NOEMA now reviews specialist maturity from new forward evidence rather than static labels.
+Unchanged evidence cannot advance streaks. Clean repeated reviews can promote research maturity;
+repeated soft failures downshift it; hard research/risk failures quarantine immediately.
+Measured weaknesses can register bounded challenger experiments in the immutable research-trial
+ledger.
+
+Inspect it with `noema ecosystem-show` or the `/api/ecosystem` endpoint. See
+[Specialist evolution](docs/specialist-evolution.md).
+
 ## Trench-1: first crypto specialty
 
 NOEMA now has a narrow, research-only Solana new-token layer instead of a generic

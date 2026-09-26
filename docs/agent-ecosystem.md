@@ -127,23 +127,29 @@ The kernel does **not** yet automatically:
 
 Those are intentionally separate promotion steps.
 
-## Next closed-loop milestone
+## Closed-loop evolution
 
-The next ecosystem upgrade should connect observed outcomes to specialist state:
+The outcome-to-specialist loop is now implemented for the default ecosystem.
 
 ```text
 specialist observation
     -> immutable predictions / research decisions
     -> later outcomes
     -> calibration + after-cost evidence
-    -> strategy health
-    -> specialist registry update
+    -> specialist evolution review
+    -> registry update
     -> ecosystem attention reallocation
-    -> experiment/resource proposal
-    -> deterministic Economic OS approval
+    -> bounded challenger experiments
 ```
 
-That closes the learning loop without conflating attention, capital, and execution authority.
+Kalshi history has a forward-evidence adapter today. Trench-1 advances from counterfactual label
+maturity until its first trained survival model exists. Reviews are event-driven: unchanged
+evidence cannot advance a streak.
+
+See [Specialist evolution](specialist-evolution.md).
+
+The next milestone is continuous Trench-1 trajectory collection and survival-model training,
+followed later by resource-proposal integration with the deterministic Economic OS.
 
 ## Standard
 

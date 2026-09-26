@@ -5,6 +5,21 @@ from .ecosystem_store import EcosystemStore
 from .specialists import SpecialistState
 
 
+def ensure_default_specialists(db_path: str) -> EcosystemStore:
+    store = EcosystemStore(db_path)
+    store.ensure_specialist(
+        name="kalshi-history",
+        family="prediction_markets",
+        state=SpecialistState.PAPER,
+    )
+    store.ensure_specialist(
+        name="trench-1",
+        family="solana_new_tokens",
+        state=SpecialistState.SHADOW,
+    )
+    return store
+
+
 def review_research_ecosystem(
     db_path: str,
     *,
@@ -20,17 +35,7 @@ def review_research_ecosystem(
     Existing registry state is never overwritten by this bootstrap.
     """
 
-    store = EcosystemStore(db_path)
-    store.ensure_specialist(
-        name="kalshi-history",
-        family="prediction_markets",
-        state=SpecialistState.PAPER,
-    )
-    store.ensure_specialist(
-        name="trench-1",
-        family="solana_new_tokens",
-        state=SpecialistState.SHADOW,
-    )
+    store = ensure_default_specialists(db_path)
     plan = allocate_specialist_attention(
         store.profiles(),
         exploration_fraction=exploration_fraction,

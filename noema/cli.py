@@ -18,6 +18,7 @@ from .doctor import doctor_report
 from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
 from .economic_ledger import EconomicLedger
+from .ecosystem_dashboard import build_ecosystem_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .ladder import build_ladder_report
 from .local_env import load_local_env
@@ -156,6 +157,10 @@ def _economy_show(db: str) -> None:
     print(json.dumps(build_economic_overview(db), sort_keys=True))
 
 
+def _ecosystem_show(db: str) -> None:
+    print(json.dumps(build_ecosystem_overview(db), sort_keys=True, default=str))
+
+
 async def _soak_once(db: str, limit: int | None) -> None:
     store = SoakStore(db)
     venue = KalshiVenue()
@@ -263,6 +268,9 @@ def main() -> None:
     economy_show = sub.add_parser("economy-show")
     economy_show.add_argument("--db", default="data/noema.db")
 
+    ecosystem_show = sub.add_parser("ecosystem-show")
+    ecosystem_show.add_argument("--db", default="data/noema.db")
+
     bill_config = sub.add_parser("bill-config")
     bill_config.add_argument("--db", default="data/noema.db")
     bill_config.add_argument("--hosting", type=Decimal, required=True)
@@ -333,6 +341,8 @@ def main() -> None:
         _economy_init(args.db, args.capital)
     elif args.command == "economy-show":
         _economy_show(args.db)
+    elif args.command == "ecosystem-show":
+        _ecosystem_show(args.db)
     elif args.command == "bill-config":
         tracker = BillTracker(args.db)
         tracker.configure(hosting_usd=args.hosting, other_usd=args.other,

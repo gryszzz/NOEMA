@@ -18,6 +18,7 @@ from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .economic_dashboard import build_economic_overview
 from .ecosystem_controller import review_research_ecosystem
+from .ecosystem_evolution import evolve_default_specialists
 from .evm_watch import EvmWatchClient
 from .history_forecaster import MODEL_VERSION, record_history_candidate
 from .kalshi_telemetry import KalshiTelemetry
@@ -220,13 +221,24 @@ async def run_cycle(
     economic_initialized = economic.get("snapshot") is not None
 
     try:
+        evolution = evolve_default_specialists(config.db_path)
         ecosystem_plan = review_research_ecosystem(config.db_path)
         ecosystem_state = "active"
         ecosystem_focus = ecosystem_plan.dominant_specialist
-    except (sqlite3.Error, ValueError, OSError) as exc:
+        evolution_reviews = sum(
+            int(item.review.reviewed)
+            for item in (evolution.kalshi, evolution.trench)
+        )
+        challenger_count = sum(
+            len(item.experiments)
+            for item in (evolution.kalshi, evolution.trench)
+        )
+    except (sqlite3.Error, ValueError, OSError, KeyError) as exc:
         ecosystem_plan = None
         ecosystem_state = "degraded"
         ecosystem_focus = None
+        evolution_reviews = 0
+        challenger_count = 0
         _log("agent_ecosystem_error", error=type(exc).__name__)
 
     goal = choose_goal(
@@ -285,6 +297,8 @@ async def run_cycle(
                 f"{goal.reason}; cognition={cognition_result.status}; "
                 f"ecosystem_focus={ecosystem_focus or 'none'}; "
                 f"ecosystem_idle={0.0 if ecosystem_plan is None else ecosystem_plan.idle_fraction:.3f}; "
+                f"evolution_reviews={evolution_reviews}; "
+                f"challengers_registered={challenger_count}; "
                 f"collected={collection.scanned} "
                 f"valid={collection.valid} invalid={collection.invalid} "
                 f"history_candidates={candidates_recorded}"
