@@ -259,6 +259,64 @@ Candidate labels can include:
 Only after that classifier has forward evidence should the lab train a separate right-tail
 opportunity model.
 
+## Survival-v1 model
+
+Trench-1 now has a transparent first learned model:
+
+`trench-survival-logistic-v1`
+
+The target is deliberately narrower than "will this coin moon?"
+
+> Given the immutable five-minute state, does the token still satisfy the predeclared one-hour
+> survival condition?
+
+The initial one-hour label requires:
+
+- a positive observed price;
+- at least 50% of five-minute reference liquidity remaining;
+- less than 70% peak-to-trough drawdown through the one-hour path;
+- no upstream suspicious flag at the one-hour observation.
+
+Those thresholds define a research label. They are not a universal definition of a rug.
+
+### Feature contract
+
+The model uses bounded versions of the five-minute Trench features plus missingness indicators and
+token-control state. Unknown authority/extension facts remain explicit model inputs rather than
+being converted to "safe".
+
+### Evaluation
+
+The audit is chronological walk-forward.
+
+For each test candidate, training examples must have had their one-hour labels observed **before**
+the candidate's five-minute forecast timestamp. A Laplace-smoothed historical survival rate is
+the transparent benchmark.
+
+The audit reports:
+
+- Brier score;
+- log loss;
+- calibration error;
+- benchmark Brier/log loss;
+- walk-forward test count;
+- whether the model is eligible to generate future **paper research forecasts**.
+
+It never grants live execution. `live_eligible` is hardcoded false.
+
+The default audit waits for at least 50 prior labels and 20 walk-forward tests.
+
+```bash
+noema trench-model-audit
+```
+
+The audit is cached by an evidence fingerprint, so a 30-second agent loop cannot repeatedly refit
+the same sample and pretend that repeated computation is new evidence.
+
+The specialist evolution loop consumes this audit automatically. A model that fails the base-rate
+benchmark triggers challenger research; it does not automatically invalidate the entire Trench
+specialty.
+
 ## Future model stack
 
 A sensible progression is:

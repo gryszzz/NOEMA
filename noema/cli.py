@@ -36,6 +36,7 @@ from .telemetry_report import build_telemetry_report
 from .trench_collector import collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
 from .trench_dashboard import build_trench_overview
+from .trench_survival_model import audit_database as audit_trench_survival
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
@@ -299,6 +300,9 @@ def main() -> None:
     trench_show = sub.add_parser("trench-show")
     trench_show.add_argument("--db", default="data/noema.db")
 
+    trench_model_audit = sub.add_parser("trench-model-audit")
+    trench_model_audit.add_argument("--db", default="data/noema.db")
+
     bill_config = sub.add_parser("bill-config")
     bill_config.add_argument("--db", default="data/noema.db")
     bill_config.add_argument("--hosting", type=Decimal, required=True)
@@ -375,6 +379,8 @@ def main() -> None:
         asyncio.run(_trench_once(args.db))
     elif args.command == "trench-show":
         _trench_show(args.db)
+    elif args.command == "trench-model-audit":
+        print(json.dumps(audit_trench_survival(args.db).as_dict(), sort_keys=True))
     elif args.command == "bill-config":
         tracker = BillTracker(args.db)
         tracker.configure(hosting_usd=args.hosting, other_usd=args.other,

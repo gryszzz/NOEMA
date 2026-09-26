@@ -11,6 +11,7 @@ from .history_forecaster import MODEL_VERSION
 from .paired_evaluation import compare_history_to_market
 from .paper_performance import settled_paper_performance
 from .specialist_evolution import SpecialistEvidence
+from .trench_survival_model import audit_database as audit_trench_survival
 
 
 def _candidate_calibration(path: str) -> float | None:
@@ -145,14 +146,32 @@ def trench1_evidence(
     if not Path(path).exists():
         return SpecialistEvidence(0, None, None, None, None, None, None)
 
+    if horizon_seconds == 3600:
+        audit = audit_trench_survival(path)
+        method_credible = (
+            True
+            if audit.status in {"research_review_required", "model_not_better"}
+            else None
+        )
+        return SpecialistEvidence(
+            resolved=audit.total_labels,
+            brier=audit.model_brier,
+            market_baseline_brier=audit.baseline_brier,
+            after_cost_return=None,
+            max_drawdown_fraction=None,
+            calibration_error=audit.calibration_error,
+            research_credible=method_credible,
+            probability_backtest_overfit=None,
+            probabilistic_sharpe=None,
+        )
+
     conn = sqlite3.connect(path)
     try:
         row = conn.execute(
             """
-            SELECT COUNT(DISTINCT o.candidate_id)
-            FROM trench_counterfactuals o
-            JOIN trench_candidates c ON c.candidate_id = o.candidate_id
-            WHERE o.horizon_seconds = ?
+            SELECT COUNT(DISTINCT candidate_id)
+            FROM trench_counterfactuals
+            WHERE horizon_seconds = ?
             """,
             (horizon_seconds,),
         ).fetchone()
