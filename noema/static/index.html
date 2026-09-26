@@ -25,6 +25,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
       <div class="sub">Forecasting intelligence · execution truth · research console</div>
     </div>
     <div class="status">
+      <span class="pill" id="agent-pill">AGENT …</span>
       <span class="pill" id="db-pill">DB …</span>
       <span class="pill" id="account-pill">ACCOUNT …</span>
       <button class="refresh" onclick="refreshAll()">REFRESH</button>
@@ -32,6 +33,18 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
   </div>
 
   <div class="grid">
+    <div class="card span12">
+      <h2>NOEMA Agent Runtime</h2>
+      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px">
+        <div class="row"><span>State</span><b id="runtime-state">OFFLINE</b></div>
+        <div class="row"><span>Health</span><b id="runtime-health">—</b></div>
+        <div class="row"><span>Active goal</span><b id="runtime-goal">—</b></div>
+        <div class="row"><span>Kalshi</span><b id="runtime-kalshi">—</b></div>
+        <div class="row"><span>EVM wallet</span><b id="runtime-evm">—</b></div>
+      </div>
+      <div class="small" id="runtime-note" style="margin-top:10px">Start with <code>noema-agent</code>.</div>
+    </div>
+
     <div class="card span3"><div class="k">Realized P&L</div><div class="v mono" id="pnl">—</div><div class="small">Exchange-reported positions</div></div>
     <div class="card span3"><div class="k">Fees Paid</div><div class="v mono" id="fees">—</div><div class="small">Observed account fees</div></div>
     <div class="card span3"><div class="k">Observed Fills</div><div class="v mono" id="fills">—</div><div class="small">Authenticated telemetry</div></div>
