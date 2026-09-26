@@ -147,6 +147,15 @@ Collection is off by default. Set `NOEMA_TRENCH_ENABLED=1` after configuring the
 connections. Inspect with `noema trench-show` or `GET /api/trench`. See
 [Trench-1](docs/trench-1.md).
 
+## Trench Survival-v1
+
+Once enough five-minute to one-hour labels accumulate, NOEMA automatically audits a regularized
+logistic survival model against a constant historical survival-rate baseline. Training is
+chronological and only uses labels that were actually known before each test prediction.
+A successful audit can unlock future paper forecasts, never live execution.
+
+Inspect with `noema trench-model-audit`.
+
 ## Keep the project affordable
 
 The repository's `render.yaml` defines **one paid paper worker with a persistent
