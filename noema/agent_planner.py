@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .cognition_models import CognitionResult
 from .opportunity_radar import RadarRow
 
 
@@ -51,3 +52,32 @@ def choose_goal(
         "collect_world_state",
         "No forecast-ledger radar state is available yet",
     )
+
+
+def refine_goal_with_cognition(
+    goal: AgentGoalSelection,
+    cognition: CognitionResult,
+) -> AgentGoalSelection:
+    if cognition.status != "completed" or cognition.packet is None:
+        return goal
+
+    if goal.goal.startswith("restore_") or goal.goal == "initialize_economic_memory":
+        return goal
+
+    if cognition.packet.recommended_mode == "investigate":
+        return AgentGoalSelection(
+            "model_guided_investigation",
+            (
+                f"Foundry cognition confidence={cognition.packet.confidence:.3f}; "
+                f"{cognition.packet.attention_reason}"
+            ),
+        )
+    if cognition.packet.recommended_mode == "collect_more":
+        return AgentGoalSelection(
+            "collect_requested_research",
+            (
+                f"Foundry requested additional research; "
+                f"confidence={cognition.packet.confidence:.3f}"
+            ),
+        )
+    return goal
