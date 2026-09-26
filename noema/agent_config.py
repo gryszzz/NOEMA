@@ -10,6 +10,7 @@ class AgentConfig:
     cycle_interval_seconds: float = 30.0
     heartbeat_interval_seconds: float = 15.0
     max_radar_rows: int = 50
+    max_markets_per_cycle: int = 100
     evm_rpc_url: str | None = None
     evm_address: str | None = None
 
@@ -24,6 +25,9 @@ class AgentConfig:
                 os.getenv("NOEMA_AGENT_HEARTBEAT_SECONDS", "15")
             ),
             max_radar_rows=int(os.getenv("NOEMA_AGENT_RADAR_LIMIT", "50")),
+            max_markets_per_cycle=int(
+                os.getenv("NOEMA_AGENT_MAX_MARKETS_PER_CYCLE", "100")
+            ),
             evm_rpc_url=os.getenv("NOEMA_EVM_RPC_URL"),
             evm_address=os.getenv("NOEMA_EVM_ADDRESS"),
         )
@@ -35,6 +39,8 @@ class AgentConfig:
             raise ValueError("heartbeat_interval_seconds must be >= 5")
         if self.max_radar_rows <= 0:
             raise ValueError("max_radar_rows must be positive")
+        if self.max_markets_per_cycle <= 0:
+            raise ValueError("max_markets_per_cycle must be positive")
         if bool(self.evm_rpc_url) != bool(self.evm_address):
             raise ValueError(
                 "NOEMA_EVM_RPC_URL and NOEMA_EVM_ADDRESS must be configured together"
