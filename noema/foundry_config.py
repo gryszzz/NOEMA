@@ -15,6 +15,7 @@ class FoundryConfig:
     enabled: bool = True
     reasoning_effort: str = "medium"
     request_timeout_seconds: float = 60.0
+    max_output_tokens: int = 1500
 
     @classmethod
     def from_env(cls) -> "FoundryConfig":
@@ -29,6 +30,9 @@ class FoundryConfig:
             ),
             request_timeout_seconds=float(
                 os.getenv("NOEMA_FOUNDRY_TIMEOUT_SECONDS", "60")
+            ),
+            max_output_tokens=int(
+                os.getenv("NOEMA_FOUNDRY_MAX_OUTPUT_TOKENS", "1500")
             ),
         )
 
@@ -46,6 +50,8 @@ class FoundryConfig:
             raise ValueError("unsupported Foundry reasoning effort")
         if self.request_timeout_seconds <= 0:
             raise ValueError("Foundry timeout must be positive")
+        if self.max_output_tokens <= 0:
+            raise ValueError("Foundry max output tokens must be positive")
         if self.endpoint and not self.endpoint.startswith(("https://", "http://")):
             raise ValueError("Foundry endpoint must be an HTTP(S) URL")
 
