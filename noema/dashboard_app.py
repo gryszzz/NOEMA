@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+
+from .dashboard_data import build_overview
+from .kalshi_telemetry import KalshiTelemetry
+from .telemetry_report import build_telemetry_report
+
+app = FastAPI(title="NOEMA Ops Console", docs_url="/docs", redoc_url=None)
+
+
+def _db_path() -> str:
+    return os.getenv("NOEMA_DB_PATH", "data/noema.db")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> str:
+    path = Path(__file__).with_name("static") / "index.html"
+    return path.read_text()
+
+
+@app.get("/api/overview")
+async def overview() -> dict[str, Any]:
+    return build_overview(_db_path())
+
+
+@app.get("/api/live-account")
+async def live_account() -> dict[str, Any]:
+    try:
+        telemetry = KalshiTelemetry()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Kalshi credentials are not configured for read-only telemetry.",
+        ) from exc
+
+    try:
+        orders, fills, positions = await __import__("asyncio").gather(
+            telemetry.orders(),
+            telemetry.fills(),
+            telemetry.positions(),
+        )
+        return build_telemetry_report(
+            orders=orders,
+            fills=fills,
+            positions=positions,
+        )
+    finally:
+        await telemetry.close()

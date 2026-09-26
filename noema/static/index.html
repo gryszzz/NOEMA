@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NOEMA // OPS</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121923;--panel2:#0f151e;--line:#253142;--text:#e7edf5;--muted:#8795a8;--good:#79e2b3;--warn:#ffd479;--bad:#ff8d8d;--accent:#8fb7ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#080c11,#0d1219 45%,#090d12);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+.shell{max-width:1440px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
+.brand{font-size:22px;font-weight:800;letter-spacing:.14em}.sub{color:var(--muted);margin-top:5px}.status{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#111824;padding:6px 9px;border-radius:999px;color:var(--muted)}.pill.good{color:var(--good);border-color:#2a6b55}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}.card{background:rgba(18,25,35,.93);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:110px}.span3{grid-column:span 3}.span4{grid-column:span 4}.span6{grid-column:span 6}.span8{grid-column:span 8}.span12{grid-column:span 12}
+.k{color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}.v{font-size:26px;font-weight:800;margin-top:8px}.small{font-size:12px;color:var(--muted)}.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+h2{font-size:13px;margin:0 0 12px;letter-spacing:.12em;text-transform:uppercase;color:#b7c4d6}.row{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #1d2735;padding:8px 0}.row:first-of-type{border-top:0}.mono{font-variant-numeric:tabular-nums}.bar{height:7px;border-radius:8px;background:#1a2431;overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;background:linear-gradient(90deg,#6ea6ff,#80ddc0);width:0}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #1d2735;font-size:12px}th{color:var(--muted);font-weight:500}.empty{color:var(--muted);padding:20px 0}
+footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(--line);background:#121a25;color:var(--text);padding:7px 10px;border-radius:8px;cursor:pointer}
+@media(max-width:900px){.span3,.span4,.span6,.span8{grid-column:span 12}.shell{padding:12px}.top{flex-direction:column}.v{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div>
+      <div class="brand">NOEMA // OPS</div>
+      <div class="sub">Forecasting intelligence · execution truth · research console</div>
+    </div>
+    <div class="status">
+      <span class="pill" id="db-pill">DB …</span>
+      <span class="pill" id="account-pill">ACCOUNT …</span>
+      <button class="refresh" onclick="refreshAll()">REFRESH</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card span3"><div class="k">Realized P&L</div><div class="v mono" id="pnl">—</div><div class="small">Exchange-reported positions</div></div>
+    <div class="card span3"><div class="k">Fees Paid</div><div class="v mono" id="fees">—</div><div class="small">Observed account fees</div></div>
+    <div class="card span3"><div class="k">Observed Fills</div><div class="v mono" id="fills">—</div><div class="small">Authenticated telemetry</div></div>
+    <div class="card span3"><div class="k">Resolved Markets</div><div class="v mono" id="resolved">0</div><div class="small">Research dataset</div></div>
+
+    <div class="card span4">
+      <h2>Data Health</h2>
+      <div class="row"><span>Snapshots</span><b id="snapshots">0</b></div>
+      <div class="row"><span>Valid fraction</span><b id="valid-frac">—</b></div>
+      <div class="bar"><i id="valid-bar"></i></div>
+      <div class="row"><span>Realtime frames</span><b id="frames">0</b></div>
+      <div class="row"><span>Evidence records</span><b id="evidence">0</b></div>
+    </div>
+
+    <div class="card span4">
+      <h2>Research / Strategy Gate</h2>
+      <div class="row"><span>Forecasts logged</span><b id="forecasts">0</b></div>
+      <div class="row"><span>Mode</span><b class="warn">RESEARCH-FIRST</b></div>
+      <div class="row"><span>Unknown data</span><b>FAIL CLOSED</b></div>
+      <div class="row"><span>Timing rule</span><b>PERSISTENCE + FRESHNESS</b></div>
+      <div class="row"><span>Profit claim</span><b>AFTER-COST ONLY</b></div>
+    </div>
+
+    <div class="card span4">
+      <h2>Microstructure Research</h2>
+      <div class="row"><span>Flow toxicity</span><b>VPIN-LIKE</b></div>
+      <div class="row"><span>Queue crowding</span><b>ENABLED</b></div>
+      <div class="row"><span>Resolution pressure</span><b>ENABLED</b></div>
+      <div class="row"><span>Graph consistency</span><b>ENABLED</b></div>
+      <div class="small" style="margin-top:8px">Research-derived signals are never displayed as exchange facts.</div>
+    </div>
+
+    <div class="card span6">
+      <h2>Model Trust</h2>
+      <div id="trust-table" class="empty">No trust history yet.</div>
+    </div>
+
+    <div class="card span6">
+      <h2>Execution Reconciliation</h2>
+      <div class="row"><span>Order ↔ fill consistency</span><b id="order-recon">—</b></div>
+      <div class="row"><span>Position ↔ fee consistency</span><b id="fee-recon">—</b></div>
+      <div class="row"><span>Orders observed</span><b id="orders">—</b></div>
+      <div class="row"><span>Positions observed</span><b id="positions">—</b></div>
+      <div id="recon-note" class="small" style="margin-top:8px">Connect demo credentials to populate live read-only telemetry.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Observed Execution</h2>
+      <div id="exec-table" class="empty">No authenticated telemetry loaded.</div>
+    </div>
+  </div>
+  <footer>NOEMA OPS separates observed exchange data from research-derived analytics. No displayed signal is a guarantee of profitability.</footer>
+</div>
+<script>
+const money=x=>x===null||x===undefined?'—':'$'+Number(x).toFixed(2);
+const pct=x=>x===null||x===undefined?'—':(Number(x)*100).toFixed(1)+'%';
+async function getJSON(url){const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(await r.text());return r.json()}
+function renderTrust(rows){
+ const el=document.getElementById('trust-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No trust history yet.';return}
+ el.className='';el.innerHTML='<table><thead><tr><th>MODEL</th><th>RESOLVED</th><th>LOG WEIGHT</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+r.model_name+'</td><td>'+r.resolved+'</td><td>'+Number(r.log_weight).toFixed(3)+'</td></tr>').join('')+'</tbody></table>'
+}
+function renderExec(rows){
+ const el=document.getElementById('exec-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No fills/orders observed yet.';return}
+ el.className='';el.innerHTML='<table><thead><tr><th>ORDER</th><th>FILLED</th><th>REMAINING</th><th>AVG PRICE</th><th>FEES</th><th>MAKER %</th></tr></thead><tbody>'+rows.slice(0,100).map(r=>'<tr><td>'+r.order_id+'</td><td>'+r.observed_filled_count+'</td><td>'+r.remaining_count+'</td><td>'+String(r.average_fill_price??'—')+'</td><td>'+String(r.fees_paid??'—')+'</td><td>'+(r.maker_fraction==null?'—':pct(r.maker_fraction))+'</td></tr>').join('')+'</tbody></table>'
+}
+async function refreshAll(){
+ try{
+  const o=await getJSON('/api/overview');
+  document.getElementById('db-pill').textContent=o.database_present?'DB ONLINE':'DB EMPTY';
+  document.getElementById('db-pill').className='pill '+(o.database_present?'good':'');
+  document.getElementById('resolved').textContent=o.resolved_markets||0;
+  document.getElementById('forecasts').textContent=o.forecasts||0;
+  document.getElementById('frames').textContent=o.realtime_events||0;
+  document.getElementById('evidence').textContent=o.evidence_records||0;
+  document.getElementById('snapshots').textContent=o.soak?.snapshots||0;
+  const vf=o.soak?.valid_fraction||0;document.getElementById('valid-frac').textContent=pct(vf);document.getElementById('valid-bar').style.width=(vf*100)+'%';
+  renderTrust(o.model_trust);
+ }catch(e){document.getElementById('db-pill').textContent='DB ERROR'}
+ try{
+  const a=await getJSON('/api/live-account');
+  document.getElementById('account-pill').textContent='ACCOUNT READ-ONLY';
+  document.getElementById('account-pill').className='pill good';
+  document.getElementById('fills').textContent=a.fills||0;
+  document.getElementById('orders').textContent=a.orders||0;
+  document.getElementById('positions').textContent=a.positions||0;
+  document.getElementById('order-recon').textContent=a.order_fill_reconciliation?.ok?'OK':'CHECK';
+  document.getElementById('fee-recon').textContent=a.position_fee_reconciliation?.ok?'OK':'CHECK';
+  document.getElementById('pnl').textContent=money(a.realized_pnl);
+  document.getElementById('fees').textContent=money(a.fees_paid);
+  renderExec(a.execution);
+  document.getElementById('recon-note').textContent='Live authenticated telemetry loaded. Read-only.';
+ }catch(e){
+  document.getElementById('account-pill').textContent='ACCOUNT OFFLINE';
+  document.getElementById('pnl').textContent='—';document.getElementById('fees').textContent='—';
+ }
+}
+refreshAll();setInterval(refreshAll,10000);
+</script>
+</body>
+</html>

@@ -213,3 +213,33 @@ It includes:
 The design intentionally prefers missing an opportunity over acting on stale, corrupt, unsynchronized, or ungrounded state.
 
 See [docs/truth-timing.md](docs/truth-timing.md).
+
+
+## Ops Console
+
+NOEMA includes a lightweight browser console for local or private-network monitoring.
+
+```bash
+noema-dashboard
+```
+
+Default address:
+
+```text
+http://127.0.0.1:8787
+```
+
+The console separates observed account/exchange data from research-derived analytics and can display:
+
+- exchange-reported realized P&L;
+- fees paid;
+- orders, fills, positions and reconciliation;
+- resolved-market / forecast counts;
+- soak-lab data quality;
+- realtime frame and evidence counts;
+- model trust;
+- microstructure research status.
+
+For a remote/private deployment set `NOEMA_DASHBOARD_HOST` explicitly and protect access at the infrastructure layer.
+
+Research modules now include order-flow toxicity, queue crowding, time-to-resolution pressure, probability-graph consistency and lead/lag diagnostics. These are research hypotheses, not assumed sources of profit.
