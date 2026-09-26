@@ -167,3 +167,27 @@ noema evaluate
 The lab persists normalized market snapshots, validation failures, collector heartbeats, and settled outcomes into SQLite. A Docker worker is included for an always-on deployment with a persistent `/data` volume.
 
 See [docs/soak-lab.md](docs/soak-lab.md).
+
+
+## Strategist Layer
+
+NOEMA now has a research strategist layer designed to learn **where its own beliefs deserve trust**.
+
+It includes:
+
+- market-prior shrinkage;
+- reliability-weighted Bayesian/log-odds ensemble pooling;
+- adaptive specialist trust updated after resolution;
+- explicit model-disagreement penalties;
+- symmetric YES / NO edge comparison;
+- separate fee, slippage, liquidity and uncertainty haircuts;
+- walk-forward evaluation helpers;
+- multiple-testing / false-discovery penalties;
+- calibration-aware strategy promotion;
+- model-family concentration caps;
+- research-only capped fractional Kelly diagnostics;
+- human-readable strategist reports.
+
+The strategist does **not** assume profit is guaranteed. Apparent edge must survive out-of-sample testing, costs, uncertainty, search penalties, calibration checks and survival controls before it is considered credible.
+
+See [docs/strategist.md](docs/strategist.md).
