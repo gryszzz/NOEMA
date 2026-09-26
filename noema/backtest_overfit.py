@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import math
 from dataclasses import dataclass
 from itertools import combinations
 from statistics import NormalDist, mean, pstdev
-from typing import Mapping, Sequence
 
 
 @dataclass(frozen=True)
