@@ -29,13 +29,13 @@ from .setup_wizard import run_setup_wizard
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
 from .soak_runner import collect_market_snapshot_batch, run_soak_loop
+from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .specialist_model import audit_database
 from .sync import sync_kalshi_outcomes
 from .telemetry_report import build_telemetry_report
 from .trench_collector import collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
 from .trench_dashboard import build_trench_overview
-from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
