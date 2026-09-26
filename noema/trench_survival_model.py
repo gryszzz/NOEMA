@@ -47,6 +47,15 @@ class TrenchSurvivalAudit:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class TrenchPaperModel:
+    model_id: str
+    evidence_fingerprint: str
+    training_labels: int
+    baseline_probability: float
+    weights: tuple[float, ...]
+
+
 FEATURE_NAMES = (
     "return_fraction",
     "max_drawdown_fraction",
@@ -268,7 +277,7 @@ def _aware(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _survival_label(
+def survival_label(
     *,
     reference_liquidity_usd: float,
     final_tick: dict[str, object],
@@ -347,7 +356,7 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
             for value in (features, control, final_tick, final_control)
         ):
             continue
-        label = _survival_label(
+        label = survival_label(
             reference_liquidity_usd=float(reference_liquidity),
             final_tick=final_tick,
             final_control=final_control,
@@ -499,13 +508,55 @@ class TrenchSurvivalAuditStore:
         self.conn.commit()
 
 
-def audit_database(path: str = "data/noema.db") -> TrenchSurvivalAudit:
-    examples = load_verified_examples(path)
+def _audit_for_examples(
+    path: str,
+    examples: list[TrenchSurvivalExample],
+) -> tuple[str, TrenchSurvivalAudit]:
     fingerprint = _fingerprint(examples)
     store = TrenchSurvivalAuditStore(path)
     cached = store.get(fingerprint)
     if cached is not None:
-        return cached
+        return fingerprint, cached
     audit = audit_examples(examples)
     store.put(fingerprint, audit)
+    return fingerprint, audit
+
+
+def audit_database(path: str = "data/noema.db") -> TrenchSurvivalAudit:
+    _, audit = _audit_for_examples(path, load_verified_examples(path))
     return audit
+
+
+def audit_at_cutoff(
+    path: str,
+    cutoff: datetime,
+) -> tuple[str, TrenchSurvivalAudit, list[TrenchSurvivalExample]]:
+    if cutoff.tzinfo is None:
+        raise ValueError("cutoff must be timezone-aware")
+    cutoff = cutoff.astimezone(UTC)
+    examples = [
+        row
+        for row in load_verified_examples(path)
+        if row.captured_at < cutoff and row.label_observed_at < cutoff
+    ]
+    fingerprint, audit = _audit_for_examples(path, examples)
+    return fingerprint, audit, examples
+
+
+def paper_model_at_cutoff(
+    path: str,
+    cutoff: datetime,
+) -> TrenchPaperModel | None:
+    fingerprint, audit, examples = audit_at_cutoff(path, cutoff)
+    if not audit.paper_forecast_eligible or audit.weights is None or not examples:
+        return None
+
+    baseline = (sum(row.survived for row in examples) + 1) / (len(examples) + 2)
+    model_id = f"{MODEL_VERSION}:{fingerprint[:16]}"
+    return TrenchPaperModel(
+        model_id=model_id,
+        evidence_fingerprint=fingerprint,
+        training_labels=len(examples),
+        baseline_probability=baseline,
+        weights=audit.weights,
+    )
