@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from .models import MarketSnapshot
 from .soak import SoakStore
 from .venues.base import VenueAdapter
 
@@ -19,6 +21,7 @@ async def collect_market_snapshot_batch(
     store: SoakStore,
     *,
     max_markets: int | None = None,
+    on_valid: Callable[[MarketSnapshot], None] | None = None,
 ) -> SoakRunResult:
     scanned = 0
     valid = 0
@@ -30,6 +33,8 @@ async def collect_market_snapshot_batch(
             validation = store.append_market(market)
             if validation.valid:
                 valid += 1
+                if on_valid is not None:
+                    on_valid(market)
             else:
                 invalid += 1
 

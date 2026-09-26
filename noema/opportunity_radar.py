@@ -130,7 +130,7 @@ def build_radar(
 
         title = str(snapshot.get("title") or market_id)
         score = None
-        if not _political_like(title):
+        if forecast.get("model_version") != "market-baseline-v1" and not _political_like(title):
             score = _attention_score(
                 robust_edge=robust_edge,
                 spread=spread,

@@ -13,6 +13,7 @@ from .dashboard_data import build_overview
 from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
 from .kalshi_telemetry import KalshiTelemetry
+from .ladder import build_ladder_report
 from .opportunity_radar import build_radar
 from .telemetry_report import build_telemetry_report
 from .wallet_diagnostics import public_wallet_policy
@@ -38,6 +39,11 @@ async def agent() -> dict[str, Any]:
 @app.get("/api/doctor")
 async def doctor() -> dict[str, Any]:
     return doctor_report(_db_path())
+
+
+@app.get("/api/ladder")
+async def ladder() -> dict[str, Any]:
+    return build_ladder_report(_db_path())
 
 
 @app.get("/api/cognition")

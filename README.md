@@ -35,10 +35,16 @@ Most markets should end in **PASS**.
 The easiest first-time setup is:
 
 ```bash
-noema setup
-noema doctor
 noema agent-once
+noema ladder
 ```
+
+The first research cycle uses public Kalshi market data and needs no account or wallet
+credentials. It records market-price baseline forecasts for later scoring. Baselines
+always PASS and are suppressed from Opportunity Radar attention; they do not imply edge.
+
+To add optional authenticated account observation, a dedicated public EVM address,
+or Microsoft Foundry research, run `noema setup` and then `noema doctor`.
 
 Then run the persistent agent and dashboard:
 
@@ -46,6 +52,12 @@ Then run the persistent agent and dashboard:
 noema-agent
 noema-dashboard
 ```
+
+Run `noema ladder` at any time to see which steps have actual observed evidence,
+which need a connection, and which remain locked. A successful one-shot cycle is
+not a running background process.
+
+See [the real life ladder](docs/real-life-ladder.md) for what each rung proves.
 
 `noema setup` writes secrets/config to a git-ignored, owner-only `.env.local` file. The wizard covers Kalshi, the dedicated EVM wallet connection, and Microsoft Foundry cognition. See [docs/quick-connect.md](docs/quick-connect.md).
 
