@@ -26,6 +26,7 @@ class AgentCycleState:
     cognition: AgentConnectionState = AgentConnectionState("unconfigured")
     note: str | None = None
     market_data: AgentConnectionState = AgentConnectionState("unconfigured")
+    trench: AgentConnectionState = AgentConnectionState("disabled")
 
 
 @dataclass(frozen=True)
