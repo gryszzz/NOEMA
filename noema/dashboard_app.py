@@ -11,6 +11,7 @@ from .dashboard_data import build_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .opportunity_radar import build_radar
 from .telemetry_report import build_telemetry_report
+from .wallet_diagnostics import public_wallet_policy
 
 app = FastAPI(title="NOEMA Ops Console", docs_url="/docs", redoc_url=None)
 
@@ -33,6 +34,11 @@ async def overview() -> dict[str, Any]:
 @app.get("/api/radar")
 async def radar() -> list[dict[str, Any]]:
     return [row.__dict__ for row in build_radar(_db_path())]
+
+
+@app.get("/api/wallet-policy")
+async def wallet_policy() -> dict[str, Any]:
+    return public_wallet_policy()
 
 
 @app.get("/api/live-account")
