@@ -5,6 +5,11 @@ from .ecosystem_store import EcosystemStore
 from .specialists import SpecialistState
 
 
+def ensure_default_specialists(db_path: str) -> EcosystemStore:
+    store = ensure_default_specialists(db_path)
+    return store
+
+
 def review_research_ecosystem(
     db_path: str,
     *,
