@@ -19,7 +19,8 @@ confidence do not authorize an order, set risk, or become a market probability.
    calls remain idle. `NOEMA_COGNITION_MAX_ESTIMATED_USD_PER_DAY` defaults to
    `0.50` (about $15 over 30 days). Before each request, NOEMA reserves a
    conservative input-byte and maximum-output-token estimate in SQLite;
-   even failed requests keep their reservation. Use provider billing limits
+   even failed requests keep their reservation and count toward the hourly
+   call limit. Use provider billing limits
    as the final spending control: token accounting, price changes, other
    resources, and external billing are outside this local estimate.
 2. **Evaluation set:** Have a reviewer approve research packets for distinct,

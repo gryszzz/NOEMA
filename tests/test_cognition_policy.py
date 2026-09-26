@@ -64,3 +64,19 @@ def test_model_budget_requires_price_and_uses_max_output() -> None:
     assert priced.estimated_max_call_usd(
         input_bytes=2000, max_output_tokens=500
     ) == pytest.approx(0.0044)
+
+
+def test_failed_requests_still_count_toward_hourly_limit_across_connections(tmp_path) -> None:
+    path = str(tmp_path / "budget.db")
+    first, second = CognitionStore(path), CognitionStore(path)
+    now = datetime(2026, 9, 26, 12, tzinfo=UTC)
+    assert first.reserve_estimated_cost(
+        0.01, daily_limit_usd=0.5, hourly_call_limit=1, now=now
+    )
+    assert not second.reserve_estimated_cost(
+        0.01, daily_limit_usd=0.5, hourly_call_limit=1, now=now
+    )
+    assert second.reserve_estimated_cost(
+        0.01, daily_limit_usd=0.5, hourly_call_limit=1,
+        now=datetime(2026, 9, 26, 13, tzinfo=UTC),
+    )
