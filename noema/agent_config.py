@@ -51,8 +51,8 @@ class AgentConfig:
             raise ValueError("heartbeat_interval_seconds must be >= 5")
         if self.max_radar_rows <= 0:
             raise ValueError("max_radar_rows must be positive")
-        if self.max_markets_per_cycle <= 0:
-            raise ValueError("max_markets_per_cycle must be positive")
+        if not 1 <= self.max_markets_per_cycle <= 1000:
+            raise ValueError("max_markets_per_cycle must be between 1 and 1000")
         if self.max_event_checks_per_cycle <= 0:
             raise ValueError("max_event_checks_per_cycle must be positive")
         if self.outcome_sync_interval_seconds < 60:

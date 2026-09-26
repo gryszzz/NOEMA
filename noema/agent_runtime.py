@@ -24,7 +24,7 @@ from .opportunity_radar import build_radar
 from .outcomes import OutcomeStore
 from .provenance import EvidenceStore
 from .soak import SoakStore
-from .soak_runner import collect_market_snapshot_batch
+from .soak_runner import collect_rotating_market_batch
 from .sync import sync_kalshi_outcomes
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
@@ -120,13 +120,13 @@ async def run_cycle(
         _log("agent_market_setup_error", error=type(exc).__name__)
     if venue is not None:
         try:
-            collection = await collect_market_snapshot_batch(
+            collection = await collect_rotating_market_batch(
                 venue,
                 soak_store,
                 max_markets=config.max_markets_per_cycle,
                 on_valid=record_forecasts,
             )
-        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        except (httpx.HTTPError, RuntimeError, ValueError, TypeError) as exc:
             collection = None
             _log("agent_market_collection_error", error=type(exc).__name__)
         finally:

@@ -17,7 +17,7 @@ For binary event forecasts:
 
 Every model must be compared against at least:
 
-1. current market probability;
+1. the midpoint of a valid, simultaneous YES bid and ask (forecast scoring only);
 2. unconditional/base-rate forecast;
 3. prior production model.
 
@@ -44,7 +44,11 @@ If the event cannot be verified or has extra markets, NOEMA records no candidate
 
 `noema evaluate` counts the earliest pre-settlement forecast per market/model.
 `noema compare` pairs the earliest series-frequency forecast per market with
-the market baseline recorded for its exact snapshot. It averages scores within
+the YES bid/ask midpoint reconstructed from its exact archived snapshot. It
+requires a valid two-sided quote. The original ask remains in the ledger as
+`market-baseline-v1` for execution review; newer snapshots also record the
+midpoint as `market-midpoint-v1`. Neither quote is an independent forecast.
+The comparison averages scores within
 an event before averaging events, so the two sides of a match do not count as
 two independent observations. It reports Brier and log loss for the same set of
 resolved markets; positive Brier improvement means
@@ -58,7 +62,7 @@ There is no fixed universal sample size: required evidence depends on market fre
 
 ## Learned calibration research
 
-`noema model-audit` trains `noema-calibration-v1` on the earliest market-price
+`noema model-audit` trains `noema-calibration-v2` on the earliest market-price
 snapshots that also have a verified, paper-only history candidate and a later
 observed settlement. It learns a regularized blend of the market's log odds and
 the historical candidate's log odds, separately for each venue and series,
@@ -68,7 +72,18 @@ independent historical input, not an LLM. Foundry research does not set its prob
 The audit requires at least 100 training events and 30 later test events in a
 series. At each test event it trains only on outcomes resolved and first seen
 before that event's first market snapshot. It averages scores within events,
-and reports both Brier score and log loss versus the original quote. Fewer
+and reports both Brier score and log loss versus the same-snapshot midpoint. Fewer
 eligible events produce an explicit insufficient-data status. A better score
 calls for research review; it never unlocks trading or claims profitability.
 No model weights are deployed by this audit command.
+
+## Before any profitability claim
+
+The forecast score is separate from an executable trading return. A YES buy
+pays the ask; costs depend on order size, actual venue and market fees, fills,
+slippage and subsequent settlement. The prototype engine currently uses a
+fixed fee estimate and does not verify market-specific Kalshi fee multipliers
+or an executable orderbook depth at a proposed size. Its apparent edge must
+not be reported as profit. Verify the current fee schedule, implement
+contract-level fee and fill simulation, then measure after-cost results on
+previously unseen resolved events before considering a live strategy.

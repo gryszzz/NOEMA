@@ -14,8 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .evaluation import score_forecast
+from .market_probability import snapshot_midpoint
 
-MODEL_VERSION = "noema-calibration-v1"
+MODEL_VERSION = "noema-calibration-v2"
 MIN_TRAIN_EVENTS = 100
 MIN_TEST_EVENTS = 30
 
@@ -166,9 +167,12 @@ def load_verified_examples(path: str) -> list[Example]:
         if model == "series-frequency-v1":
             verified.setdefault(key, price)
         elif model == "market-baseline-v1":
+            midpoint = snapshot_midpoint(snapshot)
+            if midpoint is None:
+                continue
             baselines.setdefault(
                 key, Example(venue, event.split("-", 1)[0], event, ticker,
-                             captured, resolved, first_seen, price, int(outcome)),
+                             captured, resolved, first_seen, midpoint, int(outcome)),
             )
     expected_by_event: dict[tuple[str, str], set[str]] = {}
     for venue, ticker in expected:

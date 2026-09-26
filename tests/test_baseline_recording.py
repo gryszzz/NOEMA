@@ -14,6 +14,7 @@ def test_collected_baseline_is_scored_as_research_but_never_ranked_as_edge(tmp_p
     record_market_baseline(market, ForecastLedger(db))
     rows = build_radar(db)
     assert len(rows) == 1
-    assert rows[0].probability_yes == 0.50
+    assert rows[0].probability_yes == 0.49
+    assert rows[0].model_version == "market-midpoint-v1"
     assert rows[0].decision == "pass"
     assert rows[0].attention_score is None

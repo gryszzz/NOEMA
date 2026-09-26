@@ -114,26 +114,38 @@ class KalshiVenue(VenueAdapter):
     async def markets(self) -> AsyncIterator[MarketSnapshot]:
         cursor: str | None = None
         while True:
-            params: dict[str, Any] = {
-                "status": "open",
-                "limit": 1000,
-                "mve_filter": "exclude",
-            }
-            if cursor:
-                params["cursor"] = cursor
-
-            response = await self.client.get("/markets", params=params)
-            response.raise_for_status()
-            payload = response.json()
-
-            for raw in payload.get("markets", []):
-                snapshot = self._market_snapshot(raw, environment=self.config.environment)
-                if snapshot is not None:
-                    yield snapshot
-
-            cursor = payload.get("cursor") or None
+            markets, cursor = await self.market_page(cursor=cursor, limit=1000)
+            for market in markets:
+                yield market
             if not cursor:
                 break
+
+    async def market_page(
+        self, *, cursor: str | None = None, limit: int = 100,
+    ) -> tuple[list[MarketSnapshot], str | None]:
+        """Fetch one official API page; callers can persist its opaque cursor."""
+        if not 1 <= limit <= 1000:
+            raise ValueError("Kalshi market page limit must be 1..1000")
+        params: dict[str, Any] = {"status": "open", "limit": limit,
+                                  "mve_filter": "exclude"}
+        if cursor:
+            params["cursor"] = cursor
+        response = await self.client.get("/markets", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise TypeError("Kalshi market page is malformed")
+        raw_markets = payload.get("markets")
+        next_cursor = payload.get("cursor")
+        if (not isinstance(raw_markets, list)
+                or any(not isinstance(m, dict) for m in raw_markets)
+                or next_cursor is not None and not isinstance(next_cursor, str)):
+            raise ValueError("Kalshi market page is malformed")
+        snapshots = [self._market_snapshot(m, environment=self.config.environment)
+                     for m in raw_markets]
+        if any(snapshot is None for snapshot in snapshots):
+            raise ValueError("Kalshi market page contains a market without a ticker")
+        return [snapshot for snapshot in snapshots if snapshot is not None], next_cursor or None
 
     async def orderbook(self, ticker: str, depth: int | None = None) -> dict[str, Any]:
         if self.signer is None:

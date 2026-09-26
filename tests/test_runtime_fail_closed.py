@@ -98,6 +98,9 @@ async def test_cycle_rejects_incomplete_event_then_records_verified_paper_pair(
         name = "kalshi:demo"
         complete = False
 
+        async def market_page(self, *, cursor=None, limit=100):
+            return [market async for market in self.markets()], None
+
         async def markets(self):
             for side in ("A", "B"):
                 yield MarketSnapshot(

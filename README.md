@@ -60,8 +60,8 @@ of NOEMA. See the [setup guide](docs/quick-connect.md).
 
 | Stage | Current behavior | Evidence of progress |
 | --- | --- | --- |
-| Observe | Collects bounded public Kalshi snapshots and validates them. | Agent cycle and data-health status |
-| Forecast | Records immutable market-price baselines. After enough earlier settled events in a comparable series, it can add an independent, exploratory frequency candidate. | Forecast ledger with timestamps and evidence |
+| Observe | Collects bounded public Kalshi snapshots, rotating through API pages across cycles, and validates them. | Agent cycle and data-health status |
+| Forecast | Records the YES ask for execution review and a valid bid/ask midpoint for forecast scoring. After enough earlier settled events in a comparable series, it can add an independent, exploratory frequency candidate. | Forecast ledger with timestamps and evidence |
 | Research | Ranks markets for attention and can ask a configured Foundry model to review eligible evidence. | Research packet and stated reasons to investigate or pass |
 | Score | Syncs later outcomes and compares independent candidates with the baseline from the same snapshot. | Paired Brier comparison and calibration reports |
 | Budget | Shows the estimated monthly bill and manually recorded cash receipts/expenses; caps estimated model calls. | Operating Bill view and budget reservations |
