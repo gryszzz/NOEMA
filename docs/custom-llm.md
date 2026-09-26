@@ -23,6 +23,11 @@ confidence do not authorize an order, set risk, or become a market probability.
    call limit. Use provider billing limits
    as the final spending control: token accounting, price changes, other
    resources, and external billing are outside this local estimate.
+   Also set `noema bill-config --hosting ... --other ... --model-budget ...
+   --owner-limit ...`. Paid model calls remain idle without a positive monthly
+   model budget inside the other-cost estimate or when estimated owner exposure
+   exceeds the configured limit. The monthly call reservation is an estimate;
+   provider billing controls are still necessary.
 2. **Evaluation set:** Have a reviewer approve research packets for distinct,
    time-stamped events. Include adversarial cases: missing or conflicting
    evidence, misleading market titles, stale quotes, incomplete event groups,

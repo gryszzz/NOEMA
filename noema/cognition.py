@@ -5,6 +5,7 @@ import sqlite3
 
 import httpx
 
+from .bill_tracker import BillTracker
 from .cognition_models import CognitionResult
 from .cognition_policy import CognitionPolicy, assess_cognition
 from .cognition_store import CognitionStore
@@ -57,6 +58,17 @@ async def maybe_run_cognition(
     except (ValueError, KeyError, TypeError, json.JSONDecodeError):
         return CognitionResult("idle", detail="candidate evidence unavailable or invalid")
     try:
+        bill = BillTracker(db_path).overview()
+        if bill["status"] == "estimate_missing":
+            return CognitionResult("idle", detail="monthly bill budget not configured")
+        if bill["status"] == "over_owner_limit":
+            return CognitionResult("idle", detail="estimated owner exposure exceeds limit")
+        monthly_model_budget = float(bill["model_budget_usd"] or 0)
+        if monthly_model_budget <= 0:
+            return CognitionResult("idle", detail="monthly model budget is zero")
+    except (sqlite3.Error, ValueError, OSError):
+        return CognitionResult("degraded", detail="bill budget unavailable")
+    try:
         client = FoundryCognitionClient(config)
     except (RuntimeError, ValueError) as exc:
         return CognitionResult(
@@ -75,6 +87,7 @@ async def maybe_run_cognition(
         if not store.reserve_estimated_cost(
             max_cost, daily_limit_usd=policy.max_estimated_usd_per_day,
             hourly_call_limit=policy.max_calls_per_hour,
+            monthly_limit_usd=monthly_model_budget,
         ):
             await client.close()
             return CognitionResult("idle", detail="model call or daily estimated budget exhausted")

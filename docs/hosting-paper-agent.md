@@ -7,6 +7,37 @@ minutes and synchronizes up to 500 outcomes hourly. No trading credentials,
 wallet keys, model API keys, or public dashboard are configured.
 The `.python-version` file pins Render's runtime to Python 3.12.
 
+## Track the bill before increasing spend
+
+Read the actual Render workspace invoice and model provider pricing. Set the
+monthly hosting estimate, other recurring services (including any model spend),
+and the most you are prepared to cover personally:
+
+```bash
+noema bill-config --hosting 7 --other 1 --model-budget 0 --owner-limit 10
+noema bill-show
+```
+
+These figures are **examples**, not Render quotes. Use the real service price,
+disk price, and any taxes or usage charges you expect. When an actual invoice or
+settled cash receipt arrives, record it once with a unique invoice/payout ID:
+
+```bash
+noema bill-entry --kind expense --amount 7.25 --source render --reference invoice-2026-09
+noema bill-entry --kind receipt --amount 3 --source settled-payout --reference payout-2026-09
+```
+
+The Ops Console's Operating Bill section shows estimated uncovered exposure and
+warns when it exceeds the owner limit. Entries are operator-reported; NOEMA
+cannot verify them or pay Render. A warning cannot cap Render's actual charges:
+set a provider-side spend limit or stop the service if the bill is too high.
+The paper worker has no receipts; paper P&L and account deposits do not count.
+Model calls have a separate estimated daily cap; set provider billing limits
+before enabling a paid model. Paid model calls require a configured positive
+`--model-budget` within `--other`. NOEMA also reserves each call against that
+monthly model budget in SQLite. For example, allocating $2 to the model requires
+`--other` of at least $2; include your other non-hosting services in that total.
+
 ## Before creating the service
 
 1. In Render, select the intended workspace and review its worker and disk

@@ -9,6 +9,7 @@ from decimal import Decimal
 from .account import KalshiAccount
 from .agent_config import AgentConfig
 from .agent_runtime import run_cycle
+from .bill_tracker import BillTracker
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
 from .doctor import doctor_report
@@ -235,6 +236,23 @@ def main() -> None:
     economy_show = sub.add_parser("economy-show")
     economy_show.add_argument("--db", default="data/noema.db")
 
+    bill_config = sub.add_parser("bill-config")
+    bill_config.add_argument("--db", default="data/noema.db")
+    bill_config.add_argument("--hosting", type=Decimal, required=True)
+    bill_config.add_argument("--other", type=Decimal, default=Decimal(0))
+    bill_config.add_argument("--model-budget", type=Decimal, default=Decimal(0))
+    bill_config.add_argument("--owner-limit", type=Decimal, required=True)
+
+    bill_entry = sub.add_parser("bill-entry")
+    bill_entry.add_argument("--db", default="data/noema.db")
+    bill_entry.add_argument("--kind", choices=("receipt", "expense"), required=True)
+    bill_entry.add_argument("--amount", type=Decimal, required=True)
+    bill_entry.add_argument("--source", required=True)
+    bill_entry.add_argument("--reference", required=True)
+
+    bill_show = sub.add_parser("bill-show")
+    bill_show.add_argument("--db", default="data/noema.db")
+
     sync = sub.add_parser("sync-outcomes")
     sync.add_argument("--db", default="data/noema.db")
     sync.add_argument("--limit", type=int, default=None)
@@ -284,6 +302,19 @@ def main() -> None:
         _economy_init(args.db, args.capital)
     elif args.command == "economy-show":
         _economy_show(args.db)
+    elif args.command == "bill-config":
+        tracker = BillTracker(args.db)
+        tracker.configure(hosting_usd=args.hosting, other_usd=args.other,
+                          owner_limit_usd=args.owner_limit,
+                          model_budget_usd=args.model_budget)
+        print(json.dumps(tracker.overview(), sort_keys=True))
+    elif args.command == "bill-entry":
+        tracker = BillTracker(args.db)
+        tracker.record(kind=args.kind, amount_usd=args.amount,
+                       source=args.source, reference=args.reference)
+        print(json.dumps(tracker.overview(), sort_keys=True))
+    elif args.command == "bill-show":
+        print(json.dumps(BillTracker(args.db).overview(), sort_keys=True))
     elif args.command == "check-config":
         print(json.dumps(diagnostic_dict(), sort_keys=True))
     else:
