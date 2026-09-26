@@ -3,10 +3,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import asdict
+from decimal import Decimal
 
 from .account import KalshiAccount
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
+from .economic_bootstrap import bootstrap_economy
+from .economic_dashboard import build_economic_overview
+from .economic_ledger import EconomicLedger
 from .kalshi_telemetry import KalshiTelemetry
 from .outcomes import OutcomeStore
 from .soak import SoakStore
@@ -107,6 +112,19 @@ async def _telemetry() -> None:
         await telemetry.close()
 
 
+def _economy_init(db: str, capital: Decimal) -> None:
+    ledger = EconomicLedger(db)
+    if ledger.latest_snapshot() is not None:
+        raise RuntimeError("economic ledger is already initialized")
+    snapshot = bootstrap_economy(capital)
+    ledger.append_snapshot(snapshot)
+    print(json.dumps({key: str(value) for key, value in asdict(snapshot).items()}, sort_keys=True))
+
+
+def _economy_show(db: str) -> None:
+    print(json.dumps(build_economic_overview(db), sort_keys=True))
+
+
 async def _soak_once(db: str, limit: int | None) -> None:
     store = SoakStore(db)
     venue = KalshiVenue()
@@ -167,6 +185,13 @@ def main() -> None:
     sub.add_parser("check-config")
     sub.add_parser("telemetry")
 
+    economy_init = sub.add_parser("economy-init")
+    economy_init.add_argument("--db", default="data/noema.db")
+    economy_init.add_argument("--capital", type=Decimal, required=True)
+
+    economy_show = sub.add_parser("economy-show")
+    economy_show.add_argument("--db", default="data/noema.db")
+
     sync = sub.add_parser("sync-outcomes")
     sync.add_argument("--db", default="data/noema.db")
     sync.add_argument("--limit", type=int, default=None)
@@ -200,6 +225,10 @@ def main() -> None:
         asyncio.run(_account())
     elif args.command == "telemetry":
         asyncio.run(_telemetry())
+    elif args.command == "economy-init":
+        _economy_init(args.db, args.capital)
+    elif args.command == "economy-show":
+        _economy_show(args.db)
     elif args.command == "check-config":
         print(json.dumps(diagnostic_dict(), sort_keys=True))
     else:
