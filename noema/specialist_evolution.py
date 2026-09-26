@@ -288,16 +288,26 @@ def evolve_specialist(
             reasons.extend(active_failures)
             reasons.append("soft failure recorded; waiting for hysteresis")
 
+    promoted = (profile.state, next_state) in {
+        (SpecialistState.SHADOW, SpecialistState.PAPER),
+        (SpecialistState.PAPER, SpecialistState.ACTIVE_RESEARCH),
+        (SpecialistState.QUARANTINED, SpecialistState.PAPER),
+    }
+    demoted = (profile.state, next_state) in {
+        (SpecialistState.ACTIVE_RESEARCH, SpecialistState.PAPER),
+        (SpecialistState.SHADOW, SpecialistState.QUARANTINED),
+        (SpecialistState.PAPER, SpecialistState.QUARANTINED),
+        (SpecialistState.ACTIVE_RESEARCH, SpecialistState.QUARANTINED),
+    }
+
     return EvolutionDecision(
         previous_state=profile.state,
         next_state=next_state,
         reliability=reliability,
         success_streak=success_streak,
         failure_streak=failure_streak,
-        promoted=next_state is not profile.state
-        and next_state in {SpecialistState.PAPER, SpecialistState.ACTIVE_RESEARCH},
-        demoted=next_state is not profile.state
-        and next_state in {SpecialistState.PAPER, SpecialistState.QUARANTINED},
+        promoted=promoted,
+        demoted=demoted,
         hard_quarantine=False,
         reasons=tuple(reasons),
     )
