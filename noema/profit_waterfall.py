@@ -54,10 +54,16 @@ def allocate_profit(
         CapitalBucket.INFRASTRUCTURE: policy.infrastructure_fraction,
         CapitalBucket.TREASURY_SWEEP: policy.treasury_sweep_fraction,
     }
+    buckets = list(fractions)
+    allocations: dict[CapitalBucket, Decimal] = {}
+    assigned = Decimal(0)
+    for bucket in buckets[:-1]:
+        amount = (profit * fractions[bucket]).quantize(Decimal("0.01"))
+        allocations[bucket] = amount
+        assigned += amount
+    allocations[buckets[-1]] = profit - assigned
+
     return ProfitAllocation(
         profit_above_high_water_usd=profit,
-        allocations={
-            bucket: (profit * fraction).quantize(Decimal("0.01"))
-            for bucket, fraction in fractions.items()
-        },
+        allocations=allocations,
     )
