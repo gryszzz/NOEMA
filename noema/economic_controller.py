@@ -9,6 +9,7 @@ from .economic_ledger import EconomicLedger
 from .economic_models import (
     AutonomyEvidence,
     AutonomyLevel,
+    CapitalBucket,
     EconomicSnapshot,
     ProfitAllocation,
 )
@@ -58,7 +59,7 @@ class EconomicController:
                 transition.next_level
                 in {AutonomyLevel.SELF_FUNDED, AutonomyLevel.EXPANSION}
                 and profit_plan.allocations.get(
-                    __import__("noema.economic_models", fromlist=["CapitalBucket"]).CapitalBucket.INFRASTRUCTURE,
+                    CapitalBucket.INFRASTRUCTURE,
                     Decimal(0),
                 )
                 > 0
