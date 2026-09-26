@@ -2,6 +2,9 @@
 
 NOEMA is no longer only a collection of modules. The agent runtime binds perception, memory, account state, wallet observation, the Opportunity Radar, and the Economic OS into one persistent process.
 
+It also syncs settled outcomes at a separate bounded cadence so a running agent
+can gather strictly prior observations for an exploratory independent forecast.
+
 ## Start the agent
 
 ```bash
@@ -60,17 +63,19 @@ NOEMA_AGENT_CYCLE_SECONDS=30
 NOEMA_AGENT_HEARTBEAT_SECONDS=15
 NOEMA_AGENT_RADAR_LIMIT=50
 NOEMA_AGENT_MAX_MARKETS_PER_CYCLE=100
+NOEMA_AGENT_MAX_EVENT_CHECKS_PER_CYCLE=12
+NOEMA_AGENT_OUTCOME_SYNC_SECONDS=900
+NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC=2000
 ```
 
 A cycle:
 
 1. collects a bounded public market snapshot batch and records PASS-only market baselines;
-2. checks authenticated Kalshi account telemetry;
-3. observes the dedicated EVM wallet;
-4. reads recent Opportunity Radar state;
-5. reads the Economic OS;
-6. chooses the current operating goal;
-7. records a persistent cycle state and heartbeat.
+2. checks previously seen settled one- or two-market series for exploratory, PASS-only forecasts;
+3. checks authenticated Kalshi account telemetry;
+4. observes the dedicated EVM wallet;
+5. reads recent Opportunity Radar state and the Economic OS;
+6. chooses the current operating goal and records a heartbeat.
 
 ## Identity
 

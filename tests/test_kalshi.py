@@ -27,6 +27,8 @@ def test_market_mapping_uses_fixed_point_dollars() -> None:
 
     assert market is not None
     assert market.market_id == "TEST-YES"
+    assert market.venue == "kalshi:demo"
+    assert KalshiVenue._market_snapshot(raw, environment="production").venue == "kalshi:production"
     assert market.yes_bid == 0.43
     assert market.yes_ask == 0.47
     assert market.no_bid == 0.53

@@ -61,6 +61,23 @@ See [the real life ladder](docs/real-life-ladder.md) for what each rung proves.
 
 `noema setup` writes secrets/config to a git-ignored, owner-only `.env.local` file. The wizard covers Kalshi, the dedicated EVM wallet connection, and Microsoft Foundry cognition. See [docs/quick-connect.md](docs/quick-connect.md).
 
+The independent research candidate uses previously observed YES/NO outcomes from
+homogeneous one-market events or two-market events with exactly one YES winner
+in the same series. It only records a forecast when at least 30 complete settled
+events were seen before the new market snapshot.
+The series frequency is exploratory: it stays PASS-only and cannot trigger
+automatic model attention or execution.
+
+```bash
+noema sync-outcomes --limit 2000  # one-time bootstrap for an agent-once run
+noema agent-once
+noema compare                     # paired outcomes versus the same-market baseline
+```
+
+`noema-agent` syncs up to 2000 settled outcomes every 15 minutes by default.
+Paired comparison counts a market once, excludes forecasts made after settlement,
+and remains unqualified for live execution. See [evaluation](docs/evaluation.md).
+
 ## System map
 
 ```mermaid

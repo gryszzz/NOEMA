@@ -15,6 +15,7 @@ from .economic_dashboard import build_economic_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .ladder import build_ladder_report
 from .opportunity_radar import build_radar
+from .paired_evaluation import compare_history_to_market
 from .telemetry_report import build_telemetry_report
 from .wallet_diagnostics import public_wallet_policy
 
@@ -44,6 +45,11 @@ async def doctor() -> dict[str, Any]:
 @app.get("/api/ladder")
 async def ladder() -> dict[str, Any]:
     return build_ladder_report(_db_path())
+
+
+@app.get("/api/compare")
+async def compare() -> dict[str, Any]:
+    return compare_history_to_market(_db_path()).as_dict()
 
 
 @app.get("/api/cognition")

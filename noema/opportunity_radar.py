@@ -28,6 +28,7 @@ class RadarRow:
     decision: str
     reason: str
     evidence_ids: tuple[str, ...]
+    model_version: str = "unknown"
 
 
 _POLITICAL_TERMS = {
@@ -130,7 +131,9 @@ def build_radar(
 
         title = str(snapshot.get("title") or market_id)
         score = None
-        if forecast.get("model_version") != "market-baseline-v1" and not _political_like(title):
+        if forecast.get("model_version") not in {
+            "market-baseline-v1", "series-frequency-v1"
+        } and not _political_like(title):
             score = _attention_score(
                 robust_edge=robust_edge,
                 spread=spread,
@@ -166,6 +169,7 @@ def build_radar(
                 decision=str(action.get("decision") or "unknown"),
                 reason=str(action.get("reason") or ""),
                 evidence_ids=tuple(forecast.get("evidence_ids") or ()),
+                model_version=str(forecast.get("model_version") or "unknown"),
             )
         )
 

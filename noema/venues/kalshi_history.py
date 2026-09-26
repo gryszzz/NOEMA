@@ -32,9 +32,13 @@ class KalshiHistory:
         return response.json()
 
     async def settled_markets(self) -> AsyncIterator[dict[str, Any]]:
-        async for market in self._paged("/markets", {"status": "settled", "limit": 1000}):
+        async for market in self._paged(
+            "/markets", {"status": "settled", "limit": 1000, "mve_filter": "exclude"}
+        ):
             yield market
-        async for market in self._paged("/historical/markets", {"limit": 1000}):
+        async for market in self._paged(
+            "/historical/markets", {"limit": 1000, "mve_filter": "exclude"}
+        ):
             yield market
 
     async def _paged(

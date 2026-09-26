@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import re
 import stat
 from collections.abc import Callable
 from pathlib import Path
@@ -10,9 +11,7 @@ from .local_env import DEFAULT_LOCAL_ENV, load_local_env
 
 _NON_SECRET_FIELDS = (
     ("NOEMA_KALSHI_ENV", "Kalshi environment", "demo"),
-    ("KALSHI_API_KEY_ID", "Kalshi API key ID", ""),
     ("KALSHI_PRIVATE_KEY_PATH", "Kalshi private PEM path", ""),
-    ("NOEMA_EVM_RPC_URL", "Dedicated EVM RPC URL", ""),
     ("NOEMA_EVM_ADDRESS", "Dedicated EVM public address", ""),
     ("NOEMA_FOUNDRY_ENDPOINT", "Microsoft Foundry/Azure OpenAI endpoint", ""),
     ("NOEMA_FOUNDRY_DEPLOYMENT", "Foundry model deployment name", ""),
@@ -20,6 +19,8 @@ _NON_SECRET_FIELDS = (
 )
 
 _SECRET_FIELDS = (
+    ("KALSHI_API_KEY_ID", "Kalshi API key ID"),
+    ("NOEMA_EVM_RPC_URL", "Dedicated EVM RPC URL"),
     ("NOEMA_FOUNDRY_API_KEY", "Foundry API key"),
 )
 
@@ -29,6 +30,8 @@ def _clean(value: str) -> str:
 
 
 def _quote(value: str) -> str:
+    if any(character in value for character in "\r\n\x00"):
+        raise ValueError("configuration values must be single-line text")
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
@@ -46,9 +49,21 @@ def write_local_env(
         "",
     ]
     for key in sorted(values):
+        if re.fullmatch(r"[A-Z][A-Z0-9_]*", key) is None:
+            raise ValueError("invalid configuration key")
         lines.append(f"{key}={_quote(values[key])}")
-    target.write_text("\n".join(lines) + "\n")
-    target.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    if target.is_symlink():
+        raise OSError("local config path must not be a symlink")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(target, flags, stat.S_IRUSR | stat.S_IWUSR)
+    try:
+        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(fd, "w") as stream:
+            fd = -1
+            stream.write("\n".join(lines) + "\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return target
 
 

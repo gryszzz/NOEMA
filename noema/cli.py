@@ -19,6 +19,7 @@ from .kalshi_telemetry import KalshiTelemetry
 from .ladder import build_ladder_report
 from .local_env import load_local_env
 from .outcomes import OutcomeStore
+from .paired_evaluation import compare_history_to_market
 from .setup_wizard import run_setup_wizard
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
@@ -38,6 +39,9 @@ async def _agent_once(db: str) -> None:
         heartbeat_interval_seconds=config.heartbeat_interval_seconds,
         max_radar_rows=config.max_radar_rows,
         max_markets_per_cycle=config.max_markets_per_cycle,
+        max_event_checks_per_cycle=config.max_event_checks_per_cycle,
+        outcome_sync_interval_seconds=config.outcome_sync_interval_seconds,
+        max_outcomes_per_sync=config.max_outcomes_per_sync,
         evm_rpc_url=config.evm_rpc_url,
         evm_address=config.evm_address,
     )
@@ -204,6 +208,9 @@ def main() -> None:
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--db", default="data/noema.db")
 
+    compare = sub.add_parser("compare")
+    compare.add_argument("--db", default="data/noema.db")
+
     sub.add_parser("account")
     sub.add_parser("check-config")
     sub.add_parser("telemetry")
@@ -257,6 +264,8 @@ def main() -> None:
         asyncio.run(_account())
     elif args.command == "telemetry":
         asyncio.run(_telemetry())
+    elif args.command == "compare":
+        print(json.dumps(compare_history_to_market(args.db).as_dict(), sort_keys=True))
     elif args.command == "setup":
         run_setup_wizard()
     elif args.command == "doctor":
