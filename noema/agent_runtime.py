@@ -10,8 +10,10 @@ import httpx
 from .agent_config import AgentConfig
 from .agent_identity import AgentIdentity
 from .agent_models import AgentConnectionState, AgentCycleState, AgentStatus
-from .agent_planner import choose_goal
+from .agent_planner import choose_goal, refine_goal_with_cognition
 from .agent_store import AgentStore
+from .cognition import maybe_run_cognition
+from .cognition_models import CognitionResult
 from .economic_dashboard import build_economic_overview
 from .evm_watch import EvmWatchClient
 from .kalshi_telemetry import KalshiTelemetry
@@ -118,8 +120,29 @@ async def run_cycle(
         economic_initialized=economic_initialized,
     )
 
+    if kalshi.status == "connected" and economic_initialized:
+        cognition_result = await maybe_run_cognition(
+            radar,
+            db_path=config.db_path,
+        )
+    else:
+        cognition_result = CognitionResult(
+            "skipped",
+            detail="core market/economic state not ready for cognition",
+        )
+
+    goal = refine_goal_with_cognition(goal, cognition_result)
+    cognition_state = AgentConnectionState(
+        cognition_result.status,
+        cognition_result.detail,
+    )
+
     health = "healthy"
-    if kalshi.status == "degraded" or evm.status == "degraded":
+    if (
+        kalshi.status == "degraded"
+        or evm.status == "degraded"
+        or cognition_result.status == "degraded"
+    ):
         health = "degraded"
     elif kalshi.status == "unconfigured" or evm.status == "unconfigured":
         health = "partial"
@@ -134,11 +157,13 @@ async def run_cycle(
         evm_wallet=evm,
         radar_markets=len(radar),
         economic_state="initialized" if economic_initialized else "uninitialized",
+        cognition=cognition_state,
         note=(
             goal.reason
             if collection is None
             else (
-                f"{goal.reason}; collected={collection.scanned} "
+                f"{goal.reason}; cognition={cognition_result.status}; "
+                f"collected={collection.scanned} "
                 f"valid={collection.valid} invalid={collection.invalid}"
             )
         ),
