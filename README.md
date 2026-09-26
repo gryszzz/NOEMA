@@ -164,3 +164,11 @@ pytest -q
 NOEMA uses official or authorized APIs, preserves evidence timestamps, and
 fails closed on missing data. New venues, models and strategies begin in paper
 mode. No strategy, model or automation can guarantee profit.
+
+## Meridian + NOEMA integration
+
+The first file-based evidence-review bridge connects the two independent repositories.
+It exports a Meridian source excerpt, produces an offline NOEMA evidence checklist,
+and imports that review as analysis. It does not yet run an autonomous investigation.
+See the [shared vision](docs/meridian-noema-vision.md) and
+[transfer contract and walkthrough](docs/meridian-noema-contract.md).
