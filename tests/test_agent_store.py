@@ -24,6 +24,8 @@ def test_agent_status_roundtrip(tmp_path) -> None:
             evm_wallet=AgentConnectionState("connected"),
             radar_markets=0,
             economic_state="initialized",
+            ecosystem_state="active",
+            ecosystem_focus="trench-1",
             note=None,
             market_data=AgentConnectionState("connected", "valid=5"),
         ),
@@ -34,3 +36,5 @@ def test_agent_status_roundtrip(tmp_path) -> None:
     assert loaded.last_cycle is not None
     assert loaded.last_cycle.cycle_id == 1
     assert loaded.last_cycle.market_data.status == "connected"
+    assert loaded.last_cycle.ecosystem_state == "active"
+    assert loaded.last_cycle.ecosystem_focus == "trench-1"
