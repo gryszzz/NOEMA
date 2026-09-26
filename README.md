@@ -72,6 +72,7 @@ flowchart TD
 | **Survival** | Drawdown stops, exposure caps, reserve floor, loss quarantine, master halt |
 | **Ops** | Browser dashboard, Opportunity Radar, account telemetry, model-trust view |
 | **Wallet foundation** | Multichain intents, policy gate, daily budget, provider-neutral signer |
+| **Economic OS** | High-water accounting, capital buckets, earned autonomy, profit waterfall, R&D/infrastructure budgets |
 
 ## Opportunity Radar
 
@@ -296,6 +297,53 @@ Potential adapters:
 
 Every chain/venue remains an isolated adapter behind the wallet policy.
 
+## Economic OS
+
+NOEMA has an internal economic operating system for tracking how capability should grow **only after realized evidence supports it**.
+
+```mermaid
+flowchart LR
+    P[Realized After-Cost Result] --> H[High-Water Review]
+    H --> R[Reserve]
+    H --> S[Strategy Capital]
+    H --> D[Research / Data]
+    H --> I[Infrastructure]
+    H --> T[Treasury Sweep]
+
+    E[Evidence Quality] --> A[Autonomy Review]
+    A --> L[SHADOW -> PAPER -> DEMO -> MICRO -> PROVEN -> SELF-FUNDED -> EXPANSION]
+    L --> W[Wallet Ceiling]
+    K[Loss / Drawdown] -->|immediate contraction| L
+```
+
+The economic layer separates:
+
+- survival reserve;
+- strategy capital;
+- research/data budget;
+- infrastructure budget;
+- pending treasury sweep.
+
+Only new equity above the previous high-water mark is eligible for a new profit waterfall. Promotions happen **one autonomy level at a time**; evidence deterioration can demote the system immediately.
+
+Initialize internal accounting:
+
+```bash
+noema economy-init --capital 500
+```
+
+Inspect it:
+
+```bash
+noema economy-show
+```
+
+These commands maintain NOEMA's internal ledger; they do not transfer money.
+
+The Ops Console exposes the same economic state, including autonomy, equity, high-water mark and budget buckets.
+
+See [docs/economic-os.md](docs/economic-os.md).
+
 ## Demo soak lab
 
 Build a replayable dataset:
@@ -397,7 +445,8 @@ adaptive strategist       ██████████
 truth / provenance        ██████████
 execution telemetry       ██████████
 Ops Console / radar       ██████████
-agent-wallet policy       ███████░░░
+agent-wallet policy       ████████░░
+economic OS               █████████░
 multichain adapters       ██░░░░░░░░
 mainnet autonomy          ░░░░░░░░░░
 ```
