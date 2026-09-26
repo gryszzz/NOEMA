@@ -70,6 +70,9 @@ class BayesianEnsembler:
         market_probability: float,
         beliefs: Iterable[ModelBelief],
     ) -> EnsembleBelief:
+        if not 0 <= market_probability <= 1:
+            raise ValueError("market_probability must be in [0, 1]")
+
         rows = list(beliefs)
         if not rows:
             p = _clip_probability(market_probability)
@@ -89,11 +92,19 @@ class BayesianEnsembler:
         for belief in rows:
             if not 0 <= belief.probability_yes <= 1:
                 raise ValueError("model probabilities must be in [0, 1]")
+            if belief.reliability <= 0:
+                continue
             sample_discount = 1 - math.exp(
                 -max(0, belief.sample_size) / self.policy.sample_size_half_life
             )
-            raw_weight = belief.reliability * max(sample_discount, self.policy.min_model_weight)
-            weight = min(max(raw_weight, self.policy.min_model_weight), self.policy.max_model_weight)
+            raw_weight = belief.reliability * max(
+                sample_discount,
+                self.policy.min_model_weight,
+            )
+            weight = min(
+                max(raw_weight, self.policy.min_model_weight),
+                self.policy.max_model_weight,
+            )
             weighted_logits.append((logit(belief.probability_yes), weight))
             probabilities.append(belief.probability_yes)
             names.append(belief.name)
