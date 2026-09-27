@@ -33,3 +33,7 @@ target-version = "py312"
 
 [tool.setuptools.package-data]
 noema = ["static/*.html", "static/brand/*.png"]
+
+[tool.setuptools.packages.find]
+include = ["noema", "noema.*"]
+namespaces = false

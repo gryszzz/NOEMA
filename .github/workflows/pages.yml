@@ -1,0 +1,125 @@
+name: Deploy YSZ NOEMA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      pages: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      pages_enabled: ${{ steps.pages.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python
+        run: pip install -e ".[dev]"
+
+      - name: Install
+        run: npm ci
+
+      - name: Build Python wheel
+        run: pip wheel --no-deps . --wheel-dir /tmp/noema-wheels
+      - name: Validate source
+        run: ruff check . && pytest -q && npm run site:test
+
+      - name: Detect GitHub Pages
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          status="$(curl -sS -o /tmp/pages.json -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GH_REPO}/pages")"
+
+          if [ "$status" = "200" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            node --input-type=module -e '
+              import fs from "node:fs";
+              const page = JSON.parse(fs.readFileSync("/tmp/pages.json", "utf8"));
+              const url = new URL(page.html_url);
+              if (url.protocol !== "https:") throw new Error("Invalid Pages URL");
+              const base = url.pathname.replace(/\/?$/, "/");
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, `base_path=${base}\n`);
+            '
+            echo "GitHub Pages is enabled." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$status" = "404" ]; then
+            echo "base_path=/${GH_REPO#*/}/" >> "$GITHUB_OUTPUT"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### NOEMA Pages deployment skipped"
+              echo ""
+              echo "GitHub Pages is not enabled for this repository yet."
+              echo "Enable **Settings → Pages → Build and deployment → Source → GitHub Actions** once."
+              echo "Future pushes to main will then deploy automatically."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Pages status check failed (HTTP $status); deployment state is unknown."
+            exit 1
+          fi
+
+      - name: Build NOEMA public surface
+        env:
+          SITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run site:build
+
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify built public paths and interactions
+        env:
+          SITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run site:qa
+
+      - name: Configure Pages
+        if: steps.pages.outputs.enabled == 'true'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: steps.pages.outputs.enabled == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist-site
+
+  deploy:
+    permissions:
+      pages: write
+      id-token: write
+    if: needs.build.outputs.pages_enabled == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
