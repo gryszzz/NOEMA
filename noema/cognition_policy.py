@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -61,18 +62,25 @@ class CognitionPolicy:
     def estimated_max_call_usd(self, *, input_bytes: int, max_output_tokens: int) -> float:
         """Use UTF-8 bytes as a conservative input-token estimate."""
         if (
-            self.max_estimated_usd_per_day <= 0
+            not math.isfinite(self.max_estimated_usd_per_day)
+            or self.max_estimated_usd_per_day <= 0
             or self.input_usd_per_million is None
             or self.output_usd_per_million is None
+            or not math.isfinite(self.input_usd_per_million)
+            or not math.isfinite(self.output_usd_per_million)
             or self.input_usd_per_million <= 0
             or self.output_usd_per_million <= 0
-            or input_bytes <= 0 or max_output_tokens <= 0
+            or type(input_bytes) is not int or input_bytes <= 0
+            or type(max_output_tokens) is not int or max_output_tokens <= 0
         ):
             raise ValueError("model prices and a positive daily budget are required")
-        return (
+        cost = (
             input_bytes * self.input_usd_per_million
             + max_output_tokens * self.output_usd_per_million
         ) / 1_000_000
+        if not math.isfinite(cost) or cost <= 0:
+            raise ValueError("model cost estimate must be positive and finite")
+        return cost
 
 
 @dataclass(frozen=True)
@@ -90,6 +98,13 @@ def assess_cognition(
 ) -> CognitionGate:
     now = now or datetime.now(UTC)
     reasons: list[str] = []
+
+    if any(not math.isfinite(value) for value in (
+        row.robust_edge, row.freshness_seconds, row.uncertainty_width,
+        policy.min_attention, policy.min_robust_edge, policy.max_freshness_seconds,
+        policy.max_uncertainty_width, policy.cooldown_seconds,
+    )) or (row.attention_score is not None and not math.isfinite(row.attention_score)):
+        return CognitionGate(False, ("non-finite cognition evidence or thresholds",))
 
     if row.attention_score is None:
         reasons.append("automatic cognition suppressed for this market")

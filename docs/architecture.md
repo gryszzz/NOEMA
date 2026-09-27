@@ -1,6 +1,10 @@
 # NOEMA Architecture
 
-NOEMA is an autonomous forecasting desk, not a single prediction model.
+NOEMA is an autonomous paper research desk. The diagram below is the target
+architecture; an independent ensemble, fully attributed economics and live
+execution are not implemented by this diagram. See
+[economic integrity](economic-integrity.md) for the current runtime, measured
+failure cases, and outstanding evidence gates.
 
 ```text
 AUTHORIZED MARKET DATA

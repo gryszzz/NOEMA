@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from .economic_accounting import validate_snapshot
 from .economic_models import EconomicSnapshot
 
 
@@ -39,6 +40,7 @@ class EconomicLedger:
         self.conn.commit()
 
     def append_snapshot(self, snapshot: EconomicSnapshot) -> None:
+        validate_snapshot(snapshot)
         payload = {
             key: str(value) if isinstance(value, Decimal) else value
             for key, value in asdict(snapshot).items()
@@ -59,6 +61,8 @@ class EconomicLedger:
         amount_usd: Decimal | None = None,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        if amount_usd is not None and not amount_usd.is_finite():
+            raise ValueError("economic event amount must be finite")
         self.conn.execute(
             """
             INSERT INTO economic_events
@@ -86,6 +90,9 @@ class EconomicLedger:
         if row is None:
             return None
         raw = json.loads(row[0])
-        return EconomicSnapshot(
-            **{key: Decimal(str(value)) for key, value in raw.items()}
+        snapshot = EconomicSnapshot(
+            **{key: None if value is None else Decimal(str(value))
+               for key, value in raw.items()}
         )
+        validate_snapshot(snapshot)
+        return snapshot

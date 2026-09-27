@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from .cognition_models import CognitionPacket
@@ -40,67 +42,118 @@ class CognitionStore:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 day_utc TEXT NOT NULL,
                 estimated_usd REAL NOT NULL CHECK (estimated_usd > 0),
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                estimated_tokens INTEGER,
+                market_id TEXT
             )
             """
         )
         self.conn.commit()
+        # Existing reservations remain unknown, never silently treated as zero
+        # token usage. Serialize migration against other worker connections.
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            columns = {
+                row[1] for row in self.conn.execute(
+                    "PRAGMA table_info(cognition_budget_reservations)"
+                )
+            }
+            if "estimated_tokens" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE cognition_budget_reservations ADD COLUMN estimated_tokens INTEGER"
+                )
+            if "market_id" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE cognition_budget_reservations ADD COLUMN market_id TEXT"
+                )
 
     def reserve_estimated_cost(
         self, cost_usd: float, *, daily_limit_usd: float,
         hourly_call_limit: int = 6,
         monthly_limit_usd: float | None = None,
+        estimated_tokens: int | None = None,
+        hourly_token_limit: int | None = None,
+        market_id: str | None = None,
+        cooldown_seconds: float = 0,
         now: datetime | None = None,
     ) -> bool:
-        """Atomically reserve worst-case estimate; failed requests retain the reservation."""
-        import math
+        """Reserve call, token and cost estimates together, including failed attempts.
 
+        Reservations are conservative spending bounds, not provider invoices.
+        """
         if (
             not math.isfinite(cost_usd) or not math.isfinite(daily_limit_usd)
             or cost_usd <= 0 or daily_limit_usd <= 0
-            or hourly_call_limit <= 0
+            or type(hourly_call_limit) is not int or hourly_call_limit <= 0
             or (monthly_limit_usd is not None and
                 (not math.isfinite(monthly_limit_usd) or monthly_limit_usd <= 0))
         ):
             raise ValueError("budget amounts must be positive and finite")
-        now = now or datetime.now(UTC)
-        day = now.astimezone(UTC).date().isoformat()
+        if (estimated_tokens is None) != (hourly_token_limit is None):
+            raise ValueError("token estimate and hourly token limit must be supplied together")
+        if estimated_tokens is not None and (
+            type(estimated_tokens) is not int or estimated_tokens <= 0
+            or type(hourly_token_limit) is not int or hourly_token_limit <= 0
+        ):
+            raise ValueError("token budgets must be positive integers")
+        if (not math.isfinite(cooldown_seconds) or cooldown_seconds < 0
+                or (cooldown_seconds > 0 and not market_id)):
+            raise ValueError("cooldown must be non-negative and associated with a market")
+        now = _utc_time(now)
+        day = now.date().isoformat()
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             recent = self.conn.execute(
-                "SELECT COUNT(*) FROM cognition_budget_reservations "
-                "WHERE created_at > ? AND created_at <= ?",
+                "SELECT estimated_tokens FROM cognition_budget_reservations "
+                "WHERE julianday(created_at) > julianday(?) AND julianday(created_at) <= julianday(?)",
                 ((now - timedelta(hours=1)).isoformat(), now.isoformat()),
-            ).fetchone()[0]
-            if recent >= hourly_call_limit:
+            ).fetchall()
+            if len(recent) >= hourly_call_limit:
                 self.conn.rollback()
                 return False
-            spent = self.conn.execute(
-                "SELECT COALESCE(SUM(estimated_usd), 0) "
+            if estimated_tokens is not None and (
+                any(row[0] is None for row in recent)
+                or sum(row[0] for row in recent) + estimated_tokens > hourly_token_limit
+            ):
+                self.conn.rollback()
+                return False
+            if market_id and cooldown_seconds > 0:
+                previous = self.conn.execute(
+                    "SELECT 1 FROM cognition_budget_reservations WHERE market_id = ? "
+                    "AND julianday(created_at) > julianday(?) LIMIT 1",
+                    (market_id, (now - timedelta(seconds=cooldown_seconds)).isoformat()),
+                ).fetchone()
+                if previous is not None:
+                    self.conn.rollback()
+                    return False
+            spent = sum((Decimal(str(row[0])) for row in self.conn.execute(
+                "SELECT estimated_usd "
                 "FROM cognition_budget_reservations WHERE day_utc = ?", (day,),
-            ).fetchone()[0]
-            if spent + cost_usd > daily_limit_usd + 1e-12:
+            )), Decimal(0))
+            if spent + Decimal(str(cost_usd)) > Decimal(str(daily_limit_usd)):
                 self.conn.rollback()
                 return False
             if monthly_limit_usd is not None:
-                monthly_spent = self.conn.execute(
-                    "SELECT COALESCE(SUM(estimated_usd), 0) "
+                monthly_spent = sum((Decimal(str(row[0])) for row in self.conn.execute(
+                    "SELECT estimated_usd "
                     "FROM cognition_budget_reservations WHERE day_utc >= ? AND day_utc < ?",
                     (day[:7] + "-01", _next_month(day)),
-                ).fetchone()[0]
-                if monthly_spent + cost_usd > monthly_limit_usd + 1e-12:
+                )), Decimal(0))
+                if monthly_spent + Decimal(str(cost_usd)) > Decimal(str(monthly_limit_usd)):
                     self.conn.rollback()
                     return False
             self.conn.execute(
                 "INSERT INTO cognition_budget_reservations "
-                "(day_utc, estimated_usd, created_at) VALUES (?, ?, ?)",
-                (day, cost_usd, now.isoformat()),
+                "(day_utc, estimated_usd, created_at, estimated_tokens, market_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (day, cost_usd, now.isoformat(), estimated_tokens, market_id),
             )
             self.conn.commit()
             return True
         except Exception:
             self.conn.rollback()
             raise
+
     def append(
         self,
         *,
@@ -111,6 +164,10 @@ class CognitionStore:
         output_tokens: int,
         total_tokens: int,
     ) -> None:
+        if (any(type(value) is not int or value < 0
+                for value in (input_tokens, output_tokens, total_tokens))
+                or total_tokens < input_tokens + output_tokens):
+            raise ValueError("model usage must contain consistent non-negative token counts")
         self.conn.execute(
             """
             INSERT INTO cognition_packets
@@ -206,3 +263,10 @@ class CognitionStore:
             "output_tokens": row[5],
             "total_tokens": row[6],
         }
+
+
+def _utc_time(now: datetime | None) -> datetime:
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("budget timestamps must include a timezone")
+    return now.astimezone(UTC)

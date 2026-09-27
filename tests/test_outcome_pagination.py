@@ -148,7 +148,8 @@ async def test_pending_paper_quote_is_resolved_before_broad_scan(tmp_path):
     store = OutcomeStore(db)
     result = await sync_kalshi_outcomes(store, History(), max_markets=20)
     assert (result.scanned, result.imported) == (1, 1)
-    assert paper.audit()["market_count"] == 1
+    assert paper.audit()["market_count"] == 0  # Future resolution is not profit yet.
+    assert paper.audit(now=now + timedelta(minutes=2))["market_count"] == 1
     assert store.pending_paper_quotes("kalshi:demo", limit=5) == []
 
 

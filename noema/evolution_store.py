@@ -162,3 +162,14 @@ class EvolutionStore:
             "evidence": json.loads(str(row[3])),
             "decision": json.loads(str(row[4])),
         }
+
+    def max_reviewed_resolved(self, specialist: str) -> int:
+        """Keep the historical evidence watermark even after samples are removed."""
+        row = self.conn.execute(
+            """
+            SELECT MAX(CAST(json_extract(evidence_json, '$.resolved') AS INTEGER))
+            FROM specialist_evolution_reviews WHERE specialist = ?
+            """,
+            (specialist.strip(),),
+        ).fetchone()
+        return 0 if row is None or row[0] is None else int(row[0])

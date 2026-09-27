@@ -68,3 +68,15 @@ up periodic consistent database backups before relying on months of evidence.
 Paper forecasts do not authorize live orders. Require resolved, independent
 comparisons with the baseline, then account for spread, fees, slippage, and
 drawdown before considering even a small controlled live trial.
+
+## Container parity
+
+The Docker image starts `noema-agent`, the same paper research runtime as Render.
+Mount persistent storage at `/data`. The older soak laboratory is available only
+when explicitly selected with `python -m noema.worker_entry`; it is a different
+operating loop. The dashboard remains a separate local process. Container builds
+exclude environment files, local databases, keys and development caches.
+
+Use `noema economics-report` for a read-only view separating recorded cash,
+model reservations, and paper execution results. See
+[economic integrity](economic-integrity.md) for cost-coverage limitations.

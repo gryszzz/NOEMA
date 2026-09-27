@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from .history_forecaster import MODEL_VERSION
 from .paper_execution import FeeTerms, PaperQuote, parse_aware_time, quote_yes_taker
+from .paper_settlements import load_paper_settlements
 from .risk import RiskPolicy
 
 
@@ -50,6 +51,7 @@ class PaperVenue(Protocol):
 
 class PaperResearchStore:
     def __init__(self, path: str = "data/noema.db") -> None:
+        self.path = path
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db)
@@ -121,44 +123,28 @@ class PaperResearchStore:
         self.conn.commit()
         return cursor.rowcount == 1
 
-    def audit(self) -> dict[str, object]:
-        observed = self.conn.execute("SELECT COUNT(*), SUM(selected) FROM paper_quotes").fetchone()
-        try:
-            rows = self.conn.execute("""
-                SELECT q.venue, q.market_id, q.quoted_at, q.quote_json,
-                       o.outcome_yes, o.resolved_at, o.first_seen_at
-                FROM paper_quotes q JOIN outcomes o
-                  ON q.venue = o.venue AND q.market_id = o.market_id
-                WHERE q.selected = 1 ORDER BY q.quoted_at, q.id
-            """).fetchall()
-        except sqlite3.OperationalError:
-            rows = []
-        pnl: list[tuple[str, Decimal]] = []
-        for venue, ticker, quoted, serialized, outcome, settled, first_seen in rows:
-            try:
-                quote_time = parse_aware_time(quoted)
-                if (parse_aware_time(settled) <= quote_time
-                        or parse_aware_time(first_seen) <= quote_time):
-                    continue
-                quote = json.loads(serialized)
-                earned = Decimal(str(outcome)) * Decimal(quote["contracts"])
-                debit = Decimal(quote["total_debit_usd"])
-            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
-                continue
-            pnl.append((f"{venue}:{ticker.rsplit('-', 1)[0]}", earned - debit))
-        event_pnl: dict[str, Decimal] = {}
-        for event, amount in pnl:
-            event_pnl[event] = event_pnl.get(event, Decimal(0)) + amount
-        total = sum((amount for _, amount in pnl), Decimal(0))
+    def audit(self, *, now: datetime | None = None) -> dict[str, object]:
+        audit = load_paper_settlements(self.path, now=now)
+        event_pnl: dict[tuple[str, str], Decimal] = {}
+        for settled in audit.settlements:
+            event_pnl[settled.event_id] = (
+                event_pnl.get(settled.event_id, Decimal(0)) + settled.net_pnl_usd
+            )
+        total = sum(event_pnl.values(), Decimal(0))
         return {
-            "status": "no_settled_paper_quotes" if not pnl else "research_only",
-            "observed_quote_count": observed[0],
-            "selected_quote_count": observed[1] or 0,
-            "market_count": len(pnl), "event_count": len(event_pnl),
+            "status": "no_settled_paper_quotes" if not audit.settlements else "research_only",
+            "model_version": MODEL_VERSION,
+            "observed_quote_count": audit.observed_quote_count,
+            "selected_quote_count": audit.selected_quote_count,
+            "duplicate_quote_count": audit.duplicate_quote_count,
+            "invalid_quote_count": audit.invalid_quote_count,
+            "pending_quote_count": audit.pending_quote_count,
+            "market_count": len(audit.settlements), "event_count": len(event_pnl),
             "net_pnl_usd": str(total),
             "mean_net_pnl_per_event_usd": str(total / len(event_pnl)) if event_pnl else None,
             "live_eligible": False,
-            "assumption": "Hypothetical instantaneous full fills at recorded orderbook depth; latency and competing orders not measured",
+            "assumption": "Hypothetical instantaneous full fills at recorded orderbook depth; "
+                          "latency and competing orders not measured; operating costs excluded",
         }
 
 

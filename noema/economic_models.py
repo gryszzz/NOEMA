@@ -34,6 +34,8 @@ class EconomicSnapshot:
     research_budget_usd: Decimal
     infrastructure_budget_usd: Decimal
     treasury_sweep_usd: Decimal
+    # None marks legacy snapshots; accounting derives a conservative opening floor.
+    realized_profit_high_water_usd: Decimal | None = None
 
 
 @dataclass(frozen=True)

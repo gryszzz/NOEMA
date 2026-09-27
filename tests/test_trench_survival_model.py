@@ -1,11 +1,19 @@
+import json
+import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from noema.trench_survival_model import (
     MODEL_VERSION,
     TrenchSurvivalExample,
+    _fingerprint,
     audit_examples,
     fit_logistic,
+    load_verified_examples,
     predict_survival,
+    vectorize_example,
 )
 
 
@@ -70,7 +78,131 @@ def test_walk_forward_survival_audit_beats_constant_baseline_on_signal() -> None
     assert audit.model_brier < audit.baseline_brier
     assert audit.paper_forecast_eligible is True
     assert audit.live_eligible is False
-    assert audit.weights is not None
+
+
+def test_replaying_candidates_cannot_satisfy_sample_gate() -> None:
+    rows = [example(index, index % 2) for index in range(20)]
+    audit = audit_examples(rows * 5, min_train=15, min_test=10)
+    assert audit.status == "insufficient_forward_labels"
+    assert audit.total_labels == 20
+    assert audit.walk_forward_tests == 0
+    assert audit.paper_forecast_eligible is False
+
+
+def test_conflicting_candidate_evidence_is_rejected() -> None:
+    row = example(0, 0)
+    with pytest.raises(ValueError, match="conflicting"):
+        audit_examples([row, replace(row, survived=1)])
+
+
+def test_labels_unavailable_at_forecast_time_are_purged() -> None:
+    rows = [
+        replace(example(index, index % 2), label_observed_at=example(100, 1).captured_at)
+        for index in range(6)
+    ]
+    audit = audit_examples(rows, min_train=2, min_test=2)
+    assert audit.walk_forward_tests == 0
+    assert audit.status == "insufficient_walk_forward_tests"
+
+
+@pytest.mark.parametrize("field", ["return_fraction", "organic_score"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_non_finite_feature_cannot_be_clipped_into_apparent_signal(field, value) -> None:
+    row = example(0, 0)
+    with pytest.raises(ValueError, match="non-finite"):
+        vectorize_example(replace(row, features={**row.features, field: value}))
+
+
+def test_audit_cache_identity_includes_features_control_and_capture_time() -> None:
+    row = example(0, 0)
+    fingerprint = _fingerprint([row])
+    for changed in (
+        replace(row, features={**row.features, "return_fraction": 0.1}),
+        replace(row, control={**row.control, "mint_authority_present": False}),
+        replace(row, captured_at=row.captured_at - timedelta(seconds=1)),
+    ):
+        assert _fingerprint([changed]) != fingerprint
+    assert _fingerprint([row, example(1, 1)]) == _fingerprint([example(1, 1), row])
+
+
+@pytest.fixture
+def survival_db(tmp_path):
+    path = str(tmp_path / "survival.db")
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE trench_candidates (
+            candidate_id TEXT, token_mint TEXT, captured_at TEXT,
+            reference_liquidity_usd REAL, assessment_json TEXT
+        );
+        CREATE TABLE trench_observations (
+            mint TEXT, horizon_seconds INTEGER, scheduled_at TEXT, observed_at TEXT,
+            tick_json TEXT, control_json TEXT
+        );
+        CREATE TABLE trench_counterfactuals (
+            candidate_id TEXT, horizon_seconds INTEGER, max_drawdown_fraction REAL,
+            observed_at TEXT
+        );
+    """)
+    row = example(0, 1)
+    captured = row.captured_at.isoformat()
+    observed = row.label_observed_at.isoformat()
+    conn.execute(
+        "INSERT INTO trench_candidates VALUES (?, 'mint', ?, 100, ?)",
+        (row.candidate_id, captured, json.dumps({"features": row.features})),
+    )
+    control = json.dumps(row.control)
+    tick = json.dumps({"price_usd": 1, "liquidity_usd": 100})
+    conn.execute(
+        "INSERT INTO trench_observations VALUES ('mint', 300, ?, ?, ?, ?)",
+        (captured, captured, tick, control),
+    )
+    conn.execute(
+        "INSERT INTO trench_observations VALUES ('mint', 3600, ?, ?, ?, ?)",
+        ((row.captured_at + timedelta(seconds=3300)).isoformat(), observed, tick, control),
+    )
+    conn.execute(
+        "INSERT INTO trench_counterfactuals VALUES (?, 3600, 0.1, ?)",
+        (row.candidate_id, observed),
+    )
+    conn.commit()
+    yield path, conn
+    conn.close()
+
+
+def test_loader_requires_matching_feature_and_label_evidence(survival_db) -> None:
+    path, _ = survival_db
+    rows = load_verified_examples(path)
+    assert len(rows) == 1
+    assert rows[0].survived == 1
+
+
+@pytest.mark.parametrize("change", [
+    ("UPDATE trench_observations SET observed_at='2026-01-01T00:01:00+00:00' "
+    "WHERE horizon_seconds=300"),
+    ("UPDATE trench_observations SET scheduled_at='2026-01-01T02:00:00+00:00' "
+    "WHERE horizon_seconds=3600"),
+    "UPDATE trench_counterfactuals SET observed_at='2026-01-01T02:00:00+00:00'",
+    "UPDATE trench_observations SET tick_json='{}' WHERE horizon_seconds=3600",
+    "UPDATE trench_counterfactuals SET max_drawdown_fraction=2",
+    "UPDATE trench_observations SET control_json='{}' WHERE horizon_seconds=3600",
+])
+def test_loader_rejects_temporal_leakage_and_incomplete_outcomes(survival_db, change) -> None:
+    path, conn = survival_db
+    conn.execute(change)
+    conn.commit()
+    assert load_verified_examples(path) == []
+
+
+def test_later_assessment_cannot_replace_an_unlabelled_first_candidate(survival_db) -> None:
+    path, conn = survival_db
+    conn.execute("""
+        INSERT INTO trench_candidates
+        SELECT 'earliest', token_mint, '2025-12-31T23:59:00+00:00',
+               reference_liquidity_usd, assessment_json
+        FROM trench_candidates
+    """)
+    conn.commit()
+    assert load_verified_examples(path) == []
 
 
 def test_survival_audit_refuses_small_samples() -> None:

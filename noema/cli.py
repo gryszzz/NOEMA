@@ -18,6 +18,7 @@ from .doctor import doctor_report
 from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
 from .economic_ledger import EconomicLedger
+from .economic_measurement import build_economic_measurement
 from .ecosystem_dashboard import build_ecosystem_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .ladder import build_ladder_report
@@ -291,6 +292,9 @@ def main() -> None:
     economy_show = sub.add_parser("economy-show")
     economy_show.add_argument("--db", default="data/noema.db")
 
+    economics_report = sub.add_parser("economics-report")
+    economics_report.add_argument("--db", default="data/noema.db")
+
     ecosystem_show = sub.add_parser("ecosystem-show")
     ecosystem_show.add_argument("--db", default="data/noema.db")
 
@@ -373,6 +377,8 @@ def main() -> None:
         _economy_init(args.db, args.capital)
     elif args.command == "economy-show":
         _economy_show(args.db)
+    elif args.command == "economics-report":
+        print(json.dumps(build_economic_measurement(args.db), sort_keys=True, allow_nan=False))
     elif args.command == "ecosystem-show":
         _ecosystem_show(args.db)
     elif args.command == "trench-once":
