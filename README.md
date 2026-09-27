@@ -156,6 +156,13 @@ A successful audit can unlock future paper forecasts, never live execution.
 
 Inspect with `noema trench-model-audit`.
 
+## Measure economic value
+
+`noema economics-report` separates recorded net cash, estimated model exposure,
+and hypothetical paper returns. Missing reconciliation and full cost attribution
+leave economic profit unknown. The same measurement appears in the Ops Console.
+See [economic integrity and remaining evidence gates](docs/economic-integrity.md).
+
 ## Keep the project affordable
 
 The repository's `render.yaml` defines **one paid paper worker with a persistent

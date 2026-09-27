@@ -46,7 +46,11 @@ Those percentages are bookkeeping defaults, not recommended investment allocatio
 
 ## High-water accounting
 
-Only equity above the previous economic high-water mark is treated as newly allocatable profit.
+Allocatable profit is bounded by three amounts: equity above its allocation
+high-water mark, realized net P&L above its realized-profit allocation watermark,
+and equity not already earmarked. Unrealized gains and capital funding alone do
+not create allocatable profit. These are internal planning values, not reconciled
+proof of cash. See [economic integrity](economic-integrity.md).
 
 Example:
 
@@ -67,7 +71,7 @@ Default planned waterfall:
 10% treasury sweep
 ```
 
-The waterfall is a **plan first**. Applying the plan updates earmarks and advances the high-water mark so the same profit cannot be allocated twice.
+The waterfall is a **plan first**. Applying the plan updates earmarks and advances both allocation watermarks by the allocated amount so the same profit cannot be allocated twice.
 
 ## Operating expenses
 

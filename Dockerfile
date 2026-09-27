@@ -14,4 +14,4 @@ RUN mkdir -p /data
 
 ENV NOEMA_DB_PATH=/data/noema.db
 
-CMD ["python", "-m", "noema.worker_entry"]
+CMD ["noema-agent"]

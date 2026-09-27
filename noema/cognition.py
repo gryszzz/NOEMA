@@ -78,19 +78,26 @@ async def maybe_run_cognition(
 
     try:
         body = client.request_body(target, evidence_context=context)
-        instructions = str(body["instructions"])
-        inputs = str(body["input"])
+        # Include structured-output schema and request framing, not only prose.
+        # UTF-8 bytes plus a framing allowance conservatively estimate input tokens.
+        estimated_input_tokens = len(json.dumps(body, ensure_ascii=False).encode("utf-8")) + 256
         max_cost = policy.estimated_max_call_usd(
-            input_bytes=len((instructions + inputs).encode("utf-8")),
+            input_bytes=estimated_input_tokens,
             max_output_tokens=config.max_output_tokens,
         )
         if not store.reserve_estimated_cost(
             max_cost, daily_limit_usd=policy.max_estimated_usd_per_day,
             hourly_call_limit=policy.max_calls_per_hour,
             monthly_limit_usd=monthly_model_budget,
+            estimated_tokens=estimated_input_tokens + config.max_output_tokens,
+            hourly_token_limit=policy.max_tokens_per_hour,
+            market_id=target.market_id,
+            cooldown_seconds=policy.cooldown_seconds,
         ):
             await client.close()
-            return CognitionResult("idle", detail="model call or daily estimated budget exhausted")
+            return CognitionResult(
+                "idle", detail="model call, token, cost budget or market cooldown exhausted"
+            )
     except (ValueError, KeyError, TypeError):
         await client.close()
         return CognitionResult("idle", detail="model price or daily budget unavailable")
@@ -117,14 +124,17 @@ async def maybe_run_cognition(
     if result.packet is None:
         return CognitionResult("degraded", detail="Foundry returned no packet")
 
-    store.append(
-        deployment=str(config.deployment),
-        packet=result.packet,
-        response_id=result.detail,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        total_tokens=result.total_tokens,
-    )
+    try:
+        store.append(
+            deployment=str(config.deployment),
+            packet=result.packet,
+            response_id=result.detail,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            total_tokens=result.total_tokens,
+        )
+    except (ValueError, sqlite3.Error):
+        return CognitionResult("degraded", detail="model usage or result persistence invalid")
 
     queue = ResearchQueueStore(db_path)
     for request in result.packet.requested_research:

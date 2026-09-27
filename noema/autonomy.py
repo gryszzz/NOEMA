@@ -34,8 +34,8 @@ def earned_autonomy(
         and evidence.after_cost_return > 0
         and evidence.max_drawdown_fraction <= Decimal("0.05")
         and (
-            evidence.calibration_error is None
-            or evidence.calibration_error <= Decimal("0.08")
+            evidence.calibration_error is not None
+            and evidence.calibration_error <= Decimal("0.08")
         )
         and evidence.reconciliation_ok_fraction >= Decimal("0.995")
     )
@@ -51,8 +51,8 @@ def earned_autonomy(
         and evidence.after_cost_return > Decimal("0.02")
         and evidence.max_drawdown_fraction <= Decimal("0.05")
         and (
-            evidence.calibration_error is None
-            or evidence.calibration_error <= Decimal("0.05")
+            evidence.calibration_error is not None
+            and evidence.calibration_error <= Decimal("0.05")
         )
         and evidence.reconciliation_ok_fraction >= Decimal("0.999")
     )

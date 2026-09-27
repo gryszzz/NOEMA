@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import pytest
+
 from noema.specialist_evolution import (
     SpecialistEvidence,
     evolve_specialist,
@@ -129,3 +133,22 @@ def test_quarantine_requires_repeated_clean_reviews_to_recover() -> None:
     assert third.next_state is SpecialistState.PAPER
     assert third.promoted is True
     assert third.demoted is False
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("field", [
+    "brier", "market_baseline_brier", "after_cost_return",
+    "max_drawdown_fraction", "calibration_error",
+    "probability_backtest_overfit", "probabilistic_sharpe",
+])
+def test_non_finite_evidence_cannot_pass_quality_gates(field, value) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        replace(strong_evidence(), **{field: value})
+
+
+@pytest.mark.parametrize("resolved", [True, 30.5, float("nan"), -1])
+def test_resolved_requires_an_actual_count(resolved) -> None:
+    with pytest.raises(ValueError, match="integer"):
+        replace(strong_evidence(), resolved=resolved)
+
+import pytest

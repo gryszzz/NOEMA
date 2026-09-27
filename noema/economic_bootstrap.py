@@ -20,16 +20,16 @@ def bootstrap_economy(
     policy: BootstrapPolicy | None = None,
 ) -> EconomicSnapshot:
     policy = policy or BootstrapPolicy()
-    if starting_capital_usd <= 0:
-        raise ValueError("starting capital must be positive")
+    if not starting_capital_usd.is_finite() or starting_capital_usd <= 0:
+        raise ValueError("starting capital must be positive and finite")
 
     fractions = (
         policy.reserve_fraction,
         policy.strategy_fraction,
         policy.research_fraction,
     )
-    if any(fraction < 0 for fraction in fractions):
-        raise ValueError("bootstrap fractions must be non-negative")
+    if any(not fraction.is_finite() or fraction < 0 for fraction in fractions):
+        raise ValueError("bootstrap fractions must be finite and non-negative")
     if sum(fractions, Decimal(0)) != Decimal(1):
         raise ValueError("bootstrap fractions must sum to 1")
 
@@ -43,6 +43,7 @@ def bootstrap_economy(
         research_budget_usd=starting_capital_usd * policy.research_fraction,
         infrastructure_budget_usd=Decimal(0),
         treasury_sweep_usd=Decimal(0),
+        realized_profit_high_water_usd=Decimal(0),
     )
     validate_snapshot(snapshot)
     return snapshot

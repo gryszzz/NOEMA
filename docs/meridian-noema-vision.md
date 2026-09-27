@@ -45,8 +45,10 @@ Acceptance: TypeScript export -> Python CLI -> TypeScript import; Unicode hash
 agreement; corrupted/mismatched packets rejected; media and stale-cache labels
 preserved; no model calls, network requests, wallet access, or forecast writes.
 
-This is a file handoff, not an autonomous investigation. The UI session must remain
-open. The first review explicitly leaves the question unanswered by new collection.
+This is a file handoff, not an autonomous investigation. The UI stores bounded
+handoffs on this device and revalidates them after reload;
+downloaded requests can also be restored. This is packet recovery, not durable
+job execution. The first review leaves the question unanswered by new collection.
 See `meridian-noema-contract.md` for the transfer contract and limitations.
 
 ### 2. Durable research jobs
@@ -87,7 +89,7 @@ loading, failure, empty, and stale states receive GUI smoke checks.
 
 ### 5. Prospective learning
 
-Build on NOEMA's existing paper-research work (draft PR #21 at planning time).
+Build on NOEMA's merged paper-research work (PR #21).
 Do not duplicate its settlement, fee, or paper-quote changes. Add independent domain
 models only with timestamp-correct inputs, resolution-rule checks, versioned
 features, same-snapshot baseline comparisons, and later resolved outcomes.

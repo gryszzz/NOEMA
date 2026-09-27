@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .evaluation import expected_calibration_error, score_forecast
+from .trench_collector import horizon_lateness_seconds
 
 MODEL_VERSION = "trench-survival-logistic-v1"
+AUDIT_VERSION = "trench-survival-audit-v2"
 MIN_TRAIN_LABELS = 50
 MIN_TEST_LABELS = 20
 ONE_HOUR_SECONDS = 3600
@@ -24,6 +26,16 @@ class TrenchSurvivalExample:
     features: dict[str, object]
     control: dict[str, object]
     survived: int
+
+    def __post_init__(self) -> None:
+        if not self.candidate_id.strip():
+            raise ValueError("candidate_id is required")
+        if self.captured_at.tzinfo is None or self.label_observed_at.tzinfo is None:
+            raise ValueError("survival timestamps must be timezone-aware")
+        if self.label_observed_at <= self.captured_at:
+            raise ValueError("survival label must follow the feature snapshot")
+        if type(self.survived) is not int or self.survived not in (0, 1):
+            raise ValueError("survived must be 0 or 1")
 
 
 @dataclass(frozen=True)
@@ -88,6 +100,8 @@ FEATURE_NAMES = (
 
 
 def _clip(value: float, low: float, high: float) -> float:
+    if not math.isfinite(value):
+        raise ValueError("non-finite Trench survival feature or parameter")
     return max(low, min(high, value))
 
 
@@ -213,7 +227,10 @@ def fit_logistic(
 ) -> tuple[float, ...]:
     if not examples:
         raise ValueError("training examples required")
-    if l2 < 0 or learning_rate <= 0 or iterations <= 0:
+    if (
+        not math.isfinite(l2) or not math.isfinite(learning_rate)
+        or l2 < 0 or learning_rate <= 0 or iterations <= 0
+    ):
         raise ValueError("invalid logistic training parameters")
 
     matrix = [vectorize_example(example) for example in examples]
@@ -275,8 +292,17 @@ def _survival_label(
     final_control: dict[str, object],
     max_drawdown_fraction: float,
 ) -> int:
-    final_liquidity = float(final_tick.get("liquidity_usd", 0.0))
-    final_price = float(final_tick.get("price_usd", 0.0))
+    final_liquidity = float(final_tick["liquidity_usd"])
+    final_price = float(final_tick["price_usd"])
+    if (
+        not all(math.isfinite(value) for value in (
+            final_liquidity, final_price, reference_liquidity_usd, max_drawdown_fraction,
+        ))
+        or min(final_liquidity, final_price, reference_liquidity_usd) < 0
+        or not 0 <= max_drawdown_fraction <= 1
+        or type(final_control.get("suspicious_flag")) is not bool
+    ):
+        raise ValueError("invalid survival outcome evidence")
     liquidity_retention = (
         final_liquidity / reference_liquidity_usd
         if reference_liquidity_usd > 0
@@ -298,17 +324,25 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
     try:
         rows = conn.execute(
             """
-            SELECT c.candidate_id, c.captured_at, c.reference_liquidity_usd,
+            WITH first_candidates AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY token_mint ORDER BY julianday(captured_at), candidate_id
+                ) AS assessment_index
+                FROM trench_candidates
+            )
+            SELECT c.candidate_id, c.token_mint, c.captured_at, c.reference_liquidity_usd,
                    c.assessment_json, five.control_json,
                    one.tick_json, one.control_json, one.observed_at,
-                   cf.max_drawdown_fraction
-            FROM trench_candidates c
+                   cf.max_drawdown_fraction, five.observed_at,
+                   one.scheduled_at, cf.observed_at, five.scheduled_at
+            FROM first_candidates c
             JOIN trench_observations five
               ON five.mint = c.token_mint AND five.horizon_seconds = 300
             JOIN trench_observations one
               ON one.mint = c.token_mint AND one.horizon_seconds = ?
             JOIN trench_counterfactuals cf
               ON cf.candidate_id = c.candidate_id AND cf.horizon_seconds = ?
+            WHERE c.assessment_index = 1
             ORDER BY c.captured_at, c.candidate_id
             """,
             (ONE_HOUR_SECONDS, ONE_HOUR_SECONDS),
@@ -319,8 +353,11 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
         conn.close()
 
     examples: list[TrenchSurvivalExample] = []
+    seen_mints: set[str] = set()
+    now = datetime.now(UTC)
     for (
         candidate_id,
+        mint,
         captured_raw,
         reference_liquidity,
         assessment_json,
@@ -329,10 +366,32 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
         final_control_json,
         observed_raw,
         max_drawdown,
+        feature_observed_raw,
+        label_scheduled_raw,
+        counterfactual_observed_raw,
+        feature_scheduled_raw,
     ) in rows:
+        # One preselected assessment per token; repeated assessments are not
+        # independent launches and cannot multiply the evaluation sample.
+        if mint in seen_mints:
+            continue
+        seen_mints.add(mint)
         captured = _aware(captured_raw)
         observed = _aware(observed_raw)
-        if captured is None or observed is None or observed <= captured:
+        feature_observed = _aware(feature_observed_raw)
+        label_scheduled = _aware(label_scheduled_raw)
+        counterfactual_observed = _aware(counterfactual_observed_raw)
+        feature_scheduled = _aware(feature_scheduled_raw)
+        if (
+            captured is None or observed is None or label_scheduled is None
+            or feature_scheduled is None
+            or feature_observed != captured
+            or counterfactual_observed != observed
+            or not captured < label_scheduled <= observed <= now
+            or (label_scheduled - feature_scheduled).total_seconds() != ONE_HOUR_SECONDS - 300
+            or not 0 <= (captured - feature_scheduled).total_seconds() <= horizon_lateness_seconds(300)
+            or (observed - label_scheduled).total_seconds() > horizon_lateness_seconds(ONE_HOUR_SECONDS)
+        ):
             continue
         try:
             assessment = json.loads(str(assessment_json))
@@ -347,14 +406,14 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
             for value in (features, control, final_tick, final_control)
         ):
             continue
-        label = _survival_label(
-            reference_liquidity_usd=float(reference_liquidity),
-            final_tick=final_tick,
-            final_control=final_control,
-            max_drawdown_fraction=float(max_drawdown),
-        )
-        examples.append(
-            TrenchSurvivalExample(
+        try:
+            label = _survival_label(
+                reference_liquidity_usd=float(reference_liquidity),
+                final_tick=final_tick,
+                final_control=final_control,
+                max_drawdown_fraction=float(max_drawdown),
+            )
+            example = TrenchSurvivalExample(
                 candidate_id=str(candidate_id),
                 captured_at=captured,
                 label_observed_at=observed,
@@ -362,7 +421,10 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
                 control=control,
                 survived=label,
             )
-        )
+            vectorize_example(example)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+        examples.append(example)
     return examples
 
 
@@ -375,14 +437,19 @@ def audit_examples(
     if min_train <= 0 or min_test <= 0:
         raise ValueError("minimum sample sizes must be positive")
 
-    ordered = sorted(examples, key=lambda row: (row.captured_at, row.candidate_id))
+    unique: dict[str, TrenchSurvivalExample] = {}
+    for row in examples:
+        if row.candidate_id in unique and row != unique[row.candidate_id]:
+            raise ValueError("conflicting evidence for one survival candidate")
+        unique[row.candidate_id] = row
+    ordered = sorted(unique.values(), key=lambda row: (row.captured_at, row.candidate_id))
     if len(ordered) < min_train + min_test:
         return TrenchSurvivalAudit(
             MODEL_VERSION,
             "insufficient_forward_labels",
             len(ordered),
             min(len(ordered), min_train),
-            max(0, len(ordered) - min_train),
+            0,
         )
 
     scored: list[tuple[float, float, int]] = []
@@ -422,11 +489,7 @@ def audit_examples(
     calibration = expected_calibration_error([(p, y) for p, _, y in scored])
 
     better = model_brier < baseline_brier and model_log < baseline_log
-    final_training = [
-        row
-        for row in ordered
-        if row.label_observed_at <= max(item.label_observed_at for item in ordered)
-    ]
+    final_training = ordered
     final_weights = fit_logistic(final_training)
 
     return TrenchSurvivalAudit(
@@ -448,9 +511,25 @@ def audit_examples(
 
 
 def _fingerprint(examples: list[TrenchSurvivalExample]) -> str:
-    payload = "\n".join(
-        f"{row.candidate_id}:{row.survived}:{row.label_observed_at.isoformat()}"
-        for row in examples
+    # Include the entire learning input and audit contract, not only labels.
+    # A corrected feature, control snapshot or method must invalidate cached weights.
+    payload = json.dumps(
+        {
+            "audit_version": AUDIT_VERSION,
+            "model_version": MODEL_VERSION,
+            "feature_names": FEATURE_NAMES,
+            "min_train": MIN_TRAIN_LABELS,
+            "min_test": MIN_TEST_LABELS,
+            "examples": [
+                {
+                    **asdict(row),
+                    "captured_at": row.captured_at.astimezone(UTC).isoformat(),
+                    "label_observed_at": row.label_observed_at.astimezone(UTC).isoformat(),
+                }
+                for row in sorted(examples, key=lambda row: row.candidate_id)
+            ],
+        },
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -503,9 +582,12 @@ def audit_database(path: str = "data/noema.db") -> TrenchSurvivalAudit:
     examples = load_verified_examples(path)
     fingerprint = _fingerprint(examples)
     store = TrenchSurvivalAuditStore(path)
-    cached = store.get(fingerprint)
-    if cached is not None:
-        return cached
-    audit = audit_examples(examples)
-    store.put(fingerprint, audit)
-    return audit
+    try:
+        cached = store.get(fingerprint)
+        if cached is not None:
+            return cached
+        audit = audit_examples(examples)
+        store.put(fingerprint, audit)
+        return audit
+    finally:
+        store.conn.close()

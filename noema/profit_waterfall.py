@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
+from .economic_accounting import allocatable_realized_profit
 from .economic_models import CapitalBucket, EconomicSnapshot, ProfitAllocation
 
 
@@ -24,12 +25,13 @@ def _validate_policy(policy: ProfitWaterfallPolicy) -> None:
         policy.infrastructure_fraction,
         policy.treasury_sweep_fraction,
     )
-    if any(value < 0 for value in values):
-        raise ValueError("profit fractions must be non-negative")
+    if any(not value.is_finite() or value < 0 for value in values):
+        raise ValueError("profit fractions must be finite and non-negative")
     if sum(values, Decimal(0)) != Decimal(1):
         raise ValueError("profit fractions must sum to 1")
-    if policy.minimum_profit_to_allocate_usd < 0:
-        raise ValueError("minimum profit must be non-negative")
+    if (not policy.minimum_profit_to_allocate_usd.is_finite()
+            or policy.minimum_profit_to_allocate_usd < 0):
+        raise ValueError("minimum profit must be finite and non-negative")
 
 
 def allocate_profit(
@@ -40,10 +42,7 @@ def allocate_profit(
     policy = policy or ProfitWaterfallPolicy()
     _validate_policy(policy)
 
-    profit = max(
-        Decimal(0),
-        snapshot.current_equity_usd - snapshot.high_water_equity_usd,
-    )
+    profit = allocatable_realized_profit(snapshot)
     if profit < policy.minimum_profit_to_allocate_usd:
         profit = Decimal(0)
 
@@ -58,7 +57,8 @@ def allocate_profit(
     allocations: dict[CapitalBucket, Decimal] = {}
     assigned = Decimal(0)
     for bucket in buckets[:-1]:
-        amount = (profit * fractions[bucket]).quantize(Decimal("0.01"))
+        # Rounding down ensures early buckets cannot create a negative remainder.
+        amount = (profit * fractions[bucket]).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         allocations[bucket] = amount
         assigned += amount
     allocations[buckets[-1]] = profit - assigned

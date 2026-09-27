@@ -15,13 +15,23 @@ This contract is mirrored in both repositories. The identical synthetic fixture
    noema-meridian meridian-request.json --output noema-review.json --db /path/to/noema.db
    ```
 
-4. Keep the same Meridian event open and import `noema-review.json`.
+4. Return to the same Meridian event and import `noema-review.json`.
 
 The CLI never overwrites an existing output. Use a new filename or deliberately
 remove your previous output to repeat a transfer. The database audit is idempotent
 for the same request ID and digest; reuse of an ID with changed content is rejected.
-The current UI retains request/review only in memory. Reloading or selecting another
-event requires a new export/review cycle. Durable task recovery is the next phase.
+Meridian saves the latest request/review for each of 12 recent events in this
+browser or desktop app profile, including the original question and excerpt.
+Reloading revalidates both packets before restoring them. A changed live event
+never replaces the frozen excerpt used by a review. Exporting or restoring another
+request replaces that event's saved handoff. Download files for longer retention.
+
+If device storage fails, the panel reports that the handoff remains only in memory.
+Use **Restore an exported request for this event** to recover a downloaded request,
+then import its matching review. **Clear saved device history** removes all saved
+handoffs in this profile; it does not delete downloaded files or NOEMA's audit.
+Device storage is not an authenticated job service, cross-device synchronization,
+or a backup. Durable task execution remains the next phase.
 
 ## Envelope
 

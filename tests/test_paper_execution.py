@@ -155,7 +155,7 @@ async def test_first_quote_is_immutable_and_audit_uses_only_later_settlement(tmp
         resolved_at=later.isoformat(), seen_at=later + timedelta(seconds=1),
         raw={"event_ticker": "KXTEST-EVENT"},
     )
-    report = store.audit()
+    report = store.audit(now=later + timedelta(seconds=2))
     assert report["status"] == "research_only"
     assert report["observed_quote_count"] == report["selected_quote_count"] == 1
     assert report["market_count"] == report["event_count"] == 1

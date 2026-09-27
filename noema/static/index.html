@@ -153,6 +153,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
       </div>
       <div class="small" id="bill-status" style="margin-top:10px">Set the monthly estimate and owner limit with noema bill-config.</div>
       <div class="small">Operator-reported cash entries only. Paper returns and internal capital do not pay invoices. This tracker does not stop provider billing or make payments.</div>
+      <div class="small" id="economic-measurement" style="margin-top:10px">Economic measurement unavailable.</div>
     </div>
 
     <div class="card span12">
@@ -292,6 +293,10 @@ async function refreshAll(){
    const messages={estimate_missing:'Monthly bill estimate missing',over_owner_limit:'Estimated owner exposure exceeds your limit',covered_by_reported_receipts:'Estimated bill covered by reported receipts; verify invoices',within_owner_limit:'Estimated owner exposure within your limit'};
    document.getElementById('bill-status').textContent=bill.month_utc+' UTC · '+(messages[bill.status]||bill.status)+' · owner limit '+(bill.owner_limit_usd===null?'unset':money(bill.owner_limit_usd));
   }catch(e){document.getElementById('bill-status').textContent='Bill tracking unavailable.'}
+  try{
+   const m=await getJSON('/api/economic-measurement');
+   document.getElementById('economic-measurement').textContent=m.month_utc+' UTC · Recorded net cash '+money(m.cash.net_cash_usd)+' · Model reservations '+money(m.operating_estimates.model_reserved_usd)+' (estimates, not additional expenses) · Paper result after execution costs '+money(m.paper.net_after_execution_costs_usd)+' (operating costs excluded) · Full economic profit unknown; self-funding unproven.'+(m.status==='records_invalid'?' Invalid records excluded; investigate before using totals.':'');
+  }catch(e){document.getElementById('economic-measurement').textContent='Economic measurement unavailable.'}
   try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
   try{
    const c=await getJSON('/api/compare');

@@ -56,6 +56,9 @@ def review_specialist(
         success_streak=state.success_streak,
         failure_streak=state.failure_streak,
         policy=policy,
+        fresh_forward_evidence=evidence.resolved > max(
+            profile.resolved, evolution.max_reviewed_resolved(specialist)
+        ),
     )
     updated = apply_evolution(profile, evidence, decision)
     ecosystem.upsert_profile(updated)

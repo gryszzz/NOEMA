@@ -30,7 +30,7 @@ def build_economic_overview(path: str = "data/noema.db") -> dict[str, Any]:
     plan = allocate_profit(snapshot)
     return {
         "snapshot": {
-            key: str(value)
+            key: str(value) if value is not None else None
             for key, value in asdict(snapshot).items()
         },
         "profit_plan": {

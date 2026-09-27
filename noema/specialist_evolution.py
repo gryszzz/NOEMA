@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 from .specialists import SpecialistProfile, SpecialistState
@@ -18,12 +19,26 @@ class SpecialistEvidence:
     probabilistic_sharpe: float | None = None
 
     def __post_init__(self) -> None:
-        if self.resolved < 0:
-            raise ValueError("resolved must be non-negative")
+        if type(self.resolved) is not int or self.resolved < 0:
+            raise ValueError("resolved must be a non-negative integer")
+        if self.research_credible is not None and type(self.research_credible) is not bool:
+            raise ValueError("research_credible must be a boolean or None")
+        for name in (
+            "brier", "market_baseline_brier", "after_cost_return",
+            "max_drawdown_fraction", "calibration_error",
+            "probability_backtest_overfit", "probabilistic_sharpe",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{name} must be finite")
         for name in ("brier", "market_baseline_brier"):
             value = getattr(self, name)
-            if value is not None and value < 0:
-                raise ValueError(f"{name} must be non-negative")
+            if value is not None and not 0 <= value <= 1:
+                raise ValueError(f"{name} must be in [0, 1]")
         for name in (
             "max_drawdown_fraction",
             "calibration_error",
@@ -214,6 +229,7 @@ def evolve_specialist(
     success_streak: int = 0,
     failure_streak: int = 0,
     policy: EvolutionPolicy | None = None,
+    fresh_forward_evidence: bool = True,
 ) -> EvolutionDecision:
     """Update specialist maturity with immediate hard failure and slow promotion.
 
@@ -246,10 +262,10 @@ def evolve_specialist(
     active_failures = _active_quality_failures(evidence, policy)
     active_quality = not active_failures
 
-    if active_quality:
+    if active_quality and fresh_forward_evidence:
         success_streak += 1
         failure_streak = 0
-    else:
+    elif not active_quality:
         failure_streak += 1
         success_streak = 0
 
@@ -257,21 +273,27 @@ def evolve_specialist(
     reasons: list[str] = []
 
     if profile.state is SpecialistState.QUARANTINED:
-        if active_quality and success_streak >= policy.recovery_reviews:
+        if (
+            active_quality and fresh_forward_evidence
+            and success_streak >= policy.recovery_reviews
+        ):
             next_state = SpecialistState.PAPER
             reasons.append("quarantine recovery gate passed; return to paper")
         else:
             reasons.extend(active_failures or ["quarantine recovery review incomplete"])
 
     elif profile.state is SpecialistState.SHADOW:
-        if evidence.resolved >= policy.paper_min_resolved:
+        if fresh_forward_evidence and evidence.resolved >= policy.paper_min_resolved:
             next_state = SpecialistState.PAPER
             reasons.append("minimum forward evidence reached; promote to paper")
         else:
             reasons.append("collecting shadow evidence")
 
     elif profile.state is SpecialistState.PAPER:
-        if active_quality and success_streak >= policy.promote_reviews:
+        if (
+            active_quality and fresh_forward_evidence
+            and success_streak >= policy.promote_reviews
+        ):
             next_state = SpecialistState.ACTIVE_RESEARCH
             reasons.append("repeated active-quality reviews passed")
         else:
@@ -287,6 +309,9 @@ def evolve_specialist(
         else:
             reasons.extend(active_failures)
             reasons.append("soft failure recorded; waiting for hysteresis")
+
+    if active_quality and not fresh_forward_evidence:
+        reasons.append("no newly resolved evidence; promotion streak not advanced")
 
     promoted = (profile.state, next_state) in {
         (SpecialistState.SHADOW, SpecialistState.PAPER),

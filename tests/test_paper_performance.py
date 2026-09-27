@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from noema.history_forecaster import MODEL_VERSION
 from noema.paper_performance import settled_paper_performance
 
 
@@ -18,6 +19,8 @@ def test_settled_paper_performance_tracks_after_cost_return_and_drawdown(tmp_pat
             market_id TEXT,
             selected INTEGER,
             quoted_at TEXT,
+            model_version TEXT,
+            forecast_at TEXT,
             quote_json TEXT
         )
         """
@@ -46,13 +49,15 @@ def test_settled_paper_performance_tracks_after_cost_return_and_drawdown(tmp_pat
         conn.execute(
             """
             INSERT INTO paper_quotes
-            (id, venue, market_id, selected, quoted_at, quote_json)
-            VALUES (?, 'kalshi:demo', ?, 1, ?, ?)
+            (id, venue, market_id, selected, quoted_at, model_version, forecast_at, quote_json)
+            VALUES (?, 'kalshi:demo', ?, 1, ?, ?, ?, ?)
             """,
             (
                 index,
                 ticker,
                 quoted.isoformat(),
+                MODEL_VERSION,
+                (quoted - timedelta(seconds=1)).isoformat(),
                 json.dumps(
                     {
                         "total_debit_usd": str(debit),

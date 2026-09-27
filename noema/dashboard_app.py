@@ -14,6 +14,7 @@ from .cognition_dashboard import build_cognition_overview
 from .dashboard_data import build_overview
 from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
+from .economic_measurement import build_economic_measurement
 from .ecosystem_dashboard import build_ecosystem_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .ladder import build_ladder_report
@@ -75,6 +76,11 @@ async def economy() -> dict[str, Any]:
 @app.get("/api/ecosystem")
 async def ecosystem() -> dict[str, Any]:
     return build_ecosystem_overview(_db_path())
+
+
+@app.get("/api/economic-measurement")
+async def economic_measurement() -> dict[str, Any]:
+    return build_economic_measurement(_db_path())
 
 
 @app.get("/api/bill")
