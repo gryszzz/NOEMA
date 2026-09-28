@@ -106,7 +106,7 @@ try {
       assert.ok(await img.evaluate((el) => el.complete && el.naturalWidth > 0));
     await page.locator(".skip").focus();
     await page.keyboard.press("Enter");
-    assert.equal(new URL(page.url()).hash, "#main");
+    await page.waitForURL((next) => next.hash === "#main");
     await page.goto(url, { waitUntil: "networkidle" });
     if (process.env.QA_SCREENSHOTS) {
       await mkdir(process.env.QA_SCREENSHOTS, { recursive: true });
