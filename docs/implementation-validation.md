@@ -15,7 +15,7 @@ new site and Node tooling from breaking or entering Python distributions.
 ## Evidence
 
 - Ruff: passed.
-- Python: **355 passed**. One existing Starlette/httpx deprecation warning.
+- Python: **360 passed**. One existing Starlette/httpx deprecation warning.
 - Report importer: **20 passed**, including exact arithmetic, scientific notation,
   unsupported financial claims, invalid time/counts, size bounds, and hostile text.
 - Wheel: built with `uv build --wheel`; runtime, venue adapter, and console assets
@@ -35,8 +35,22 @@ new site and Node tooling from breaking or entering Python distributions.
 ## Release boundaries
 
 Pages API returned 404; the site is built and validated, not publicly deployed.
-Merge PR #28 first, then this feature into main; enable Pages Actions and run the
+PR #28 has merged. Merge this feature into main; enable Pages Actions and run the
 workflow. The public importer is unauthenticated and read-only; no runtime data or
 financial authority is published. Full net economic profit remains unknown.
 Docker execution, deployed worker health, and reconciliation were not verified by
 this interface pass. See [production boundaries](production-boundaries.md).
+
+## Operational console follow-up
+
+The main FastAPI console now shows recorded work with no product explanation.
+Existing diagnostics remain at `/detailed`. Added a bounded, column-allowlisted
+read-only operational API, runtime/provider state, seven work record views,
+exact-identity record links, filtering, inspector/backtracking and timed refresh
+with explicit stale retention. Full economic profit remains unknown.
+
+Five new Python regressions verify absent-DB noncreation, byte-for-byte database
+nonmutation, row limits/private JSON exclusion, runtime freshness, corrupt-schema
+handling and routing. Real FastAPI + temporary SQLite + Chromium checks at
+390/768/1024/1440 verify record inspection, Back, safe text, filtering and failure
+retention. The Python wheel includes the new HTML/CSS/module assets.

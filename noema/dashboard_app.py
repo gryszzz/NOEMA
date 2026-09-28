@@ -18,6 +18,7 @@ from .economic_measurement import build_economic_measurement
 from .ecosystem_dashboard import build_ecosystem_overview
 from .kalshi_telemetry import KalshiTelemetry
 from .ladder import build_ladder_report
+from .operations_dashboard import build_operations
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
 from .telemetry_report import build_telemetry_report
@@ -36,6 +37,16 @@ def _db_path() -> str:
 async def index() -> str:
     path = Path(__file__).with_name("static") / "index.html"
     return path.read_text()
+
+
+@app.get("/detailed", response_class=HTMLResponse)
+async def detailed() -> str:
+    return (Path(__file__).with_name("static") / "detailed.html").read_text()
+
+
+@app.get("/api/operations")
+def operations() -> dict[str, Any]:
+    return build_operations(_db_path())
 
 
 @app.get("/api/agent")

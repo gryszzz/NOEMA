@@ -36,4 +36,4 @@ jobs:
       - name: Install browser
         run: npx playwright install --with-deps chromium
       - name: Production browser QA
-        run: npm run site:qa
+        run: npm run site:qa && npm run ops:qa

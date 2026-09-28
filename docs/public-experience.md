@@ -58,3 +58,31 @@ reduced motion; a real Python-generated empty report; rejected financial claims;
 inert hostile text; clear/reload privacy; overflow; assets; errors; and outbound
 requests. Set `QA_SCREENSHOTS` to save viewport screenshots. These are automated
 Chromium checks, not a claim of complete assistive-technology or Safari coverage.
+
+## Operational console
+
+`noema-dashboard` serves work at `/`, with no product explanation, marketing
+navigation or hardcoded capability claims. `/detailed` retains the established
+diagnostics. The separate `site/` Pages build remains the place for explaining
+NOEMA's purpose and architecture.
+
+The main console reads `/api/operations` and `/api/economic-measurement`. Its new
+operational projection opens SQLite in read-only/query-only mode, takes one read
+transaction, selects explicit columns and limits each section to 50 recent rows.
+It never instantiates migration-capable stores. Missing tables, incompatible
+schemas, corrupt databases and absent records are distinguished. Stored runtime
+heartbeats must be nonfuture and no older than 90 seconds to show running.
+
+Queue, specialist, experiment, decision/PASS, review, reservation and recorded
+outcome views support loaded-record filtering, inspection and backtracking.
+Related-record navigation requires matching venue/market, specialist or explicit
+parent trial IDs. Unknown-venue market IDs are not joined. These are operational
+records, not proof of out-of-sample performance or complete experiment accounting.
+
+Snapshots refresh every 30 seconds while the tab is visible. Failed refreshes
+retain prior records with an explicit stale warning. Operational and economic
+snapshots have separate timestamps; they are not one atomic cross-report view.
+No full-profit or self-funding claim is inferred from paper returns or cash entries.
+
+Run `PYTHON=.venv/bin/python npm run ops:qa` to exercise the actual FastAPI/SQLite
+path with a temporary synthetic database and Chromium at four viewport sizes.

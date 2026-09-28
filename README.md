@@ -68,3 +68,8 @@ npm run site:qa
 The public site has no production JavaScript dependencies or private API calls.
 [Pages setup, routes, and browser QA](docs/public-experience.md).
 For the full operational command reference, see the [operator guide](docs/operator-guide.md).
+
+The agent's main console is an operational workspace: queue, specialists,
+experiments, decisions/PASS, reviews, reservations and outcomes. Product
+explanations live only on the separate Pages site. See
+[console and site boundaries](docs/public-experience.md#operational-console).

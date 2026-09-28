@@ -7,8 +7,8 @@ def test_dashboard_root_renders_console() -> None:
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert "NOEMA // OPS" in response.text
-    assert "Paper research" in response.text
+    assert "NOEMA · Operations" in response.text
+    assert "Operational records" in response.text
     assert client.get("/static/brand/noema-face.png").status_code == 200
 
 

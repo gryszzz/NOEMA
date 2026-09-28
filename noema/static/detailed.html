@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NOEMA // OPS</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121923;--panel2:#0f151e;--line:#253142;--text:#e7edf5;--muted:#8795a8;--good:#79e2b3;--warn:#ffd479;--bad:#ff8d8d;--accent:#8fb7ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#080c11,#0d1219 45%,#090d12);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+.shell{max-width:1440px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
+.brand-wrap{display:flex;align-items:center;gap:12px}.brand-face{width:58px;height:58px;object-fit:cover;border:1px solid var(--line);border-radius:12px}.brand{font-size:22px;font-weight:800;letter-spacing:.14em}.sub{color:var(--muted);margin-top:5px}.status{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#111824;padding:6px 9px;border-radius:999px;color:var(--muted)}.pill.good{color:var(--good);border-color:#2a6b55}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}.card{background:rgba(18,25,35,.93);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:110px}.span3{grid-column:span 3}.span4{grid-column:span 4}.span6{grid-column:span 6}.span8{grid-column:span 8}.span12{grid-column:span 12}
+.k{color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}.v{font-size:26px;font-weight:800;margin-top:8px}.small{font-size:12px;color:var(--muted)}.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+h2{font-size:13px;margin:0 0 12px;letter-spacing:.12em;text-transform:uppercase;color:#b7c4d6}.row{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #1d2735;padding:8px 0}.row:first-of-type{border-top:0}.mono{font-variant-numeric:tabular-nums}.bar{height:7px;border-radius:8px;background:#1a2431;overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;background:linear-gradient(90deg,#6ea6ff,#80ddc0);width:0}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #1d2735;font-size:12px}th{color:var(--muted);font-weight:500}.empty{color:var(--muted);padding:20px 0}
+footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(--line);background:#121a25;color:var(--text);padding:7px 10px;border-radius:8px;cursor:pointer}
+@media(max-width:900px){.span3,.span4,.span6,.span8{grid-column:span 12}.shell{padding:12px}.top{flex-direction:column}.v{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div class="brand-wrap">
+      <img class="brand-face" src="/static/brand/noema-face.png" alt="NOEMA face mark">
+      <div><div class="brand">NOEMA // OPS</div>
+      <div class="sub">Observe · Infer · Verify · Act</div></div>
+    </div>
+    <div class="status">
+      <span class="pill" id="agent-pill">AGENT …</span>
+      <span class="pill" id="db-pill">DB …</span>
+      <span class="pill" id="account-pill">ACCOUNT …</span>
+      <button class="refresh" onclick="refreshAll()">REFRESH</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card span12" style="min-height:60px">
+      <b>Paper research</b><span class="small"> · NOEMA gathers market evidence, tests forecasts against later outcomes and reports operating costs. Live execution remains locked.</span>
+    </div>
+    <div class="card span12">
+      <h2>NOEMA Agent Runtime</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
+        <div class="row"><span>State</span><b id="runtime-state">OFFLINE</b></div>
+        <div class="row"><span>Health</span><b id="runtime-health">—</b></div>
+        <div class="row"><span>Active goal</span><b id="runtime-goal">—</b></div>
+        <div class="row"><span>Market data</span><b id="runtime-market">—</b></div>
+        <div class="row"><span>Kalshi account</span><b id="runtime-kalshi">—</b></div>
+        <div class="row"><span>EVM wallet</span><b id="runtime-evm">—</b></div>
+        <div class="row"><span>Foundry cognition</span><b id="runtime-cognition">—</b></div>
+      </div>
+      <div class="small" id="runtime-note" style="margin-top:10px">Start with <code>noema-agent</code>.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Real Life Ladder</h2>
+      <div class="small">Observed progress and the next concrete command. Live capital remains locked.</div>
+      <div id="ladder-steps" class="small">Loading…</div>
+    </div>
+
+    <div class="card span3"><div class="k">Realized P&L</div><div class="v mono" id="pnl">—</div><div class="small">Exchange-reported positions</div></div>
+    <div class="card span3"><div class="k">Fees Paid</div><div class="v mono" id="fees">—</div><div class="small">Observed account fees</div></div>
+    <div class="card span3"><div class="k">Observed Fills</div><div class="v mono" id="fills">—</div><div class="small">Authenticated telemetry</div></div>
+    <div class="card span3"><div class="k">Resolved Markets</div><div class="v mono" id="resolved">0</div><div class="small">Research dataset</div></div>
+
+    <div class="card span4">
+      <h2>Data Health</h2>
+      <div class="row"><span>Snapshots</span><b id="snapshots">0</b></div>
+      <div class="row"><span>Valid fraction</span><b id="valid-frac">—</b></div>
+      <div class="bar"><i id="valid-bar"></i></div>
+      <div class="row"><span>Realtime frames</span><b id="frames">0</b></div>
+      <div class="row"><span>Evidence records</span><b id="evidence">0</b></div>
+    </div>
+
+    <div class="card span4">
+      <h2>Research / Strategy Gate</h2>
+      <div class="row"><span>Forecasts logged</span><b id="forecasts">0</b></div>
+      <div class="row"><span>Mode</span><b class="warn">RESEARCH-FIRST</b></div>
+      <div class="row"><span>Unknown data</span><b>FAIL CLOSED</b></div>
+      <div class="row"><span>Timing rule</span><b>PERSISTENCE + FRESHNESS</b></div>
+      <div class="row"><span>Profit claim</span><b>AFTER-COST ONLY</b></div>
+    </div>
+
+    <div class="card span4">
+      <h2>Microstructure Research</h2>
+      <div class="row"><span>Flow toxicity</span><b>VPIN-LIKE</b></div>
+      <div class="row"><span>Queue crowding</span><b>ENABLED</b></div>
+      <div class="row"><span>Resolution pressure</span><b>ENABLED</b></div>
+      <div class="row"><span>Graph consistency</span><b>ENABLED</b></div>
+      <div class="small" style="margin-top:8px">Research-derived signals are never displayed as exchange facts.</div>
+    </div>
+
+    <div class="card span6">
+      <h2>Model Trust</h2>
+      <div id="trust-table" class="empty">No trust history yet.</div>
+    </div>
+
+    <div class="card span6">
+      <h2>Wallet Topology</h2>
+      <div class="row"><span>Human treasury</span><b id="phantom-state">NOT CONNECTED</b></div>
+      <div class="row"><span>Agent signer</span><b id="agent-signer">DISABLED</b></div>
+      <div class="row"><span>Agent master halt</span><b id="agent-halt" class="warn">ON</b></div>
+      <div class="row"><span>Allowed chains</span><b id="agent-chains">—</b></div>
+      <div class="row"><span>Per-tx cap</span><b id="agent-tx-cap">—</b></div>
+      <div class="row"><span>Daily cap</span><b id="agent-day-cap">—</b></div>
+      <button class="refresh" style="margin-top:10px" onclick="connectPhantom()">CONNECT PHANTOM</button>
+      <div id="phantom-address" class="small" style="margin-top:8px">Client-only connection. NOEMA never receives your seed phrase.</div>
+    </div>
+
+    <div class="card span6">
+      <h2>Execution Reconciliation</h2>
+      <div class="row"><span>Order ↔ fill consistency</span><b id="order-recon">—</b></div>
+      <div class="row"><span>Position ↔ fee consistency</span><b id="fee-recon">—</b></div>
+      <div class="row"><span>Orders observed</span><b id="orders">—</b></div>
+      <div class="row"><span>Positions observed</span><b id="positions">—</b></div>
+      <div id="recon-note" class="small" style="margin-top:8px">Connect demo credentials to populate live read-only telemetry.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Setup Readiness</h2>
+      <div id="doctor-table" class="empty">Run <code>noema setup</code> then <code>noema doctor</code>.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Latest Cognition</h2>
+      <div id="cognition-panel" class="empty">No Foundry cognition packet yet.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Economic OS</h2>
+      <div class="grid" style="grid-template-columns:repeat(12,1fr);gap:10px">
+        <div class="card span3" style="min-height:90px"><div class="k">Autonomy</div><div class="v" id="econ-level">NOT INITIALIZED</div><div class="small" id="econ-transition">No economic review yet.</div></div>
+        <div class="card span3" style="min-height:90px"><div class="k">Economic Equity</div><div class="v mono" id="econ-equity">—</div><div class="small">Internal economic snapshot</div></div>
+        <div class="card span3" style="min-height:90px"><div class="k">High-Water Mark</div><div class="v mono" id="econ-hwm">—</div><div class="small">Only new profit above this is allocatable</div></div>
+        <div class="card span3" style="min-height:90px"><div class="k">New Allocatable Profit</div><div class="v mono" id="econ-profit">—</div><div class="small">Reviewable plan, not an automatic transfer</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:10px" id="econ-buckets">
+        <div class="row"><span>Reserve</span><b id="econ-reserve">—</b></div>
+        <div class="row"><span>Strategy</span><b id="econ-strategy">—</b></div>
+        <div class="row"><span>Research</span><b id="econ-research">—</b></div>
+        <div class="row"><span>Infrastructure</span><b id="econ-infra">—</b></div>
+        <div class="row"><span>Treasury sweep</span><b id="econ-sweep">—</b></div>
+      </div>
+      <div class="small" style="margin-top:10px">Survival capital, strategy capital, R&D, infrastructure and treasury sweep are accounted separately. Promotions are gradual; demotions are immediate.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Operating Bill</h2>
+      <div class="grid" style="grid-template-columns:repeat(12,1fr);gap:10px">
+        <div class="card span3"><div class="k">Monthly estimate</div><div class="v mono" id="bill-estimate">—</div></div>
+        <div class="card span3"><div class="k">Recorded receipts</div><div class="v mono" id="bill-receipts">—</div></div>
+        <div class="card span3"><div class="k">Recorded expenses</div><div class="v mono" id="bill-expenses">—</div></div>
+        <div class="card span3"><div class="k">Uncovered estimate</div><div class="v mono" id="bill-uncovered">—</div></div>
+      </div>
+      <div class="small" id="bill-status" style="margin-top:10px">Set the monthly estimate and owner limit with noema bill-config.</div>
+      <div class="small">Operator-reported cash entries only. Paper returns and internal capital do not pay invoices. This tracker does not stop provider billing or make payments.</div>
+      <div class="small" id="economic-measurement" style="margin-top:10px">Economic measurement unavailable.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Research Attention Radar</h2>
+      <div class="small" style="margin-bottom:8px">Attention score is research triage, not a trade instruction. Political/election-like markets are not automatically scored.</div>
+      <div id="radar-table" class="empty">No forecast ledger rows yet.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Independent Forecast Check</h2>
+      <div id="comparison-panel" class="small">Waiting for resolved, paired markets.</div>
+    </div>
+
+    <div class="card span12">
+      <h2>Observed Execution</h2>
+      <div id="exec-table" class="empty">No authenticated telemetry loaded.</div>
+    </div>
+  </div>
+  <footer>NOEMA OPS separates observed exchange data from research-derived analytics. No displayed signal is a guarantee of profitability.</footer>
+</div>
+<script>
+const money=x=>x===null||x===undefined?'—':'$'+Number(x).toFixed(2);
+const pct=x=>x===null||x===undefined?'—':(Number(x)*100).toFixed(1)+'%';
+const esc=x=>String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+async function getJSON(url){const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(await r.text());return r.json()}
+function renderTrust(rows){
+ const el=document.getElementById('trust-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No trust history yet.';return}
+ el.className='';el.innerHTML='<table><thead><tr><th>MODEL</th><th>RESOLVED</th><th>LOG WEIGHT</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.model_name)+'</td><td>'+esc(r.resolved)+'</td><td>'+Number(r.log_weight).toFixed(3)+'</td></tr>').join('')+'</tbody></table>'
+}
+function renderRadar(rows){
+ const el=document.getElementById('radar-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No forecast ledger rows yet.';return}
+ el.className='';
+ el.innerHTML='<table><thead><tr><th>MARKET</th><th>MODEL</th><th>P(YES)</th><th>MKT</th><th>ASK</th><th>ROBUST EDGE</th><th>SPREAD</th><th>LIQUIDITY</th><th>FRESH</th><th>UNCERTAINTY</th><th>ATTN</th><th>DECISION</th></tr></thead><tbody>'+rows.slice(0,50).map(r=>{const details='<details><summary>'+esc(r.title)+'</summary><div class="small" style="margin-top:7px"><b>Raw edge:</b> '+pct(r.raw_edge)+' &nbsp; <b>Estimated cost:</b> '+pct(r.estimated_cost)+' &nbsp; <b>Uncertainty penalty:</b> '+pct(r.uncertainty_penalty)+'<br><b>Evidence:</b> '+((r.evidence_ids&&r.evidence_ids.length)?r.evidence_ids.map(esc).join(', '):'none recorded')+'<br><b>Why NOEMA '+(String(r.decision).includes('pass')?'passed':'is watching')+':</b> '+esc(r.reason||'no reason recorded')+'</div></details>';return '<tr><td>'+details+'</td><td>'+esc(r.model_version)+'</td><td>'+pct(r.probability_yes)+'</td><td>'+pct(r.market_probability)+'</td><td>'+(r.yes_ask==null?'—':Number(r.yes_ask).toFixed(3))+'</td><td>'+pct(r.robust_edge)+'</td><td>'+(r.spread==null?'—':pct(r.spread))+'</td><td>'+(r.liquidity_usd==null?'—':money(r.liquidity_usd))+'</td><td>'+Math.round(r.freshness_seconds)+'s</td><td>'+pct(r.uncertainty_width)+'</td><td>'+(r.attention_score==null?'SUPPRESSED':Number(r.attention_score).toFixed(2))+'</td><td>'+esc(r.decision)+'</td></tr>'}).join('')+'</tbody></table>'
+}
+async function connectPhantom(){
+ try{
+  const provider=window.phantom?.solana;
+  if(!provider||!provider.isPhantom){document.getElementById('phantom-address').textContent='Phantom extension/provider not detected.';return}
+  const result=await provider.connect();
+  const address=result.publicKey?.toString()||'connected';
+  document.getElementById('phantom-state').textContent='CONNECTED';
+  document.getElementById('phantom-state').className='good';
+  document.getElementById('phantom-address').textContent=address;
+ }catch(e){document.getElementById('phantom-address').textContent='Connection cancelled or unavailable.'}
+}
+function renderExec(rows){
+ const el=document.getElementById('exec-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No fills/orders observed yet.';return}
+ el.className='';el.innerHTML='<table><thead><tr><th>ORDER</th><th>FILLED</th><th>REMAINING</th><th>AVG PRICE</th><th>FEES</th><th>MAKER %</th></tr></thead><tbody>'+rows.slice(0,100).map(r=>'<tr><td>'+esc(r.order_id)+'</td><td>'+esc(r.observed_filled_count)+'</td><td>'+esc(r.remaining_count)+'</td><td>'+esc(r.average_fill_price??'—')+'</td><td>'+esc(r.fees_paid??'—')+'</td><td>'+(r.maker_fraction==null?'—':pct(r.maker_fraction))+'</td></tr>').join('')+'</tbody></table>'
+}
+async function refreshAll(){
+ try{
+  try{
+   const a=await getJSON('/api/agent');
+   const cycle=a.last_cycle||{};
+   const show=(id,value)=>{document.getElementById(id).textContent=String(value??'—')};
+   show('agent-pill',a.alive?'AGENT ONLINE':'AGENT OFFLINE');
+   document.getElementById('agent-pill').className='pill '+(a.alive?'good':'warn');
+   show('runtime-state',a.alive?'ONLINE':'OFFLINE');
+   show('runtime-health',cycle.health);
+   show('runtime-goal',cycle.active_goal);
+   show('runtime-market',cycle.market_data?.status);
+   show('runtime-kalshi',cycle.kalshi?.status);
+   show('runtime-evm',cycle.evm_wallet?.status);
+   show('runtime-cognition',cycle.cognition?.status);
+   show('runtime-note',cycle.note||'Run noema agent-once to collect a first cycle.');
+  }catch(e){document.getElementById('agent-pill').textContent='AGENT UNKNOWN'}
+  try{
+   const ladder=await getJSON('/api/ladder');
+   const panel=document.getElementById('ladder-steps');
+   panel.replaceChildren();
+   for(const step of ladder.steps){
+    const row=document.createElement('div');row.className='row';
+    const title=document.createElement('span');title.textContent=step.rung.replaceAll('_',' ');
+    const detail=document.createElement('b');
+    detail.textContent=step.status.toUpperCase()+' · '+step.evidence+(step.next_action?' · Next: '+step.next_action:'');
+    row.append(title,detail);panel.append(row);
+   }
+  }catch(e){document.getElementById('ladder-steps').textContent='Ladder unavailable.'}
+  const o=await getJSON('/api/overview');
+  document.getElementById('db-pill').textContent=o.database_present?'DB ONLINE':'DB EMPTY';
+  document.getElementById('db-pill').className='pill '+(o.database_present?'good':'');
+  document.getElementById('resolved').textContent=o.resolved_markets||0;
+  document.getElementById('forecasts').textContent=o.forecasts||0;
+  document.getElementById('frames').textContent=o.realtime_events||0;
+  document.getElementById('evidence').textContent=o.evidence_records||0;
+  document.getElementById('snapshots').textContent=o.soak?.snapshots||0;
+  const vf=o.soak?.valid_fraction||0;document.getElementById('valid-frac').textContent=pct(vf);document.getElementById('valid-bar').style.width=(vf*100)+'%';
+  renderTrust(o.model_trust);
+  try{
+   const doctor=await getJSON('/api/doctor');
+   const checks=doctor.checks||[];
+   document.getElementById('doctor-table').className='';
+   document.getElementById('doctor-table').innerHTML='<table><thead><tr><th>SYSTEM</th><th>STATUS</th><th>DETAIL</th></tr></thead><tbody>'+checks.map(c=>'<tr><td>'+esc(c.name)+'</td><td>'+esc(String(c.status).toUpperCase())+'</td><td>'+esc(c.detail)+'</td></tr>').join('')+'</tbody></table>';
+  }catch(e){}
+  try{
+   const cognition=await getJSON('/api/cognition');
+   const el=document.getElementById('cognition-panel');
+   if(cognition.latest){
+    const p=cognition.latest.packet;
+    el.className='';
+    el.innerHTML='<div class="row"><span>Deployment</span><b>'+esc(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+esc(cognition.latest.market_id)+'</b></div><div class="row"><span>Mode</span><b>'+esc(p.recommended_mode)+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+esc(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+esc(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+esc(p.thesis)+'<br><b>Unknowns:</b> '+(p.unknowns||[]).map(esc).join('; ')+'</div>';
+   }else{
+    el.className='empty';
+    el.textContent=cognition.configured?'Foundry configured; waiting for an eligible market.':'Foundry not configured yet.';
+   }
+  }catch(e){}
+  try{
+   const econ=await getJSON('/api/economy');
+   const snap=econ.snapshot;
+   const review=econ.latest_review;
+   if(snap){
+    document.getElementById('econ-equity').textContent=money(snap.current_equity_usd);
+    document.getElementById('econ-hwm').textContent=money(snap.high_water_equity_usd);
+    document.getElementById('econ-reserve').textContent=money(snap.reserve_usd);
+    document.getElementById('econ-strategy').textContent=money(snap.strategy_capital_usd);
+    document.getElementById('econ-research').textContent=money(snap.research_budget_usd);
+    document.getElementById('econ-infra').textContent=money(snap.infrastructure_budget_usd);
+    document.getElementById('econ-sweep').textContent=money(snap.treasury_sweep_usd);
+   }
+   if(econ.profit_plan){
+    document.getElementById('econ-profit').textContent=money(econ.profit_plan.profit_above_high_water_usd);
+   }
+   if(review){
+    document.getElementById('econ-level').textContent=String(review.next_level||'unknown').toUpperCase();
+    document.getElementById('econ-transition').textContent=review.transition_reason||'Economic review recorded.';
+   }
+  }catch(e){}
+  try{
+   const bill=await getJSON('/api/bill');
+   if(bill.estimated_monthly_bill_usd!==null)document.getElementById('bill-estimate').textContent=money(bill.estimated_monthly_bill_usd);
+   document.getElementById('bill-receipts').textContent=money(bill.recorded_receipts_usd);
+   document.getElementById('bill-expenses').textContent=money(bill.recorded_expenses_usd);
+   if(bill.uncovered_estimate_usd!==null)document.getElementById('bill-uncovered').textContent=money(bill.uncovered_estimate_usd);
+   const messages={estimate_missing:'Monthly bill estimate missing',over_owner_limit:'Estimated owner exposure exceeds your limit',covered_by_reported_receipts:'Estimated bill covered by reported receipts; verify invoices',within_owner_limit:'Estimated owner exposure within your limit'};
+   document.getElementById('bill-status').textContent=bill.month_utc+' UTC · '+(messages[bill.status]||bill.status)+' · owner limit '+(bill.owner_limit_usd===null?'unset':money(bill.owner_limit_usd));
+  }catch(e){document.getElementById('bill-status').textContent='Bill tracking unavailable.'}
+  try{
+   const m=await getJSON('/api/economic-measurement');
+   document.getElementById('economic-measurement').textContent=m.month_utc+' UTC · Recorded net cash '+money(m.cash.net_cash_usd)+' · Model reservations '+money(m.operating_estimates.model_reserved_usd)+' (estimates, not additional expenses) · Paper result after execution costs '+money(m.paper.net_after_execution_costs_usd)+' (operating costs excluded) · Full economic profit unknown; self-funding unproven.'+(m.status==='records_invalid'?' Invalid records excluded; investigate before using totals.':'');
+  }catch(e){document.getElementById('economic-measurement').textContent='Economic measurement unavailable.'}
+  try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
+  try{
+   const c=await getJSON('/api/compare');
+   document.getElementById('comparison-panel').textContent=c.distinct_resolved_markets+' paired markets in '+c.distinct_resolved_events+' resolved events · candidate Brier '+(c.candidate_brier==null?'—':Number(c.candidate_brier).toFixed(4))+' · market baseline '+(c.market_baseline_brier==null?'—':Number(c.market_baseline_brier).toFixed(4))+' · status '+c.status.toUpperCase()+' · live locked';
+  }catch(e){document.getElementById('comparison-panel').textContent='Comparison unavailable.'}
+  try{
+   const w=await getJSON('/api/wallet-policy');
+   document.getElementById('agent-signer').textContent=String(w.signer_state||'unknown').toUpperCase();
+   document.getElementById('agent-halt').textContent=w.master_halt?'ON':'OFF';
+   document.getElementById('agent-halt').className=w.master_halt?'warn':'good';
+   document.getElementById('agent-chains').textContent=(w.allowed_chains||[]).join(', ')||'none';
+   document.getElementById('agent-tx-cap').textContent=money(w.max_transaction_usd);
+   document.getElementById('agent-day-cap').textContent=money(w.max_daily_notional_usd);
+  }catch(e){}
+ }catch(e){document.getElementById('db-pill').textContent='DB ERROR'}
+ try{
+  const a=await getJSON('/api/live-account');
+  document.getElementById('account-pill').textContent='ACCOUNT READ-ONLY';
+  document.getElementById('account-pill').className='pill good';
+  document.getElementById('fills').textContent=a.fills||0;
+  document.getElementById('orders').textContent=a.orders||0;
+  document.getElementById('positions').textContent=a.positions||0;
+  document.getElementById('order-recon').textContent=a.order_fill_reconciliation?.ok?'OK':'CHECK';
+  document.getElementById('fee-recon').textContent=a.position_fee_reconciliation?.ok?'OK':'CHECK';
+  document.getElementById('pnl').textContent=money(a.realized_pnl);
+  document.getElementById('fees').textContent=money(a.fees_paid);
+  renderExec(a.execution);
+  document.getElementById('recon-note').textContent='Live authenticated telemetry loaded. Read-only.';
+ }catch(e){
+  document.getElementById('account-pill').textContent='ACCOUNT OFFLINE';
+  document.getElementById('pnl').textContent='—';document.getElementById('fees').textContent='—';
+ }
+}
+refreshAll();setInterval(refreshAll,10000);
+</script>
+</body>
+</html>

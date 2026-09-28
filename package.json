@@ -5,7 +5,8 @@
   "scripts": {
     "site:build": "node scripts/build-site.mjs",
     "site:test": "node --test site/*.test.mjs",
-    "site:qa": "node scripts/browser-qa.mjs"
+    "site:qa": "node scripts/browser-qa.mjs",
+    "ops:qa": "node scripts/operations-qa.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
