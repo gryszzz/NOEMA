@@ -9,3 +9,5 @@ data/
 dist/
 build/
 .env.local
+node_modules/
+dist-site/

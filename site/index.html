@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="NOEMA — an evidence-first economic intelligence laboratory. Explore bounded research, evaluation, and the cost of knowing."
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
+    <meta name="theme-color" content="#101416" />
+    <title>NOEMA · Intelligence must earn its resources</title>
+    <link rel="icon" href="./mark.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="masthead">
+      <a href="#" class="brand" aria-label="NOEMA home"
+        ><img src="./mark.svg" alt="" width="32" height="32" /><strong
+          >NOEMA</strong
+        ><span>YSZ / RESEARCH SYSTEMS</span></a
+      >
+      <nav aria-label="Primary">
+        <a href="#method">Method</a><a href="#economics">Economics</a
+        ><a href="#system">System</a><a href="#start">Start →</a>
+      </nav>
+    </header>
+    <main id="main">
+      <div class="environment">
+        <span><i></i> Public explorer</span><span>Runtime: not connected</span
+        ><span>Financial execution: unavailable here</span>
+      </div>
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow">01 / THE ECONOMIC INTELLIGENCE LABORATORY</p>
+          <h1 id="hero-title">
+            Intelligence must<br /><em>earn its resources.</em>
+          </h1>
+          <p class="lede">
+            Observe the world. Challenge an idea. Measure what survives.<br />NOEMA
+            is building an ecosystem of bounded researchers that earns more
+            attention through evidence.
+          </p>
+          <div class="actions">
+            <a class="primary" href="#method"
+              >Explore the research loop <span>↗</span></a
+            ><a href="#economics">Inspect an economics report →</a>
+          </div>
+        </div>
+        <div
+          class="hero-instrument"
+          aria-label="Research loop architecture, explanatory diagram"
+        >
+          <div class="instrument-label">
+            <span>RESEARCH LOOP</span><span>DESIGN / NOT LIVE ACTIVITY</span>
+          </div>
+          <svg viewBox="0 0 440 300" role="img" aria-labelledby="loop-title">
+            <title id="loop-title">
+              Observations feed hypotheses, evidence tests, and evaluation.
+              Results inform the next investigation.
+            </title>
+            <g fill="none" stroke="#31474a">
+              <path d="M80 70H360V230H80Z" />
+              <path d="M80 70L360 230M360 70L80 230" stroke-dasharray="3 7" />
+              <circle cx="220" cy="150" r="62" />
+              <circle cx="220" cy="150" r="91" stroke-dasharray="2 8" />
+            </g>
+            <g fill="#101416" stroke="#7bccc9">
+              <circle cx="80" cy="70" r="7" />
+              <circle cx="360" cy="70" r="7" />
+              <circle cx="360" cy="230" r="7" />
+              <circle cx="80" cy="230" r="7" />
+            </g>
+            <g fill="#bac9c9" font-family="monospace" font-size="11">
+              <text x="42" y="48">OBSERVE</text>
+              <text x="332" y="48">INFER</text>
+              <text x="328" y="261">VERIFY</text>
+              <text x="57" y="261">LEARN</text>
+              <text x="220" y="146" text-anchor="middle" fill="#e6efea">
+                PASS IS
+              </text>
+              <text x="220" y="164" text-anchor="middle" fill="#e6efea">
+                AN OUTCOME
+              </text>
+            </g>
+          </svg>
+          <div class="instrument-foot">
+            <span>Research autonomy</span><span>≠</span
+            ><span>Financial authority</span>
+          </div>
+        </div>
+      </section>
+      <div class="facts">
+        <div>
+          <span>Available today</span><strong>Bounded paper research</strong>
+        </div>
+        <div>
+          <span>Promotion basis</span><strong>New, resolved evidence</strong>
+        </div>
+        <div>
+          <span>Full economic profit</span
+          ><strong class="amber">Unknown</strong>
+        </div>
+        <div>
+          <span>Long-term direction</span><strong>Multiple environments</strong>
+        </div>
+      </div>
+      <section id="method" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">02 / METHOD</p>
+          <h2>A decision is only the beginning.</h2>
+          <p>
+            Every stage leaves a record. Outcomes arrive later. Complexity has
+            to outperform a simpler explanation—and the choice to do nothing.
+          </p>
+        </div>
+        <div
+          class="selector"
+          id="lifecycle"
+          role="group"
+          aria-label="Research lifecycle"
+        >
+          <button data-step="observe" aria-pressed="true">
+            01 <strong>Observe</strong><span>What changed?</span></button
+          ><button data-step="infer" aria-pressed="false">
+            02 <strong>Infer</strong><span>What could it mean?</span></button
+          ><button data-step="verify" aria-pressed="false">
+            03 <strong>Verify</strong
+            ><span>What survives scrutiny?</span></button
+          ><button data-step="act" aria-pressed="false">
+            04 <strong>Act</strong><span>What is permitted?</span>
+          </button>
+        </div>
+        <div class="inspection" id="lifecycle-detail" aria-live="polite"></div>
+      </section>
+      <section id="research" class="section split">
+        <div class="section-heading">
+          <p class="eyebrow">03 / RESEARCH ECOLOGY</p>
+          <h2>Attention is a<br />scarce resource.</h2>
+          <p>
+            Specialists should compete with baselines, challengers, and
+            abstention. Research budgets can evolve without granting access to
+            funds.
+          </p>
+          <a
+            href="https://github.com/gryszzz/NOEMA/blob/main/docs/specialist-evolution.md"
+            >Specialist evaluation contract ↗</a
+          >
+        </div>
+        <div>
+          <div
+            class="research-controls"
+            role="group"
+            aria-label="Specialist lifecycle"
+          >
+            <button data-specialist="challenger" aria-pressed="true">
+              Challenger</button
+            ><button data-specialist="evaluation" aria-pressed="false">
+              Evaluation</button
+            ><button data-specialist="allocation" aria-pressed="false">
+              Allocation</button
+            ><button data-specialist="quarantine" aria-pressed="false">
+              Quarantine
+            </button>
+          </div>
+          <div
+            id="specialist-detail"
+            class="research-detail"
+            aria-live="polite"
+          ></div>
+          <p class="annotation">
+            Policy explanation. No active agents or performance are being
+            represented on this page.
+          </p>
+        </div>
+      </section>
+      <section id="economics" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">04 / ECONOMIC TRUTH</p>
+          <h2>Know what the numbers mean.</h2>
+          <p>
+            Funding is not revenue. Paper profit is not cash. A reservation is
+            not an invoice. Import a report from your own runtime to inspect
+            each category separately.
+          </p>
+        </div>
+        <div class="report-toolbar">
+          <div>
+            <strong id="report-source">No report loaded</strong>
+            <p id="report-period">
+              Read-only · local to this browser tab · never uploaded
+            </p>
+          </div>
+          <div class="actions">
+            <label class="primary file-control"
+              >Import report JSON<input
+                id="report-file"
+                type="file"
+                accept=".json,application/json"
+                aria-label="Import economics report" /></label
+            ><button id="clear-report" disabled>Clear report</button>
+          </div>
+        </div>
+        <p id="report-error" role="alert" hidden></p>
+        <div class="economics-grid">
+          <div class="ledger">
+            <div class="ledger-header">
+              <span>Measurement / USD</span><span>Value</span>
+            </div>
+            <div>
+              <span
+                >Recorded receipts<small
+                  >Operator classification · unreconciled</small
+                ></span
+              ><strong id="receipts">Unknown</strong>
+            </div>
+            <div>
+              <span
+                >Recorded expenses<small
+                  >Recorded cash outflows only</small
+                ></span
+              ><strong id="expenses">Unknown</strong>
+            </div>
+            <div>
+              <span
+                >Net recorded cash<small
+                  >Receipts less expenses · not economic profit</small
+                ></span
+              ><strong id="cash">Unknown</strong>
+            </div>
+            <div>
+              <span
+                >Monthly operating estimate<small
+                  >Not a settled invoice</small
+                ></span
+              ><strong id="estimate">Unknown</strong>
+            </div>
+            <div>
+              <span
+                >Model reservations<small
+                  >Includes failed attempts · not booked expenses</small
+                ></span
+              ><strong id="reserved">Unknown</strong>
+            </div>
+            <div>
+              <span
+                >Paper return after execution costs<small
+                  >Hypothetical fills · excludes operating costs</small
+                ></span
+              ><strong id="paper">Unknown</strong>
+            </div>
+          </div>
+          <aside class="report-boundary">
+            <p class="eyebrow">RECONCILIATION BOUNDARY</p>
+            <h3>Full net economic profit</h3>
+            <p class="unknown">Unknown</p>
+            <p>
+              Self-funding has not been demonstrated by this report contract.
+            </p>
+            <ul id="report-gaps">
+              <li>Provider reconciliation is incomplete.</li>
+              <li>Full activity-level cost attribution is unavailable.</li>
+              <li>Paper returns cannot establish revenue.</li>
+            </ul>
+            <p id="report-quality" class="annotation">
+              Report validation checks structure and accounting consistency. It
+              does not authenticate the originating runtime.
+            </p>
+          </aside>
+        </div>
+        <details>
+          <summary>Generate a report from NOEMA</summary>
+          <pre><code>noema economics-report &gt; economics-report.json</code></pre>
+          <p>
+            Run this in your installed NOEMA environment, then select the JSON
+            file above. The importer keeps values in memory only. A report is a
+            snapshot, not a live connection. Inspect sensitive information
+            before sharing the file.
+          </p>
+        </details>
+      </section>
+      <details class="economic-definitions">
+        <summary>What the report cannot establish</summary>
+        <p>
+          <strong
+            >Owner funding, initial capital, deposits, and transfers:</strong
+          >
+          these are funding movements, not earned revenue. Operator receipt
+          classifications are not independently reconciled to exclude them.
+        </p>
+        <p>
+          <strong>Realized returns:</strong> not established by paper
+          settlements. <strong>Unrealized value:</strong> not realized profit.
+          <strong>Internal allocation:</strong> a resource policy, not an
+          audited balance.
+        </p>
+        <p>
+          <strong>Provider costs:</strong> reservations and estimates are not
+          settled invoices. Full economic profit needs complete, attributed
+          costs and reconciled cash.
+        </p>
+      </details>
+      <section id="evidence" class="section split">
+        <div class="section-heading">
+          <p class="eyebrow">05 / EVIDENCE BEFORE AUTHORITY</p>
+          <h2>Maturity is earned.<br />Authority is granted.</h2>
+          <p>
+            Paper evidence, better calibration, or a successful deployment
+            cannot unlock financial execution on their own.
+          </p>
+        </div>
+        <div class="gates">
+          <details open>
+            <summary><span>01</span> Observe and establish baselines</summary>
+            <p>
+              Collect timestamped public observations. Preserve missing data.
+              Record market consensus and a PASS baseline before claiming
+              independent skill.
+            </p>
+          </details>
+          <details>
+            <summary><span>02</span> Test on later outcomes</summary>
+            <p>
+              Count distinct resolved events, include costs, and evaluate
+              calibration out of sample. Repeatedly scoring the same evidence
+              does not create new evidence.
+            </p>
+          </details>
+          <details>
+            <summary><span>03</span> Allocate bounded research</summary>
+            <p>
+              Only new evidence can support promotion. Failed calls retain
+              reservations. A weak specialist can lose attention or be
+              quarantined.
+            </p>
+          </details>
+          <details>
+            <summary>
+              <span>04</span> Separate authorization gate <b>Locked here</b>
+            </summary>
+            <p>
+              Live-value execution needs explicit authorization, a supported
+              venue adapter, deterministic risk limits, secret isolation,
+              reconciliation, and recovery. This public site provides none of
+              that authority.
+            </p>
+          </details>
+          <a
+            href="https://github.com/gryszzz/NOEMA/blob/main/docs/economic-integrity.md"
+            >Read the current integrity guarantees ↗</a
+          >
+        </div>
+      </section>
+      <section id="trench" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">06 / TRENCH-1</p>
+          <h2>Survival before selection.</h2>
+          <p>
+            A research track for early token survival. Its job is to test
+            whether information available at the decision time distinguishes
+            later outcomes.
+          </p>
+        </div>
+        <ol class="chronology">
+          <li>
+            <span>t₀ / OBSERVATION</span>
+            <h3>Freeze what was knowable</h3>
+            <p>
+              One earliest observation per token. Preserve the information
+              boundary.
+            </p>
+          </li>
+          <li>
+            <span>t₁ / CONTROL</span>
+            <h3>Match the experiment</h3>
+            <p>
+              Compare contemporaneous candidates and controls, not a convenient
+              retrospective sample.
+            </p>
+          </li>
+          <li>
+            <span>t₂ / OUTCOME</span>
+            <h3>Wait for the label</h3>
+            <p>
+              Chronological outcomes, cohort integrity, and walk-forward
+              evidence precede any claim.
+            </p>
+          </li>
+        </ol>
+        <p class="annotation">
+          Research capability, not a token recommendation or demonstrated
+          trading edge.
+          <a href="https://github.com/gryszzz/NOEMA/blob/main/docs/trench-1.md"
+            >Inspect Trench-1 ↗</a
+          >
+        </p>
+      </section>
+      <section id="system" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">07 / SYSTEM BOUNDARIES</p>
+          <h2>One ecosystem. Distinct responsibilities.</h2>
+          <p>
+            Select a component to inspect what it can do, where it runs, and
+            where its authority ends.
+          </p>
+        </div>
+        <div class="architecture">
+          <div
+            class="architecture-nodes"
+            role="group"
+            aria-label="Architecture components"
+          >
+            <button data-node="meridian" aria-pressed="false">
+              <small>WORLD CONTEXT</small>Meridian <span>↗</span></button
+            ><button data-node="research" aria-pressed="true">
+              <small>BOUNDED INVESTIGATION</small>NOEMA research
+              <span>→</span></button
+            ><button data-node="evaluation" aria-pressed="false">
+              <small>OUTCOME AND COST</small>Evaluation <span>↺</span></button
+            ><button data-node="execution" aria-pressed="false">
+              <small>SEPARATE AUTHORITY</small>Execution boundary <span>⊣</span>
+            </button>
+          </div>
+          <div
+            id="architecture-detail"
+            class="architecture-detail"
+            aria-live="polite"
+          ></div>
+        </div>
+      </section>
+      <section id="start" class="section start">
+        <div>
+          <p class="eyebrow">08 / BEGIN WITH EVIDENCE</p>
+          <h2>Run one honest cycle.</h2>
+          <p>
+            The current worker supports public-market paper research.
+            Credentials and paid models are optional for that first cycle.
+          </p>
+          <pre><code>python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+noema agent-once
+noema doctor
+noema ladder</code></pre>
+          <p class="annotation">
+            Python 3.12+ · public API network access required · run from a
+            repository checkout
+          </p>
+        </div>
+        <div class="start-links">
+          <a href="https://github.com/gryszzz/NOEMA"
+            >Clone the repository <span>↗</span></a
+          ><a
+            href="https://github.com/gryszzz/NOEMA/blob/main/docs/quick-connect.md"
+            >Connect the local Ops Console <span>↗</span></a
+          ><a
+            href="https://github.com/gryszzz/NOEMA/blob/main/docs/hosting-paper-agent.md"
+            >Host a persistent paper worker <span>↗</span></a
+          ><a href="https://gryszzz.github.io/Meridian-Intel/"
+            >Explore Meridian <span>↗</span></a
+          ><a href="https://github.com/gryszzz/NOEMA/tree/main/docs"
+            >Engineering documentation <span>↗</span></a
+          >
+          <p>
+            Today: local SQLite records, a paper worker, optional cognition, and
+            portable Meridian review packets. Multi-venue execution, provider
+            reconciliation, and a hosted cross-device investigation service
+            remain unfinished.
+          </p>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <span>YSZ / NOEMA</span>
+      <p>Observe · Infer · Verify · Act</p>
+      <a href="#">Back to top ↑</a>
+    </footer>
+  </body>
+</html>
