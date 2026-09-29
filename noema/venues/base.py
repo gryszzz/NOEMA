@@ -9,6 +9,7 @@ from noema.models import Action, MarketSnapshot
 class VenueAdapter(ABC):
     name: str
     supports_live_execution: bool = False
+    supports_authoritative_reconciliation: bool = False
 
     @abstractmethod
     async def markets(self) -> AsyncIterator[MarketSnapshot]:
