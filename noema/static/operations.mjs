@@ -1339,9 +1339,10 @@ async function refresh() {
   refreshing = true;
   $('refresh').disabled = true;
   const checkProviders = Date.now() - providerHealthAt >= 300000;
-  const [operations, economics, wallets, gateway, trench, stripe, knowledge, providers] = await Promise.allSettled([
+  const [operations, economics, wallets, gateway, trench, stripe, knowledge, providers, runtime] = await Promise.allSettled([
     get('/api/operations'), get('/api/economic-measurement'), get('/api/wallet-status'), get('/api/execution-gateway'), get('/api/trench'), get('/api/stripe-economy'), get('/api/knowledge'),
     checkProviders ? get('/api/provider-health') : Promise.resolve(providerHealth),
+    get('/api/runtime'),
   ]);
   const errors = [];
   if (operations.status === 'fulfilled') {
@@ -1407,6 +1408,19 @@ async function refresh() {
     }
     providerHealthAt = Date.now();
   }
+  if (runtime.status === 'fulfilled' && runtime.value.database_present && runtime.value.snapshot_at) {
+    const source = runtime.value.source === 'worker-sqlite-replica' ? 'WORKER REPLICA' : 'LOCAL DATABASE';
+    const ageSeconds = Number(runtime.value.age_seconds);
+    const age = ageSeconds < 60 ? `${ageSeconds}s ago` : `${Math.floor(ageSeconds / 60)}m ago`;
+    const workerCommit = runtime.value.worker?.worker_commit;
+    const sourceCommit = workerCommit && workerCommit !== 'unknown' ? ` · worker ${workerCommit.slice(0, 7)}` : '';
+    const commit = runtime.value.deployment_commit ? ` · console ${runtime.value.deployment_commit.slice(0, 7)}` : '';
+    $('sync-state').textContent = `${runtime.value.snapshot_stale ? 'STALE ' : ''}${source} · ${age}${sourceCommit}${commit}`;
+    $('sync-state').dataset.state = runtime.value.snapshot_stale ? 'reconnecting' : 'live';
+  } else {
+    $('sync-state').textContent = 'WORKER SNAPSHOT UNAVAILABLE';
+    $('sync-state').dataset.state = 'reconnecting';
+  }
   renderWorld();
   $('error').hidden = errors.length === 0;
   $('error').textContent = errors.join(' ');
@@ -1430,8 +1444,8 @@ function scheduleLiveRefresh() {
 
 const runtimeStream = new EventSource('/api/runtime-stream');
 runtimeStream.addEventListener('ready', () => {
-  $('sync-state').textContent = 'LIVE · COMMIT STREAM';
-  $('sync-state').dataset.state = 'live';
+  if (document.hidden) return;
+  refresh();
 });
 runtimeStream.addEventListener('change', () => {
   if (document.hidden) return;

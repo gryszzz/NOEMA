@@ -214,7 +214,9 @@ def build_provider_health() -> dict[str, Any]:
     }
 
 
-def build_cognition_overview(path: str = "data/noema.db") -> dict[str, Any]:
+def build_cognition_overview(
+    path: str = "data/noema.db", *, probe_runtime: bool = True,
+) -> dict[str, Any]:
     config = cognition_config_from_env()
     store = CognitionStore(path)
     queue = ResearchQueueStore(path)
@@ -241,7 +243,9 @@ def build_cognition_overview(path: str = "data/noema.db") -> dict[str, Any]:
         "latest": store.latest(),
         "pending_research_count": queue.pending_count(),
         "pending_research": [task.__dict__ for task in pending],
-        "runtime_providers": _runtime_providers(config),
+        "runtime_providers": (_runtime_providers(config) if probe_runtime else {
+            "status": "not_probed_by_console",
+        }),
         "hosted_cost_gate": {
             "status": bill_overview["status"],
             "monthly_model_budget_configured": (

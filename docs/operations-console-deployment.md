@@ -1,0 +1,11 @@
+# Operations console deployment
+
+The private operating console runs as the `noema-operations-console` Render web service. Its `/`, `/detailed`, API, and static asset routes require HTTP Basic authentication. `/healthz` reveals only service health. The worker-to-console snapshot route accepts only the worker's generated bearer token. OpenAPI documentation is disabled in the deployed app.
+
+The worker remains the source of truth. It writes its SQLite database to its own persistent disk and publishes a consistent SQLite backup after each cycle over Render's private network. The console verifies the backup with `PRAGMA quick_check`, stores it atomically as a read-only file on its own persistent disk, and serves operational projections from that replica. The console does not write decisions, forecasts, outcomes, wallet intents, or accounting records. A small companion record carries the worker commit and secret-free cognition provider readiness; it contains no credentials. Connectivity remains explicitly unprobed from the console. This is a read-only replica because Render persistent disks belong to one service instance and cannot be mounted by a second service.
+
+Render generates `NOEMA_CONSOLE_SNAPSHOT_TOKEN` for the worker and passes the same value to the console service. Set a strong `NOEMA_CONSOLE_PASSWORD` in the console service's Render environment before opening the URL; `NOEMA_CONSOLE_USERNAME` defaults to `noema-owner`. The app returns `503` on every console route if deployed without both credentials. Keep the password in Render's secret environment configuration, not in the repository.
+
+Home refreshes every 15 seconds and listens for snapshot replacement events. Its status line reports the worker replica age and the console's Render commit; a snapshot older than three worker cycles is marked stale. Diagnostics, topology, forecast decisions, experiments, and economics read the same replicated worker database. Missing snapshots remain visibly unavailable; the console does not insert demo records.
+
+The public explorer remains a static GitHub Pages build from `site/`. It does not call the private console APIs or expose worker records. The operating console and diagnostics are packaged from `noema/static/` for the Render service and local `noema-dashboard` development server.
