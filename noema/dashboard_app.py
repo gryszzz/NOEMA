@@ -191,9 +191,32 @@ async def wallet_status() -> dict[str, Any]:
             if now - float(_wallet_status_cache["fetched_at"]) > 60:
                 _wallet_status_cache["networks"] = await live_wallet_networks()
                 _wallet_status_cache["fetched_at"] = time.monotonic()
+    policy = public_wallet_policy()
+    policy_by_chain = {row["chain"]: row for row in policy.get("wallet_networks", [])}
+    networks = []
+    for cached in _wallet_status_cache["networks"]:
+        row = dict(cached)
+        current = policy_by_chain.get(row.get("chain"), {})
+        # Balance/connection evidence is briefly cached; authority/configuration
+        # flags are recomputed on every request so stale settings cannot appear live.
+        for field in (
+            "signer_configured", "credentials_isolated", "signer_process_enabled", "halted",
+            "mission_authority_present", "live_execution_enabled", "coordinator_wired",
+        ):
+            if field in current:
+                row[field] = current[field]
+        row["signing_enabled"] = False
+        networks.append(row)
     return {
         "as_of_monotonic": _wallet_status_cache["fetched_at"],
-        "networks": _wallet_status_cache["networks"],
+        "control_plane": {
+            "live_execution_enabled": False,
+            "mission_authority_present": False,
+            "coordinator_wired": False,
+            "halted": policy["master_halt"],
+            "status": "SIGNER MAY BE CONFIGURED · LIVE EXECUTION DISABLED · COORDINATOR NOT WIRED",
+        },
+        "networks": networks,
     }
 
 

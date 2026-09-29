@@ -16,6 +16,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;bord
 footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(--line);background:#121a25;color:var(--text);padding:7px 10px;border-radius:8px;cursor:pointer}
 @media(max-width:900px){.span3,.span4,.span6,.span8{grid-column:span 12}.shell{padding:12px}.top{flex-direction:column}.v{font-size:22px}}
 </style>
+<link rel="stylesheet" href="/static/economy-theme.css">
 </head>
 <body>
 <div class="shell">
@@ -26,6 +27,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
       <div class="sub">Detailed diagnostics</div></div>
     </div>
     <div class="status">
+      <a class="refresh" href="/" aria-label="Open the live capability graph">LIVE CAPABILITY GRAPH ↗</a>
       <span class="pill" id="agent-pill">AGENT …</span>
       <span class="pill" id="db-pill">DB …</span>
       <span class="pill" id="account-pill">ACCOUNT …</span>
@@ -201,7 +203,7 @@ function renderWalletNetworks(rows){
   const balance=r.sol??r.native_balance??r.btc??'—';
   const asset=r.chain==='bitcoin'?'BTC':r.chain==='solana'?'SOL':'native';
   const tokens=r.token_status==='unavailable'?'token index unavailable':(r.tokens&&r.tokens.length?r.tokens.length+' token balance(s)':r.token_status==='indexed'?'0 indexed ERC-20 balances':'—');
-  const state=r.status==='unavailable'?'READ FAILED':(r.status||'unknown').replaceAll('_',' ').toUpperCase();
+  const state=(r.status==='unavailable'?'READ FAILED':(r.status||'unknown').replaceAll('_',' ').toUpperCase())+' · '+(r.signer_configured?'SIGNER CONFIGURED':'SIGNER UNCONFIGURED')+' · SECRETS '+(r.credentials_isolated?'ISOLATED':'UNKNOWN')+' · LIVE EXECUTION DISABLED · '+(r.mission_authority_present?'MISSION AUTHORITY PRESENT':'NO MISSION AUTHORITY')+(r.funded?' · FUNDED · UNAUTHORIZED':'');
   const addr=r.address?String(r.address).slice(0,10)+'…'+String(r.address).slice(-6):'—';
   return '<tr><td>'+esc(r.chain)+' / '+esc(r.network)+'</td><td>'+esc(r.chain_id??'—')+'</td><td title="'+esc(r.address||'')+'">'+esc(addr)+'</td><td>'+esc(balance)+' '+asset+'</td><td>'+esc(tokens)+'</td><td>'+esc(state)+'</td></tr>';
  }).join('')+'</tbody></table>';
@@ -350,11 +352,11 @@ async function refreshAll(){
    document.getElementById('agent-halt').textContent=w.master_halt?'ON':'OFF';
    document.getElementById('agent-halt').className=w.master_halt?'warn':'good';
    document.getElementById('agent-chains').textContent=(w.allowed_chains||[]).join(', ')||'none';
-   document.getElementById('agent-tx-cap').textContent=w.delegated_capital_authority?'wallet capital':money(w.max_transaction_usd);
-   document.getElementById('agent-day-cap').textContent=w.delegated_capital_authority?'wallet capital':money(w.max_daily_notional_usd);
+   document.getElementById('agent-tx-cap').textContent=money(w.max_transaction_usd);
+   document.getElementById('agent-day-cap').textContent=money(w.max_daily_notional_usd);
    const ws=await getJSON('/api/wallet-status');
    renderWalletNetworks(ws.networks||[]);
-   document.getElementById('wallet-ledger-state').textContent='Confirmed activity is written to the NOEMA economic ledger when an authorized mission executes. Live signer controls remain owner-held.';
+   document.getElementById('wallet-ledger-state').textContent='Wallet coordinator is not wired to live execution. The signer process hard-denies write operations until canonical mission authority validation is connected.';
   }catch(e){}
  }catch(e){document.getElementById('db-pill').textContent='DB ERROR'}
  try{

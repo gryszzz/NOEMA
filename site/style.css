@@ -790,3 +790,103 @@ footer {
     transition: none !important;
   }
 }
+
+/* Public explorer: the same agent-economy universe, explicitly a static preview. */
+:root {
+  --bg:#070a12; --panel:#0e1727; --line:#293a57; --text:#e9f2ff; --muted:#a7b8d2;
+  --accent:#58f0ce; --amber:#ffc367; --violet:#cf9dff; --blue:#70baff;
+  background:radial-gradient(ellipse at 50% -12%,#172a4b70,transparent 57%),linear-gradient(180deg,#080c16,#070a12 55%,#0a0f1b);
+  color:var(--text);
+}
+body { position:relative; isolation:isolate; }
+body::before {
+  position:fixed; z-index:-1; inset:0; content:""; pointer-events:none;
+  background-image:linear-gradient(#7ba7dc08 1px,transparent 1px),linear-gradient(90deg,#7ba7dc08 1px,transparent 1px);
+  background-size:48px 48px;
+  mask-image:linear-gradient(to bottom,#000 0%,transparent 72%);
+}
+.masthead { border-color:#30415d; }
+.brand strong { color:#f0f6ff; }
+.brand img { filter:drop-shadow(0 0 9px #58f0ce55); }
+.brand span { border-color:#344765; color:#91a7c9; }
+.masthead nav { color:#b3c3dc; }
+.masthead nav a { transition:color .15s; }
+.masthead nav a:hover { color:var(--accent); }
+.environment { border-color:#263752; color:#91a5c3; }
+.environment span:first-child { color:var(--accent); }
+.environment i { border-color:var(--accent); box-shadow:0 0 8px #58f0ce55; }
+h1 { letter-spacing:-.035em; text-shadow:0 8px 35px #70baff13; }
+h1 em { color:var(--accent); text-shadow:0 0 24px #58f0ce18; }
+.lede { color:#b5c6df; }
+.primary { border-color:#6affda; background:linear-gradient(120deg,#58f0ce,#92ffe4); box-shadow:0 9px 30px #58f0ce1e; }
+.primary:hover { background:#b5ffef; }
+.hero-instrument { position:relative; perspective:1000px; overflow:hidden; border-color:#385171; border-radius:4px; background:linear-gradient(145deg,#111d30,#0a1120); box-shadow:0 24px 58px #02050c88,inset 0 1px #e4f0ff10; }
+.hero-instrument::after { position:absolute; right:-80px; bottom:-110px; width:240px; height:240px; border:1px solid #70baff20; border-radius:50%; content:""; pointer-events:none; }
+.hero-instrument svg { transform:rotateX(5deg) rotateY(-4deg) scale(.96); transform-style:preserve-3d; background:radial-gradient(ellipse at 50% 48%,#182947,#0a1120 70%); transition:transform .35s ease; }
+.hero-instrument:hover svg { transform:rotateX(0deg) rotateY(0deg) scale(1); }
+.instrument-label,.instrument-foot { position:relative; z-index:1; padding:13px 15px; color:#a9bbd7; font-size:9px; letter-spacing:.08em; }
+.instrument-label { border-color:#2b3e5c; }
+.instrument-foot { border-color:#2b3e5c; color:#9df7e5; }
+.facts { border-color:#30415d; background:#0d1523aa; }
+.facts div { border-color:#293a57; }
+.facts span { color:#91a7c7; font:10px ui-monospace,monospace; letter-spacing:.08em; text-transform:uppercase; }
+.facts strong { color:#e0ebfa; }
+.section { border-color:#293a57; }
+.eyebrow { color:#9ab1d2; }
+.section-heading h2 { color:#edf4ff; }
+.section-heading p:not(.eyebrow) { color:#aabbd5; }
+.selector { border-color:#354b6c; border-radius:4px; background:#0b1220; perspective:1000px; }
+.selector button { position:relative; border-color:#293a57; color:#a3b6d1; transition:background .18s,transform .18s,color .18s; }
+.selector strong { color:#e4eeff; }
+.selector span { color:#91a6c5; }
+.selector button[aria-pressed="true"] { position:relative; z-index:1; transform:translateZ(8px); background:linear-gradient(145deg,#14263c,#101a2b); box-shadow:inset 0 2px var(--accent),0 12px 28px #02050b55; color:var(--accent); }
+.inspection { border-color:#354b6c; background:linear-gradient(145deg,#111d30,#0b1220); box-shadow:0 18px 45px #02050b66; }
+.inspection h3 { color:#e2edff; }
+.inspection p,.inspection ul { color:#afc1dc; }
+.split { gap:clamp(35px,6vw,80px); }
+.research-controls { border-color:#30415d; }
+.research-controls button { color:#9eb2d0; }
+.research-controls button[aria-pressed="true"] { color:var(--accent); }
+.research-detail { color:#b5c5dd; }
+.annotation { color:#93a8c7; }
+.report-toolbar,.economics-grid,.architecture { border-color:#344a69; border-radius:4px; background:#0d1524; box-shadow:0 16px 38px #02050b55; }
+.report-toolbar button,.file-control { border:1px solid #405b7e; border-radius:3px; background:#122139; color:#c5dbf5; }
+.report-toolbar button:hover { border-color:var(--accent); color:var(--accent); }
+.economics-grid { border-top:0; }
+.ledger { border-color:#293a57; }
+.ledger > div { border-color:#263751; color:#d6e2f2; }
+.ledger .ledger-header { background:#111c2e; color:#9bb0cf; }
+.ledger small { color:#91a5c4; }
+.ledger strong { color:#e9f2ff; }
+.report-boundary { background:linear-gradient(145deg,#111d30,#0a1120); }
+.report-boundary h3 { color:#dce8f8; }
+.report-boundary p,.report-boundary ul { color:#a3b6d1; }
+.unknown { color:var(--amber); text-shadow:0 0 24px #ffc36722; }
+details { border-color:#2c405f; }
+summary { color:#d7e3f3; }
+summary span { color:var(--blue); }
+summary b { color:var(--amber); }
+.chronology li { border-color:var(--blue); }
+.chronology span { color:var(--blue); }
+.chronology h3 { color:#e2edff; }
+.chronology p { color:#a5b8d4; }
+.architecture { overflow:hidden; }
+.architecture-nodes button { border-color:#293a57; color:#d5e2f3; }
+.architecture-nodes small { color:#8fa5c6; }
+.architecture-nodes span { color:var(--accent); }
+.architecture-nodes button[aria-pressed="true"] { background:linear-gradient(145deg,#14263c,#0f1929); box-shadow:inset 0 2px var(--accent); }
+.architecture-detail { background:linear-gradient(145deg,#111d30,#0b1220); }
+.architecture-detail h3 { color:#e4edfc; }
+.architecture-detail p { color:#adbeda; }
+.start-links a { border-color:#2a3d5a; color:#d8e5f7; }
+.start-links a:hover { color:var(--accent); }
+pre { border-color:#2b3f5d; border-radius:3px; background:#0a1120; color:#a2e9ff; }
+footer { border-color:#2b3d58; color:#91a5c3; }
+.skip { border-radius:3px; background:var(--accent); color:#06131a; }
+@media(max-width:780px) {
+  .hero-instrument { transform:none; }
+  .hero-instrument svg { transform:none; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .hero-instrument svg,.selector button { transition:none; transform:none; }
+}
