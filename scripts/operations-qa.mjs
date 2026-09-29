@@ -88,7 +88,18 @@ try {
   await page.getByLabel('Filter loaded records').fill('');
   for(const button of await page.locator('#views button').all()) await button.click();
   assert.equal(await page.locator('header a[href*="github"]').count(),0);
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`overflow at ${width}`);
+  const overflow = await page.evaluate(() => ({
+   scrollWidth: document.documentElement.scrollWidth,
+   elements: [...document.querySelectorAll('body *')].map(node => ({
+    tag: node.tagName, id: node.id, className: typeof node.className === 'string' ? node.className : '',
+    right: Math.round(node.getBoundingClientRect().right), width: Math.round(node.getBoundingClientRect().width),
+    parentWidth: Math.round(node.parentElement?.getBoundingClientRect().width ?? 0),
+    parentTag: node.parentElement?.tagName, parentId: node.parentElement?.id,
+    parentClass: typeof node.parentElement?.className === 'string' ? node.parentElement.className : '',
+    computed: getComputedStyle(node).width, maxWidth: getComputedStyle(node).maxWidth,
+   })).filter(item => item.right > innerWidth + 1).slice(0, 12),
+  }));
+  assert.equal(overflow.scrollWidth>width,false,`overflow at ${width}: ${JSON.stringify(overflow)}`);
   if(process.env.QA_SCREENSHOTS){await mkdir(process.env.QA_SCREENSHOTS,{recursive:true});await page.screenshot({path:join(process.env.QA_SCREENSHOTS,`noema-operations-${width}.png`)});}
   await page.route('**/api/operations',route=>route.fulfill({status:503,body:'unavailable'}));
   await page.getByRole('button',{name:'Refresh live state',exact:true}).click();

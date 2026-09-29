@@ -386,6 +386,34 @@ function renderPredictionVenues(payload) {
   } else {
     root.append(element('p', match?.reason ?? 'No validated cross-venue comparison is available.', 'prediction-match-state'));
   }
+  const identity = payload?.canonical_market_identity ?? {};
+  const coverage = identity.coverage ?? {};
+  const coveragePanel = element('article', undefined, 'prediction-overlap-candidate');
+  coveragePanel.append(
+    element('strong', 'CANONICAL RESOLVER COVERAGE'),
+    element('span', `Slow path: ${coverage.slow_path ?? 'unavailable'} · Fast path: ${coverage.fast_path ?? 'unavailable'}`),
+    element('span', `Verified live overlap observations: ${coverage.verified_live_overlap_count ?? 0} · Identity review remains separate from quote refresh.`),
+    element('span', `Discovery scope: ${coverage.discovery_scope ?? 'not reported'}`),
+  );
+  const registered = (identity.registered_resolvers ?? []).map(item => `${item.topic_id}/${item.proposition_family}`).join(' · ');
+  coveragePanel.append(element('span', `Registered production resolvers: ${registered || 'none'}`));
+  for (const family of identity.proposition_families ?? []) {
+    coveragePanel.append(element('span', `${family.family} · ${family.resolver_status} · venue overlap ${String(family.production_adapter_status ?? 'unknown').replaceAll('_', ' ')}`));
+    if (family.coverage_reason) coveragePanel.append(element('small', family.coverage_reason));
+  }
+  const latestMatch = match?.matches?.[0];
+  if (latestMatch) {
+    const observed = Date.parse(latestMatch.observed_at ?? '');
+    const age = Number.isFinite(observed) ? `${Math.max(0, Math.round((Date.now() - observed) / 1000))}s old` : 'age unknown';
+    coveragePanel.append(
+      element('span', `Latest semantic match: ${latestMatch.canonical_identity?.comparison?.semantic_match ?? 'unverified'} · settlement ${latestMatch.settlement_assessment?.status ?? 'unverified'} · economics ${latestMatch.economic_comparability?.status ?? 'unavailable'} · evidence ${age}`),
+      element('small', coverage.unresolved_reason ?? 'No unresolved candidate reason is available.'),
+    );
+  } else if (coverage.unresolved_reason) {
+    const reasons = (coverage.rejection_reasons ?? []).join(' · ') || coverage.unresolved_reason;
+    coveragePanel.append(element('span', `Unresolved candidates: ${(coverage.unresolved_candidates ?? []).length} · ${reasons}`));
+  }
+  root.append(coveragePanel);
 }
 
 function renderAllocation() {

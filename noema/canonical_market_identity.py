@@ -183,20 +183,23 @@ def registered_resolvers() -> tuple[tuple[str, str], ...]:
 def compare_contract_identities(
     left: CanonicalContractIdentity, right: CanonicalContractIdentity,
 ) -> dict[str, Any]:
+    same_topic = bool(left.topic_id and left.topic_id == right.topic_id)
     same = (
         left.identity_status == right.identity_status == "identified"
+        and same_topic
         and left.canonical_event_id == right.canonical_event_id
         and left.canonical_proposition_id == right.canonical_proposition_id
     )
     same_event = bool(
         left.identity_status == right.identity_status == "identified"
+        and same_topic
         and left.canonical_event_id
         and left.canonical_event_id == right.canonical_event_id
     )
     same_outcome = same and bool(left.outcome_id and right.outcome_id)
     return {
         "levels": {
-            "same_topic": "confirmed" if left.topic_id and left.topic_id == right.topic_id else "unverified",
+            "same_topic": "confirmed" if same_topic else "unverified",
             "same_event": "confirmed" if same_event else "unverified",
             "same_proposition": "confirmed" if same else "unverified",
             "same_outcome": "confirmed" if same_outcome else "unverified",
