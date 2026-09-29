@@ -18,6 +18,7 @@ from .account import KalshiAccount
 from .canonical_market_identity import (
     compare_contract_identities,
     identify_mlb_world_series_champion,
+    registered_resolvers,
 )
 from .config import KalshiConfig, kalshi_production_read_only_config
 from .ledger import ForecastLedger
@@ -441,6 +442,20 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
         payload = {
             "as_of": datetime.now(UTC).isoformat(),
             "execution_enabled": False,
+            "canonical_market_identity": {
+                "ontology_levels": [
+                    "topic", "event", "proposition", "outcome", "semantic_match",
+                    "settlement_equivalence", "economic_comparability",
+                    "executable_comparability",
+                ],
+                "registered_resolvers": [
+                    {"topic_id": topic, "proposition_family": family}
+                    for topic, family in registered_resolvers()
+                ],
+                "unsupported_families": "remain unresolved; no fuzzy identity promotion",
+                "settlement_equivalence_default": "unverified",
+                "execution_authority": "disabled",
+            },
             "venues": [kalshi, polymarket],
             "cross_venue_comparison": comparison,
         }

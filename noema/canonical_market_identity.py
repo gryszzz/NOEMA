@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -85,6 +86,11 @@ class CanonicalContractIdentity:
     outcome_id: str | None
     settlement_rule_sha256: str | None
     identity_status: str
+    # Generic ontology fields. They are optional for older persisted records.
+    topic_id: str | None = None
+    proposition_type: str | None = None
+    canonical_outcome_id: str | None = None
+    source_rule_version: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -104,20 +110,74 @@ def identify_mlb_world_series_champion(
     if outcome_id is None:
         outcome_id = _resolve_team(outcome_text)
     status = "identified" if outcome_id else "unknown_outcome"
+    proposition_id = f"{event_id}:winner:{outcome_id}" if outcome_id else None
     return CanonicalContractIdentity(
         venue=venue,
         contract_id=contract_id,
         canonical_event_id=event_id,
-        canonical_proposition_id=(
-            f"{event_id}:winner:{outcome_id}" if outcome_id else None
-        ),
+        canonical_proposition_id=proposition_id,
         sport="MLB",
         season=season,
         event_type="world_series_champion",
         outcome_id=outcome_id,
         settlement_rule_sha256=_rules_hash(resolution_rules),
         identity_status=status,
+        topic_id="sports:baseball",
+        proposition_type="winner",
+        canonical_outcome_id=outcome_id,
     )
+
+
+def identify_structured_contract(
+    *, venue: str, contract_id: str, topic_id: str | None,
+    canonical_event_id: str | None, proposition_type: str | None,
+    canonical_outcome_id: str | None, resolution_rules: str | None = None,
+    source_rule_version: str | None = None,
+) -> CanonicalContractIdentity:
+    """Build identity only from explicit, deterministic source mappings.
+
+    This is the extension point for venue/family resolvers. Titles and fuzzy
+    similarity are deliberately not accepted as identity evidence.
+    """
+    event_id = canonical_event_id.strip() if canonical_event_id else None
+    topic = topic_id.strip() if topic_id else None
+    proposition = proposition_type.strip() if proposition_type else None
+    outcome = canonical_outcome_id.strip() if canonical_outcome_id else None
+    proposition_id = (
+        f"{event_id}:{proposition}:{outcome}"
+        if event_id and proposition and outcome else None
+    )
+    return CanonicalContractIdentity(
+        venue=venue, contract_id=contract_id,
+        canonical_event_id=event_id,
+        canonical_proposition_id=proposition_id,
+        sport=None, season=None, event_type=proposition,
+        outcome_id=outcome, settlement_rule_sha256=_rules_hash(resolution_rules),
+        identity_status=("identified" if proposition_id else "unresolved"),
+        topic_id=topic, proposition_type=proposition,
+        canonical_outcome_id=outcome, source_rule_version=source_rule_version,
+    )
+
+
+Resolver = Callable[..., CanonicalContractIdentity]
+_RESOLVERS: dict[tuple[str, str], Resolver] = {
+    ("sports:baseball", "world_series_champion"): identify_mlb_world_series_champion,
+}
+
+
+def register_resolver(topic_id: str, proposition_family: str, resolver: Resolver) -> None:
+    """Register a deterministic family resolver without replacing an owner."""
+    key = (topic_id.strip(), proposition_family.strip())
+    if not all(key) or not callable(resolver):
+        raise ValueError("resolver key and callable are required")
+    if key in _RESOLVERS:
+        raise ValueError("a resolver is already registered for this family")
+    _RESOLVERS[key] = resolver
+
+
+def registered_resolvers() -> tuple[tuple[str, str], ...]:
+    """Return supported deterministic resolver families for diagnostics/UI."""
+    return tuple(sorted(_RESOLVERS))
 
 
 def compare_contract_identities(
@@ -128,7 +188,23 @@ def compare_contract_identities(
         and left.canonical_event_id == right.canonical_event_id
         and left.canonical_proposition_id == right.canonical_proposition_id
     )
+    same_event = bool(
+        left.identity_status == right.identity_status == "identified"
+        and left.canonical_event_id
+        and left.canonical_event_id == right.canonical_event_id
+    )
+    same_outcome = same and bool(left.outcome_id and right.outcome_id)
     return {
+        "levels": {
+            "same_topic": "confirmed" if left.topic_id and left.topic_id == right.topic_id else "unverified",
+            "same_event": "confirmed" if same_event else "unverified",
+            "same_proposition": "confirmed" if same else "unverified",
+            "same_outcome": "confirmed" if same_outcome else "unverified",
+            "semantic_match": "confirmed" if same else "unverified",
+            "settlement_equivalence": "unverified",
+            "economic_comparability": "unavailable",
+            "executable_comparability": "unavailable",
+        },
         "semantic_match": "confirmed" if same else "unverified",
         "canonical_event_id": left.canonical_event_id if same else None,
         "canonical_proposition_id": left.canonical_proposition_id if same else None,
@@ -138,6 +214,7 @@ def compare_contract_identities(
             if left.settlement_rule_sha256 and right.settlement_rule_sha256 else None
         ),
         "executable_comparison": "unavailable",
+        "economic_comparability": "unavailable",
         "reason": (
             "Canonical event and outcome identity match. Matching rule hashes, "
             "even when present, do not prove equivalent settlement or cancellation handling."

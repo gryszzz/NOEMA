@@ -4,6 +4,8 @@ from noema import prediction_venues
 from noema.canonical_market_identity import (
     compare_contract_identities,
     identify_mlb_world_series_champion,
+    identify_structured_contract,
+    registered_resolvers,
 )
 from noema.ledger import ForecastLedger
 
@@ -44,6 +46,38 @@ def test_same_rules_hash_does_not_claim_settlement_equivalence():
     assert result["semantic_match"] == "confirmed"
     assert result["settlement_rule_hashes_equal"] is True
     assert result["settlement_equivalence"] == "unverified"
+    assert result["levels"]["same_event"] == "confirmed"
+    assert result["levels"]["same_outcome"] == "confirmed"
+    assert result["levels"]["economic_comparability"] == "unavailable"
+
+
+def test_structured_identity_supports_new_resolvers_without_fuzzy_title_matching():
+    left = identify_structured_contract(
+        venue="kalshi", contract_id="K1", topic_id="economics:rates",
+        canonical_event_id="economics:fed:2026-11", proposition_type="threshold",
+        canonical_outcome_id="cut:25bp", resolution_rules="Rule A",
+    )
+    right = identify_structured_contract(
+        venue="polymarket-us", contract_id="P1", topic_id="economics:rates",
+        canonical_event_id="economics:fed:2026-11", proposition_type="threshold",
+        canonical_outcome_id="cut:25bp", resolution_rules="Rule B",
+    )
+    comparison = compare_contract_identities(left, right)
+
+    assert comparison["semantic_match"] == "confirmed"
+    assert comparison["canonical_proposition_id"] == "economics:fed:2026-11:threshold:cut:25bp"
+    assert comparison["levels"]["settlement_equivalence"] == "unverified"
+    assert ("sports:baseball", "world_series_champion") in registered_resolvers()
+
+
+def test_structured_identity_does_not_infer_event_or_outcome_from_text():
+    unresolved = identify_structured_contract(
+        venue="kalshi", contract_id="K2", topic_id="sports:baseball",
+        canonical_event_id=None, proposition_type="winner",
+        canonical_outcome_id=None,
+    )
+    assert unresolved.identity_status == "unresolved"
+    assert unresolved.canonical_proposition_id is None
 
 
 def test_unknown_or_different_season_outcomes_do_not_match():
@@ -77,12 +111,22 @@ def test_canonical_pair_observation_is_append_only_and_deduplicated(tmp_path):
         "SELECT canonical_event_id, canonical_proposition_id, settlement_equivalence "
         "FROM canonical_pair_observations"
     ).fetchall()
+    graph_counts = {
+        table: ledger.conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        for table in ("canonical_events", "canonical_propositions", "venue_contracts",
+                      "contract_observations", "identity_assessments", "settlement_assessments")
+    }
     ledger.conn.close()
     assert rows == [(
         "sports:mlb:2026:world-series-champion",
         "sports:mlb:2026:world-series-champion:winner:LAD",
         "unverified",
     )]
+    assert graph_counts == {
+        "canonical_events": 1, "canonical_propositions": 1, "venue_contracts": 2,
+        "contract_observations": 2, "identity_assessments": 1,
+        "settlement_assessments": 1,
+    }
 
 
 def test_venue_status_persists_canonical_candidate_in_configured_ledger(monkeypatch, tmp_path):
