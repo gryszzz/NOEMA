@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,49 @@ class GatewayResult:
     reasons: tuple[str, ...]
     provider_reference: str | None = None
     tier: str = "execution"
+
+
+@dataclass(frozen=True)
+class ReconciliationObservation:
+    """Provider-authenticated state for one exact request; never model-authored."""
+
+    provider: str
+    proposal_id: str
+    provider_reference: str | None
+    status: str
+    observed_at: datetime
+    source: str
+    filled_quantity: Decimal | None = None
+    fee_amount: Decimal | None = None
+    fee_currency: str | None = None
+    external_fill_ids: tuple[str, ...] = ()
+    filled_exposure_usd: Decimal | None = None
+    remaining_reserved_usd: Decimal | None = None
+
+    def validate(self) -> None:
+        if not self.provider or not self.proposal_id or not self.source:
+            raise ValueError("provider, proposal identity, and authoritative source are required")
+        if self.observed_at.tzinfo is None:
+            raise ValueError("provider observation timestamp must be timezone-aware")
+        if self.status not in {"submitted", "partial", "filled", "rejected", "cancelled", "expired", "failed"}:
+            raise ValueError("unsupported provider observation status")
+        for value in (self.filled_quantity, self.fee_amount):
+            if value is not None and (not value.is_finite() or value < 0):
+                raise ValueError("provider quantities and fees must be finite and non-negative")
+        if self.fee_amount is not None and not self.fee_currency:
+            raise ValueError("fee currency is required when a fee is reported")
+        if any(not value for value in self.external_fill_ids):
+            raise ValueError("provider fill identifiers cannot be empty")
+        if len(set(self.external_fill_ids)) != len(self.external_fill_ids):
+            raise ValueError("provider fill identifiers must be unique in a snapshot")
+        for value in (self.filled_exposure_usd, self.remaining_reserved_usd):
+            if value is not None and (not value.is_finite() or value < 0):
+                raise ValueError("exposure amounts must be finite and non-negative")
+        if self.status in {"partial", "filled", "rejected", "cancelled", "expired", "failed"}:
+            if self.filled_exposure_usd is None or self.remaining_reserved_usd is None:
+                raise ValueError("terminal and partial observations require cumulative exposure amounts")
+            if self.status in {"filled", "rejected", "cancelled", "expired", "failed"} and self.remaining_reserved_usd != 0:
+                raise ValueError("terminal observations cannot retain an unfilled reservation")
 
 
 @dataclass(frozen=True)
@@ -119,6 +163,8 @@ class ExecutionGateway:
                 mission_id TEXT,
                 instrument TEXT,
                 side TEXT,
+                filled_exposure_usd TEXT,
+                remaining_reserved_usd TEXT,
                 provider_reference TEXT,
                 result_json TEXT NOT NULL,
                 request_json TEXT NOT NULL DEFAULT '{}'
@@ -143,6 +189,27 @@ class ExecutionGateway:
                     conn.execute(
                         "ALTER TABLE execution_gateway_requests ADD COLUMN side TEXT"
                     )
+                if "filled_exposure_usd" not in columns:
+                    conn.execute("ALTER TABLE execution_gateway_requests ADD COLUMN filled_exposure_usd TEXT")
+                if "remaining_reserved_usd" not in columns:
+                    conn.execute("ALTER TABLE execution_gateway_requests ADD COLUMN remaining_reserved_usd TEXT")
+                conn.execute("""CREATE TABLE IF NOT EXISTS execution_gateway_transitions (
+                    transition_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    proposal_id TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    from_status TEXT,
+                    to_status TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL DEFAULT '{}'
+                )""")
+                conn.execute("CREATE INDEX IF NOT EXISTS execution_gateway_transition_request "
+                             "ON execution_gateway_transitions(proposal_id,transition_id)")
+                conn.execute("""CREATE TRIGGER IF NOT EXISTS execution_gateway_transitions_no_update
+                    BEFORE UPDATE ON execution_gateway_transitions BEGIN
+                    SELECT RAISE(ABORT, 'execution transitions are append-only'); END""")
+                conn.execute("""CREATE TRIGGER IF NOT EXISTS execution_gateway_transitions_no_delete
+                    BEFORE DELETE ON execution_gateway_transitions BEGIN
+                    SELECT RAISE(ABORT, 'execution transitions are append-only'); END""")
 
     def overview(self, *, limit: int = 25) -> dict[str, Any]:
         """Return a credential-free, read-only workstation projection."""
@@ -159,8 +226,13 @@ class ExecutionGateway:
                     "mission_id,provider_reference,result_json,request_json FROM execution_gateway_requests "
                     "ORDER BY created_at DESC LIMIT ?", (limit,),
                 ).fetchall()
+                transitions = conn.execute(
+                    "SELECT proposal_id,occurred_at,from_status,to_status,source,evidence_json "
+                    "FROM execution_gateway_transitions ORDER BY transition_id DESC LIMIT ?", (limit,),
+                ).fetchall()
         except sqlite3.Error:
             rows = []
+            transitions = []
         enabled = os.getenv("NOEMA_EXECUTION_GATEWAY_ENABLED", "0") == "1"
         halted = os.getenv("NOEMA_MASTER_HALT", "0") == "1"
         return {
@@ -173,6 +245,7 @@ class ExecutionGateway:
             ),
             "treasury_actions_enabled": os.getenv("NOEMA_TREASURY_ACTIONS_ENABLED", "0") == "1",
             "recent_requests": [dict(row) for row in rows],
+            "recent_transitions": [dict(row) for row in transitions],
         }
 
     def record_proposal(self, proposal: ExecutionProposal) -> GatewayResult:
@@ -195,6 +268,8 @@ class ExecutionGateway:
             bankroll_usd=bankroll_usd,
         )
         payload = self._proposal_payload(proposal)
+        client_order_id = self._stable_client_order_id(proposal.proposal_id)
+        payload["client_order_id"] = client_order_id
         if reasons:
             self._record(proposal.proposal_id, "prediction", "execution", proposal.venue,
                          "rejected", proposal.notional_usd, payload, reasons)
@@ -214,7 +289,10 @@ class ExecutionGateway:
                          {"reasons": final_reasons})
             return GatewayResult(False, "rejected", tuple(final_reasons))
         try:
-            reference = await venue_adapter.execute(action)
+            if "client_order_id" in signature(venue_adapter.execute).parameters:
+                reference = await venue_adapter.execute(action, client_order_id=client_order_id)
+            else:
+                reference = await venue_adapter.execute(action)
         except Exception:
             # A transport error can happen after the provider accepted the
             # request. Keep its reservation consumed until explicit
@@ -357,6 +435,14 @@ class ExecutionGateway:
             reasons.append("venue fees, depth, and fill economics are not verified")
         if not getattr(venue_adapter, "execution_account_state_current", False):
             reasons.append("current venue balance, positions, and open orders are not verified")
+        try:
+            stable_id_supported = "client_order_id" in signature(venue_adapter.execute).parameters
+        except (TypeError, ValueError):
+            stable_id_supported = False
+        if (not getattr(venue_adapter, "supports_authoritative_reconciliation", False)
+                or not callable(getattr(venue_adapter, "reconcile_execution", None))
+                or not stable_id_supported):
+            reasons.append("venue adapter cannot reconcile a dispatch by stable provider identity")
         mode = getattr(risk_engine.policy, "mode", None)
         if getattr(mode, "value", mode) != "live":
             reasons.append("deterministic risk engine is not in live mode")
@@ -405,25 +491,30 @@ class ExecutionGateway:
             if conn.execute(
                 "SELECT 1 FROM execution_gateway_requests WHERE route='prediction' "
                 "AND tier='execution' AND venue=? AND instrument=? AND side=? "
-                "AND status IN ('reserved','submitted','unknown','failed') LIMIT 1",
+                "AND status IN ('reserved','submitted','partial','unknown','failed','filled','cancelled','expired','rejected') "
+                "AND ((filled_exposure_usd IS NULL AND remaining_reserved_usd IS NULL "
+                "AND status IN ('reserved','submitted','partial','unknown','failed','filled')) "
+                "OR COALESCE(CAST(filled_exposure_usd AS REAL),0)>0 "
+                "OR COALESCE(CAST(remaining_reserved_usd AS REAL),0)>0) LIMIT 1",
                 (proposal.venue, proposal.instrument, proposal.side),
             ).fetchone():
                 conn.rollback()
                 return False
             prefix = datetime.now(UTC).date().isoformat() + "%"
             rows = conn.execute(
-                "SELECT notional_usd FROM execution_gateway_requests WHERE route='prediction' "
-                "AND created_at LIKE ? AND status IN ('reserved','submitted','confirmed','unknown','failed')",
+                "SELECT notional_usd,status,filled_exposure_usd,remaining_reserved_usd "
+                "FROM execution_gateway_requests WHERE route='prediction' "
+                "AND created_at LIKE ? AND status IN ('reserved','submitted','partial','confirmed','unknown','failed','filled','cancelled','expired','rejected')",
                 (prefix,),
             ).fetchall()
-            used = sum((Decimal(row[0]) for row in rows if row[0]), Decimal(0))
+            used = sum((self._row_exposure(row) for row in rows), Decimal(0))
             mission_rows = conn.execute(
-                "SELECT notional_usd FROM execution_gateway_requests WHERE route='prediction' "
+                "SELECT notional_usd,status,filled_exposure_usd,remaining_reserved_usd FROM execution_gateway_requests WHERE route='prediction' "
                 "AND mission_id=? AND proposal_id<>? "
-                "AND status IN ('reserved','submitted','confirmed','unknown','failed')",
+                "AND status IN ('reserved','submitted','partial','confirmed','unknown','failed','filled','cancelled','expired','rejected')",
                 (proposal.mission_id, proposal.proposal_id),
             ).fetchall()
-            mission_used = sum((Decimal(row[0]) for row in mission_rows if row[0]), Decimal(0))
+            mission_used = sum((self._row_exposure(row) for row in mission_rows), Decimal(0))
             if (used + proposal.notional_usd > cap
                     or proposal.notional_usd > authority.per_action_limit_usd
                     or mission_used + proposal.notional_usd > authority.per_mission_limit_usd
@@ -440,6 +531,7 @@ class ExecutionGateway:
                           str(proposal.notional_usd), proposal.mission_id, proposal.instrument,
                           proposal.side, None, "{}",
                           json.dumps(payload, sort_keys=True, default=str)))
+            self._append_transition(conn, proposal.proposal_id, None, "reserved", "gateway", {})
             conn.commit()
         return True
 
@@ -450,7 +542,7 @@ class ExecutionGateway:
     ) -> None:
         result = json.dumps({"reasons": reasons}, sort_keys=True)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("INSERT OR IGNORE INTO execution_gateway_requests "
+            cursor = conn.execute("INSERT OR IGNORE INTO execution_gateway_requests "
                          "(proposal_id,created_at,route,tier,venue,status,request_hash,"
                          "notional_usd,mission_id,instrument,side,provider_reference,result_json,request_json) "
                          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -459,6 +551,9 @@ class ExecutionGateway:
                           payload.get("mission_id"), payload.get("instrument"), payload.get("side"),
                           None, result,
                           json.dumps(payload, sort_keys=True, default=str)))
+            if cursor.rowcount:
+                self._append_transition(conn, request_id, None, status, "gateway", {"reasons": reasons})
+                conn.commit()
 
     def _reserve_generic(
         self, request_id: str, route: str, tier: str, venue: str | None,
@@ -475,6 +570,7 @@ class ExecutionGateway:
                               payload.get("mission_id"), payload.get("instrument"), payload.get("side"),
                               None, "{}",
                               json.dumps(payload, sort_keys=True, default=str)))
+                self._append_transition(conn, request_id, None, "reserved", "gateway", {})
                 conn.commit()
                 return True
             except sqlite3.IntegrityError:
@@ -486,19 +582,171 @@ class ExecutionGateway:
         result: dict[str, Any],
     ) -> None:
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("UPDATE execution_gateway_requests SET status=?, provider_reference=?, "
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute("SELECT status FROM execution_gateway_requests WHERE proposal_id=?",
+                               (request_id,)).fetchone()
+            conn.execute("UPDATE execution_gateway_requests SET status=?, provider_reference=COALESCE(?,provider_reference), "
                          "result_json=? WHERE proposal_id=?",
                          (status, reference, json.dumps(result, sort_keys=True), request_id))
+            if old and old[0] != status:
+                self._append_transition(conn, request_id, old[0], status, "gateway", result)
+            conn.commit()
+
+    @staticmethod
+    def _append_transition(
+        conn: sqlite3.Connection, proposal_id: str, from_status: str | None,
+        to_status: str, source: str, evidence: dict[str, Any],
+    ) -> None:
+        conn.execute("INSERT INTO execution_gateway_transitions "
+                     "(proposal_id,occurred_at,from_status,to_status,source,evidence_json) "
+                     "VALUES (?,?,?,?,?,?)", (proposal_id, datetime.now(UTC).isoformat(),
+                     from_status, to_status, source, json.dumps(evidence, sort_keys=True, default=str)))
+
+    def apply_reconciliation(self, observation: ReconciliationObservation) -> bool:
+        """Apply exact provider truth. Mismatches never mutate the reservation."""
+        observation.validate()
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM execution_gateway_requests WHERE proposal_id=?",
+                               (observation.proposal_id,)).fetchone()
+            if (row is None or row["venue"] != observation.provider
+                    or row["status"] not in {"unknown", "submitted", "reserved", "partial",
+                                             "filled", "rejected", "cancelled", "expired", "failed"}):
+                conn.rollback()
+                return False
+            if observation.provider_reference and row["provider_reference"] and (
+                    observation.provider_reference != row["provider_reference"]):
+                conn.rollback()
+                return False
+            previous = json.loads(row["result_json"] or "{}")
+            previous_fills = set(previous.get("external_fill_ids", ()))
+            incoming_fills = set(observation.external_fill_ids)
+            if not previous_fills.issubset(incoming_fills):
+                # Provider fill histories must be cumulative, not a smaller page/delta.
+                conn.rollback()
+                return False
+            old_fee = self._decimal(previous.get("fee_amount"))
+            if (old_fee is not None and observation.fee_amount is not None
+                    and observation.fee_amount < old_fee):
+                conn.rollback()
+                return False
+            old_quantity = self._decimal(previous.get("filled_quantity"))
+            if (old_quantity is not None and observation.filled_quantity is not None
+                    and observation.filled_quantity < old_quantity):
+                conn.rollback()
+                return False
+            old_filled = self._decimal(row["filled_exposure_usd"])
+            old_reserved = self._decimal(row["remaining_reserved_usd"])
+            new_filled = observation.filled_exposure_usd
+            new_reserved = observation.remaining_reserved_usd
+            if new_filled is not None and old_filled is not None and new_filled < old_filled:
+                conn.rollback()
+                return False
+            if new_reserved is not None and old_reserved is not None and new_reserved > old_reserved:
+                conn.rollback()
+                return False
+            terminal = {"filled", "rejected", "cancelled", "expired", "failed"}
+            allowed_next = {
+                "reserved": {"submitted", "partial", "filled", "unknown", "rejected", "cancelled", "expired", "failed"},
+                "submitted": {"submitted", "partial", "filled", "rejected", "cancelled", "expired", "failed"},
+                "unknown": {"submitted", "partial", "filled", "rejected", "cancelled", "expired", "failed"},
+                "partial": {"partial", "filled", "rejected", "cancelled", "expired", "failed"},
+                "filled": {"filled"}, "rejected": {"rejected"},
+                "cancelled": {"cancelled"}, "expired": {"expired"}, "failed": {"failed"},
+            }
+            if observation.status not in allowed_next.get(row["status"], set()):
+                conn.rollback()
+                return False
+            if observation.status in terminal and row["status"] == "partial" and new_filled is None:
+                conn.rollback()
+                return False
+            # For an observation without new cumulative facts, preserve the previous values.
+            if new_filled is None:
+                new_filled = old_filled or Decimal(0)
+            if new_reserved is None:
+                new_reserved = old_reserved if old_reserved is not None else (
+                    self._decimal(row["notional_usd"]) or Decimal(0)
+                )
+            if observation.status in terminal:
+                new_reserved = Decimal(0)
+            requested_notional = self._decimal(row["notional_usd"])
+            if (requested_notional is not None and new_filled + new_reserved > requested_notional):
+                conn.rollback()
+                return False
+            if row["status"] in terminal and observation.status == row["status"]:
+                # Same terminal snapshot is idempotent; new fill/fee facts still append below.
+                pass
+            evidence = {
+                "source": observation.source, "observed_at": observation.observed_at.isoformat(),
+                "filled_quantity": (str(observation.filled_quantity)
+                                     if observation.filled_quantity is not None else None),
+                "fee_amount": str(observation.fee_amount) if observation.fee_amount is not None else None,
+                "fee_currency": observation.fee_currency,
+                "external_fill_ids": sorted(incoming_fills | previous_fills),
+                "filled_exposure_usd": str(new_filled),
+                "remaining_reserved_usd": str(new_reserved),
+            }
+            if observation.fee_amount is None and "fee_amount" in previous:
+                evidence["fee_amount"] = previous["fee_amount"]
+                evidence["fee_currency"] = previous.get("fee_currency")
+            if observation.filled_quantity is None and "filled_quantity" in previous:
+                evidence["filled_quantity"] = previous["filled_quantity"]
+            changed = (row["status"] != observation.status
+                       or observation.provider_reference is not None
+                       and observation.provider_reference != row["provider_reference"]
+                       or new_filled != old_filled or new_reserved != old_reserved
+                       or incoming_fills != previous_fills
+                       or observation.filled_quantity is not None
+                       and observation.filled_quantity != old_quantity
+                       or observation.fee_amount is not None and observation.fee_amount != old_fee)
+            if changed:
+                conn.execute("UPDATE execution_gateway_requests SET status=?,"
+                             "provider_reference=COALESCE(?,provider_reference),result_json=?,"
+                             "filled_exposure_usd=?,remaining_reserved_usd=? WHERE proposal_id=?",
+                             (observation.status, observation.provider_reference,
+                              json.dumps(evidence, sort_keys=True), str(new_filled), str(new_reserved),
+                              observation.proposal_id))
+                self._append_transition(conn, observation.proposal_id, row["status"],
+                                        observation.status, observation.source, evidence)
+            conn.commit()
+            return True
+
+    async def reconcile_pending(self, adapter_resolver: Callable[[str], Any]) -> dict[str, int]:
+        """Query adapters; absent or inconclusive provider evidence stays reserved."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM execution_gateway_requests WHERE status IN "
+                                "('unknown','submitted','partial') ORDER BY created_at").fetchall()
+        counts = {"checked": 0, "resolved": 0, "unchanged": 0}
+        for row in rows:
+            try:
+                adapter = adapter_resolver(row["venue"])
+                reconcile = getattr(adapter, "reconcile_execution", None) if adapter else None
+                if not callable(reconcile):
+                    counts["unchanged"] += 1
+                    continue
+                counts["checked"] += 1
+                observation = await reconcile(dict(row))
+                if observation is None or not self.apply_reconciliation(observation):
+                    counts["unchanged"] += 1
+                else:
+                    counts["resolved"] += 1
+            except Exception:  # noqa: BLE001 - provider failures must preserve the reservation.
+                # Provider errors and malformed responses are not evidence of failure.
+                counts["unchanged"] += 1
+        return counts
 
     def _mission_exposure(self, mission_id: str, exclude_id: str) -> Decimal:
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT notional_usd FROM execution_gateway_requests WHERE route='prediction' "
+                "SELECT notional_usd,status,filled_exposure_usd,remaining_reserved_usd "
+                "FROM execution_gateway_requests WHERE route='prediction' "
                 "AND mission_id=? AND proposal_id<>? "
-                "AND status IN ('reserved','submitted','confirmed','unknown','failed')",
+                "AND status IN ('reserved','submitted','partial','confirmed','unknown','failed','filled','cancelled','expired','rejected')",
                 (mission_id, exclude_id),
             ).fetchall()
-        return sum((Decimal(row[0]) for row in rows if row[0]), Decimal(0))
+        return sum((self._row_exposure(row) for row in rows), Decimal(0))
 
     def _resolve_authority(
         self, mission_id: str,
@@ -514,12 +762,28 @@ class ExecutionGateway:
         prefix = datetime.now(UTC).date().isoformat() + "%"
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT notional_usd FROM execution_gateway_requests WHERE route='prediction' "
+                "SELECT notional_usd,status,filled_exposure_usd,remaining_reserved_usd "
+                "FROM execution_gateway_requests WHERE route='prediction' "
                 "AND created_at LIKE ? AND proposal_id<>? "
-                "AND status IN ('reserved','submitted','confirmed','unknown','failed')",
+                "AND status IN ('reserved','submitted','partial','confirmed','unknown','failed','filled','cancelled','expired','rejected')",
                 (prefix, exclude_id),
             ).fetchall()
-        return sum((Decimal(row[0]) for row in rows if row[0]), Decimal(0))
+        return sum((self._row_exposure(row) for row in rows), Decimal(0))
+
+    @staticmethod
+    def _row_exposure(row: Any) -> Decimal:
+        notional = Decimal(row[0]) if row[0] is not None else Decimal(0)
+        filled = row[2]
+        remaining = row[3]
+        if filled is not None or remaining is not None:
+            return (Decimal(filled) if filled is not None else Decimal(0)) + (
+                Decimal(remaining) if remaining is not None else Decimal(0)
+            )
+        if row[1] in {"rejected", "cancelled", "expired"}:
+            return Decimal(0)
+        # Legacy ambiguous rows remain charged conservatively. Old failed rows
+        # without explicit reconciliation facts are never assumed to be resolved.
+        return notional
 
     @staticmethod
     def _proposal_payload(proposal: ExecutionProposal) -> dict[str, Any]:
@@ -532,6 +796,11 @@ class ExecutionGateway:
         value["expires_at"] = proposal.expires_at.isoformat()
         value["evidence_refs"] = list(proposal.evidence_refs)
         return value
+
+    @staticmethod
+    def _stable_client_order_id(proposal_id: str) -> str:
+        import uuid
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, "noema:" + proposal_id))
 
     @staticmethod
     def _hash(payload: dict[str, Any]) -> str:
