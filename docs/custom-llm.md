@@ -50,3 +50,16 @@ language model. The LLM research path currently has no Foundry credentials in
 the checked environment and no approved fine-tuning dataset. The first step
 that needs money is chosen only after a concrete model, labeled dataset,
 evaluation result, and spending limit are reviewed.
+
+## OpenAI tracing
+
+When OpenAI cognition is selected and `NOEMA_OPENAI_TRACING=1` (the default),
+NOEMA wraps each OpenAI Responses request in a metadata-only OpenAI Agents SDK
+trace. The request itself remains on NOEMA's existing Responses client and
+budget gate. Trace metadata is allowlisted to workflow labels and a generated
+decision identifier; prompts, market text, response content, credentials, and
+wallet identifiers are not passed to the tracing SDK. Trace ID and submission
+status are appended to cognition records and research-session activity. Set
+`NOEMA_OPENAI_TRACING=0` to disable export without disabling cognition. A
+`submitted` status means the SDK flush completed without a reported exporter
+error; it is not provider-billing reconciliation or proof of an economic result.

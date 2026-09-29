@@ -24,3 +24,6 @@ class CognitionResult:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    decision_id: str | None = None
+    trace_id: str | None = None
+    trace_status: str | None = None

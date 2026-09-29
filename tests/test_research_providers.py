@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -26,17 +27,31 @@ def market():
 
 
 @pytest.mark.asyncio
-async def test_openai_key_only_auth_no_required_project_and_structured_identity():
+async def test_openai_key_only_auth_no_required_project_and_structured_identity(monkeypatch):
     packet = {'thesis':'Test hypothesis','confidence':.5,'attention_reason':'Test only',
               'counterarguments':[],'unknowns':['Costs'],'requested_research':[],
               'recommended_mode':'investigate','evidence_ids':['e1']}
     requests=[]
+    trace_metadata = {
+        'decision_id': 'decision-test', 'provider': 'openai',
+        'financial_mode': 'research-only',
+    }
+
+    @contextmanager
+    def fake_trace(metadata, *, enabled=True):
+        assert metadata == trace_metadata
+        assert enabled is True
+        yield SimpleNamespace(trace_id='trace_test', status='submitted')
+
+    monkeypatch.setattr('noema.openai_client.openai_trace', fake_trace)
+
     def transport(request):
         requests.append(request)
         body=json.loads(request.content)
         assert request.headers['authorization']=='Bearer test-only-key'
         assert 'openai-project' not in request.headers
         assert 'test-only-key' not in request.content.decode()
+        assert 'decision-test' not in request.content.decode()
         assert body['store'] is False
         assert 'You are NOEMA' in body['instructions']
         assert 'REGISTERED SPECIALIST ROLE: kalshi-history' in body['instructions']
@@ -48,9 +63,77 @@ async def test_openai_key_only_auth_no_required_project_and_structured_identity(
     config=OpenAIConfig(api_key='test-only-key',model='test-model',enabled=True)
     assert config.ready and 'test-only-key' not in repr(config)
     client=OpenAICognitionClient(config,httpx.AsyncClient(transport=httpx.MockTransport(transport)))
-    result=await client.reason_about_market(market(),evidence_context=[{'evidence_id':'e1','facts':'fixture'}])
+    result=await client.reason_about_market(
+        market(), evidence_context=[{'evidence_id':'e1','facts':'fixture'}],
+        trace_metadata=trace_metadata,
+    )
     await client.close()
     assert result.status=='completed' and result.total_tokens==150 and len(requests)==1
+    assert result.trace_id == 'trace_test' and result.trace_status == 'submitted'
+
+
+@pytest.mark.asyncio
+async def test_openai_research_session_persists_trace_activity(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    from noema.bill_tracker import BillTracker
+    from noema.research_session import _openai_triage
+
+    monkeypatch.setenv('NOEMA_OPENAI_PRICING_MODEL', 'test-model')
+    monkeypatch.setenv('NOEMA_OPENAI_INPUT_USD_PER_MILLION', '1')
+    monkeypatch.setenv('NOEMA_OPENAI_OUTPUT_USD_PER_MILLION', '1')
+    db = str(tmp_path / 'trace-session.db')
+    bills = BillTracker(db)
+    bills.configure(
+        hosting_usd=Decimal(0), other_usd=Decimal(2),
+        owner_limit_usd=Decimal(10), model_budget_usd=Decimal(1),
+    )
+    bills.conn.close()
+    store = SessionStore(db)
+    session_id = store.begin_worker('bounded trace test')
+    captured = {}
+
+    class TraceClient:
+        last_trace_id = 'trace_session_test'
+        last_trace_status = 'submitted'
+
+        def __init__(self, _config):
+            pass
+
+        async def structured_research(self, _body, *, trace_metadata=None):
+            captured.update(trace_metadata)
+            return {
+                'status': 'completed',
+                'output': [{'type': 'message', 'role': 'assistant', 'content': [{
+                    'type': 'output_text', 'text': json.dumps({
+                        'trial_id': 'trial-a', 'rationale': 'bounded fixture', 'unknowns': [],
+                    }),
+                }]}],
+                'usage': {'input_tokens': 12, 'output_tokens': 6},
+            }
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr('noema.research_session.OpenAICognitionClient', TraceClient)
+    selection = await _openai_triage(
+        store, session_id, 'bounded instructions', {'fixture': 'bounded'},
+        {'required': ['trial_id', 'rationale', 'unknowns']},
+        OpenAIConfig(api_key='test-only', model='test-model', enabled=True),
+    )
+
+    assert selection[0]['trial_id'] == 'trial-a'
+    assert captured['provider'] == 'openai'
+    assert captured['specialist'] == 'research-allocator'
+    assert 'fixture' not in captured
+    trace_event = store.conn.execute(
+        "SELECT status,detail,tool FROM runtime_events "
+        "WHERE session_id=? AND stage='openai_trace'", (session_id,),
+    ).fetchone()
+    assert trace_event[0] == 'submitted'
+    assert trace_event[1].startswith('decision=')
+    assert '; trace=trace_session_test' in trace_event[1]
+    assert trace_event[2] == 'openai_agents_tracing'
 
 
 @pytest.mark.asyncio

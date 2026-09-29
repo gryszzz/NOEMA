@@ -616,11 +616,25 @@ async def _openai_triage(
         return None
 
     store.event(session_id, "cognition", "started", "Budget-reserved hosted triage", tool="openai")
+    decision_id = str(uuid.uuid4())
     client = OpenAICognitionClient(config)
     try:
-        payload = await client.structured_research(body)
+        payload = await client.structured_research(body, trace_metadata={
+            "mission_id": "unassigned",
+            "decision_id": decision_id,
+            "specialist": "research-allocator",
+            "research_experiment": "research-selection",
+            "provider": "openai",
+            "financial_mode": "research-only",
+            "authority_state": "no-execution-authority",
+        })
     finally:
         await client.close()
+        store.event(
+            session_id, "openai_trace", client.last_trace_status,
+            f"decision={decision_id}; trace={client.last_trace_id or 'unavailable'}",
+            tool="openai_agents_tracing",
+        )
     selection = json.loads(_completed_text(payload))
     usage = payload.get("usage")
     if not isinstance(usage, dict):

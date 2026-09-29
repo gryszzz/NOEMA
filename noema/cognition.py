@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
+from dataclasses import replace
 
 import httpx
 
@@ -70,6 +72,7 @@ async def maybe_run_cognition(
         reverse=True,
     )
     target = eligible[0]
+    decision_id = str(uuid.uuid4())
     try:
         context = context_for_row(target, EvidenceStore(db_path))
     except (ValueError, KeyError, TypeError, json.JSONDecodeError):
@@ -128,7 +131,22 @@ async def maybe_run_cognition(
         return CognitionResult("degraded", detail="model budget store unavailable")
 
     try:
-        result = await client.reason_about_market(target, evidence_context=context)
+        trace_metadata = None
+        if isinstance(config, OpenAIConfig):
+            trace_metadata = {
+                "mission_id": "unassigned",
+                "decision_id": decision_id,
+                "specialist": "market-cognition",
+                "research_experiment": "none-registered",
+                "provider": "openai",
+                "financial_mode": "research-only",
+                "authority_state": "no-execution-authority",
+            }
+        result = await client.reason_about_market(
+            target, evidence_context=context,
+            **({"trace_metadata": trace_metadata} if trace_metadata is not None else {}),
+        )
+        result = replace(result, decision_id=decision_id)
     except (
         httpx.HTTPError,
         RuntimeError,
@@ -157,6 +175,9 @@ async def maybe_run_cognition(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             total_tokens=result.total_tokens,
+            decision_id=result.decision_id,
+            trace_id=result.trace_id,
+            trace_status=result.trace_status,
         )
     except (ValueError, sqlite3.Error):
         return CognitionResult("degraded", detail="model usage or result persistence invalid")

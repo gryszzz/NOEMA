@@ -97,3 +97,68 @@ async def test_invalid_usage_keeps_reservation_without_stopping_worker(tmp_path,
     store = CognitionStore(db)
     assert store.latest() is None
     assert store.conn.execute('SELECT COUNT(*) FROM cognition_budget_reservations').fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_trace_is_attached_to_persisted_cognition_result(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    from noema.bill_tracker import BillTracker
+    from noema.cognition_models import CognitionPacket, CognitionResult
+    from noema.cognition_policy import CognitionPolicy
+    from noema.cognition_store import CognitionStore
+    from noema.openai_config import OpenAIConfig
+
+    db = str(tmp_path / "noema.db")
+    bills = BillTracker(db)
+    bills.configure(
+        hosting_usd=Decimal(0), other_usd=Decimal(2),
+        model_budget_usd=Decimal(1), owner_limit_usd=Decimal(10),
+    )
+    bills.conn.close()
+    monkeypatch.setattr("noema.cognition.context_for_row", lambda *_args: {})
+
+    class Client:
+        def __init__(self, _config):
+            pass
+
+        def request_body(self, *_args, **_kwargs):
+            return {"input": "bounded fixture"}
+
+        async def reason_about_market(self, *_args, trace_metadata=None, **_kwargs):
+            assert trace_metadata["provider"] == "openai"
+            assert trace_metadata["financial_mode"] == "research-only"
+            assert trace_metadata["authority_state"] == "no-execution-authority"
+            assert "market_id" not in trace_metadata
+            packet = CognitionPacket(
+                "SERIES-1-A", "test", .5, "test", (), (), (), "investigate", ("e1",),
+            )
+            return CognitionResult(
+                "completed", packet, detail="response_fixture", input_tokens=10,
+                output_tokens=3, total_tokens=13, trace_id="trace_fixture",
+                trace_status="submitted",
+            )
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("noema.cognition.OpenAICognitionClient", Client)
+    result = await maybe_run_cognition(
+        [row()], db_path=db,
+        config=OpenAIConfig(api_key="test-only", model="test-model", enabled=True),
+        policy=CognitionPolicy(
+            input_usd_per_million=1, output_usd_per_million=1,
+            max_estimated_usd_per_day=1,
+        ),
+    )
+
+    assert result.status == "completed"
+    assert result.decision_id
+    assert result.trace_id == "trace_fixture"
+    assert result.trace_status == "submitted"
+    store = CognitionStore(db)
+    latest = store.latest()
+    assert latest is not None
+    assert latest["decision_id"] == result.decision_id
+    assert latest["trace_id"] == "trace_fixture"
+    assert latest["trace_status"] == "submitted"

@@ -11,6 +11,7 @@ import httpx
 from .cognition_models import CognitionPacket, CognitionResult
 from .cognition_request import PACKET_SCHEMA, build_cognition_request
 from .openai_config import OPENAI_RESPONSES_URL, OpenAIConfig
+from .openai_tracing import OpenAITraceRun, openai_trace
 from .opportunity_radar import RadarRow
 
 
@@ -77,6 +78,8 @@ class OpenAICognitionClient:
         }
         if self.config.project_id:
             self._headers["OpenAI-Project"] = self.config.project_id
+        self.last_trace_id: str | None = None
+        self.last_trace_status = "not_requested"
         # No retries: an uncertain failed request keeps its existing reservation.
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(self.config.request_timeout_seconds), follow_redirects=False,
@@ -96,8 +99,12 @@ class OpenAICognitionClient:
 
     async def reason_about_market(
         self, row: RadarRow, *, evidence_context: list[dict[str, object]],
+        trace_metadata: dict[str, str] | None = None,
     ) -> CognitionResult:
-        payload = await self.structured_research(self.request_body(row, evidence_context=evidence_context))
+        payload = await self.structured_research(
+            self.request_body(row, evidence_context=evidence_context),
+            trace_metadata=trace_metadata,
+        )
         packet = _parse_packet(json.loads(_completed_text(payload)), row)
         usage = payload.get("usage")
         if not isinstance(usage, dict):
@@ -112,14 +119,25 @@ class OpenAICognitionClient:
         return CognitionResult(
             status="completed", packet=packet, detail=response_id,
             input_tokens=counts[0], output_tokens=counts[1], total_tokens=counts[2],
+            trace_id=self.last_trace_id, trace_status=self.last_trace_status,
         )
 
-    async def structured_research(self, body: dict[str, Any]) -> dict[str, Any]:
-        response = await self.client.post(
-            OPENAI_RESPONSES_URL,
-            json=body,
-            headers=self._headers,
-        )
+    async def structured_research(
+        self, body: dict[str, Any], *, trace_metadata: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        run = OpenAITraceRun(status="not_requested")
+        try:
+            with openai_trace(
+                trace_metadata or {}, enabled=self.config.tracing_enabled,
+            ) as run:
+                response = await self.client.post(
+                    OPENAI_RESPONSES_URL,
+                    json=body,
+                    headers=self._headers,
+                )
+        finally:
+            self.last_trace_id = run.trace_id
+            self.last_trace_status = run.status
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):

@@ -32,7 +32,10 @@ class CognitionStore:
                 packet_json TEXT NOT NULL,
                 input_tokens INTEGER NOT NULL,
                 output_tokens INTEGER NOT NULL,
-                total_tokens INTEGER NOT NULL
+                total_tokens INTEGER NOT NULL,
+                decision_id TEXT,
+                trace_id TEXT,
+                trace_status TEXT
             )
             """
         )
@@ -50,6 +53,16 @@ class CognitionStore:
             """
         )
         self.conn.commit()
+        with self.conn:
+            packet_columns = {
+                row[1] for row in self.conn.execute("PRAGMA table_info(cognition_packets)")
+            }
+            if "decision_id" not in packet_columns:
+                self.conn.execute("ALTER TABLE cognition_packets ADD COLUMN decision_id TEXT")
+            if "trace_id" not in packet_columns:
+                self.conn.execute("ALTER TABLE cognition_packets ADD COLUMN trace_id TEXT")
+            if "trace_status" not in packet_columns:
+                self.conn.execute("ALTER TABLE cognition_packets ADD COLUMN trace_status TEXT")
         # Existing reservations remain unknown, never silently treated as zero
         # token usage. Serialize migration against other worker connections.
         with self.conn:
@@ -177,6 +190,9 @@ class CognitionStore:
         input_tokens: int,
         output_tokens: int,
         total_tokens: int,
+        decision_id: str | None = None,
+        trace_id: str | None = None,
+        trace_status: str | None = None,
     ) -> None:
         if (any(type(value) is not int or value < 0
                 for value in (input_tokens, output_tokens, total_tokens))
@@ -186,8 +202,8 @@ class CognitionStore:
             """
             INSERT INTO cognition_packets
             (created_at, market_id, deployment, response_id, packet_json,
-             input_tokens, output_tokens, total_tokens)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             input_tokens, output_tokens, total_tokens, decision_id, trace_id, trace_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now(UTC).isoformat(),
@@ -198,6 +214,9 @@ class CognitionStore:
                 input_tokens,
                 output_tokens,
                 total_tokens,
+                decision_id,
+                trace_id,
+                trace_status,
             ),
         )
         self.conn.commit()
@@ -260,7 +279,8 @@ class CognitionStore:
         row = self.conn.execute(
             """
             SELECT created_at, market_id, deployment, packet_json,
-                   input_tokens, output_tokens, total_tokens
+                   input_tokens, output_tokens, total_tokens, decision_id, trace_id,
+                   trace_status
             FROM cognition_packets
             ORDER BY id DESC
             LIMIT 1
@@ -276,6 +296,9 @@ class CognitionStore:
             "input_tokens": row[4],
             "output_tokens": row[5],
             "total_tokens": row[6],
+            "decision_id": row[7],
+            "trace_id": row[8],
+            "trace_status": row[9],
         }
 
 

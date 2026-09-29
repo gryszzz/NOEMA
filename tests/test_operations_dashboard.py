@@ -262,6 +262,7 @@ def test_provider_health_projection_is_storeless_and_secret_free(monkeypatch):
                                        "model_available": True, "credential_present": True,
                                        "api_token": "must never leave provider config"},
             "openai": {"status": "ready", "credential_present": True,
+                       "tracing_enabled": True,
                        "api_key": "must never leave provider config"},
         },
         "local_model_runner": {"status": "healthy", "selected_model": "fixture-model",
@@ -276,5 +277,6 @@ def test_provider_health_projection_is_storeless_and_secret_free(monkeypatch):
     assert result["configured_provider"] == "cloudflare_workers_ai"
     assert result["cloudflare"]["status"] == "healthy"
     assert result["openai"]["status"] == "ready"
+    assert result["openai"]["tracing_enabled"] is True
     assert result["docker_model_runner"]["selected_model_resource_eligible"] is False
     assert "must never" not in serialized and "private" not in serialized

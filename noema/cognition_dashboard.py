@@ -157,7 +157,8 @@ def _runtime_providers(config: Any) -> dict[str, Any]:
             cloudflare_health["status"] = "unavailable"
     hosted = {
         "openai": {"status": "ready" if openai.ready else "credential_missing" if not openai_key
-                   else "disabled_or_model_missing", "credential_present": openai_key},
+                   else "disabled_or_model_missing", "credential_present": openai_key,
+                   "tracing_enabled": openai.tracing_enabled},
         "groq": {"status": "credential_present_unwired" if groq_key else "credential_missing",
                  "credential_present": groq_key},
         "cloudflare_workers_ai": cloudflare_health,
@@ -187,7 +188,7 @@ def build_provider_health() -> dict[str, Any]:
             "status", "model", "model_available", "credential_present",
         )},
         "openai": {key: hosted["openai"].get(key) for key in (
-            "status", "credential_present",
+            "status", "credential_present", "tracing_enabled",
         )},
         "docker_model_runner": {key: local.get(key) for key in (
             "status", "selected_model", "selected_model_resource_eligible",
