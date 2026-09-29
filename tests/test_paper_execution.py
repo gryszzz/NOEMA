@@ -31,6 +31,15 @@ def test_kalshi_fee_schedule_and_event_override():
         FeeTerms.from_api({"fee_type": "flat", "fee_multiplier": 1}, {})
 
 
+def test_kalshi_taker_fee_supports_series_with_separate_maker_fees():
+    terms = FeeTerms.from_api(
+        {"fee_type": "quadratic_with_maker_fees", "fee_multiplier": 1},
+        {},
+    )
+    assert terms.fee_type == "quadratic_with_maker_fees"
+    assert taker_fee(Decimal("0.5"), Decimal(1), terms) == Decimal("0.02")
+
+
 @pytest.mark.asyncio
 async def test_fee_lookup_applies_event_override_only_for_matching_tickers():
     def handler(request):

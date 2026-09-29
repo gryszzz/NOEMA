@@ -32,6 +32,13 @@ from .canonical_market_identity import (
     registered_resolvers,
 )
 from .config import KalshiConfig, kalshi_production_read_only_config
+from .cross_venue_experiment import (
+    evaluate_candidate,
+    extract_clause_evidence,
+    mature_paper_pairs,
+    persist_evaluation,
+    recent_evaluations,
+)
 from .ledger import ForecastLedger
 from .venues.kalshi import KalshiVenue
 from .venues.polymarket_us import PolymarketUSVenue
@@ -693,6 +700,220 @@ def _number(value: Any) -> float | None:
     return float(number) if number.is_finite() else None
 
 
+def _normalize_polymarket_depth(payload: Any, slug: str) -> dict[str, Any] | None:
+    """Normalize official L2 price/quantity rows; malformed books stay unknown."""
+    data = payload.get("marketData") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or data.get("marketSlug") != slug:
+        return None
+
+    def levels(name: str, *, descending: bool) -> list[dict[str, str]] | None:
+        raw = data.get(name)
+        if not isinstance(raw, list) or not raw:
+            return None
+        normalized: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                return None
+            price_data = item.get("px")
+            price = _number(price_data.get("value") if isinstance(price_data, dict) else price_data)
+            quantity = _number(item.get("qty"))
+            if price is None or quantity is None or not 0 < price < 1 or quantity <= 0:
+                return None
+            normalized.append({
+                "price": format(Decimal(str(price)).normalize(), "f"),
+                "contracts": format(Decimal(str(quantity)).normalize(), "f"),
+            })
+        prices = [Decimal(level["price"]) for level in normalized]
+        if prices != sorted(prices, reverse=descending) or len(prices) != len(set(prices)):
+            return None
+        return normalized
+
+    bids, asks = levels("bids", descending=True), levels("offers", descending=False)
+    if not bids or not asks:
+        return None
+    return {"yes_bids": bids, "yes_asks": asks,
+            "normalization": "Polymarket US official L2 price/qty levels"}
+
+
+def _fixed_lifecycle_pairs(path: str, *, limit: int = 5) -> set[tuple[str, str]]:
+    """Read the already-registered lifecycle cohort without enrolling discoveries."""
+    if not 1 <= limit <= 5:
+        raise ValueError("lifecycle cohort limit must be 1..5")
+    db = Path(path)
+    if not db.exists():
+        return set()
+    try:
+        conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+        try:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "canonical_pair_observations" not in tables:
+                return set()
+            rows = conn.execute(
+                "SELECT observation_json FROM canonical_pair_observations "
+                "ORDER BY id DESC LIMIT 500"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return set()
+    pairs: set[tuple[str, str]] = set()
+    for (payload,) in rows:
+        try:
+            observation = json.loads(payload)
+            evaluation = observation.get("experiment_evaluation")
+            contracts = (observation.get("canonical_identity") or {}).get("contracts", [])
+            if not isinstance(evaluation, dict) or not isinstance(contracts, list):
+                continue
+            by_venue = {str(item.get("venue")): item for item in contracts if isinstance(item, dict)}
+            kalshi = by_venue.get("kalshi", {}).get("contract_id")
+            polymarket = by_venue.get("polymarket-us", {}).get("contract_id")
+            if kalshi and polymarket:
+                pairs.add((str(kalshi), str(polymarket)))
+                if len(pairs) >= limit:
+                    break
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return pairs
+
+
+async def _lifecycle_evidence(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    """Refresh evidence for a registered pair without rerunning identity resolution."""
+    contracts = (candidate.get("canonical_identity") or {}).get("contracts", [])
+    by_venue = {str(item.get("venue")): item for item in contracts if isinstance(item, dict)}
+    kalshi_identity = by_venue.get("kalshi")
+    pm_identity = by_venue.get("polymarket-us")
+    if not kalshi_identity or not pm_identity:
+        return None
+    ticker = str(kalshi_identity.get("contract_id") or "")
+    slug = str(pm_identity.get("contract_id") or "")
+    if not ticker or not slug:
+        return None
+
+    kalshi = KalshiVenue(KalshiConfig(
+        environment="production", allow_live_orders=False, master_halt=True,
+    ))
+    polymarket = PolymarketUSVenue()
+    kalshi_market: dict[str, Any] = {}
+    pm_market: dict[str, Any] = {}
+    bbo: dict[str, Any] = {}
+    k_depth_raw: dict[str, Any] | None = None
+    p_depth_raw: dict[str, Any] | None = None
+    k_fees: dict[str, Any] = {"verified": False, "venue": "kalshi",
+                              "unknown_fields": ["schedule_version", "maker_taker_assumption", "rounding", "fee_terms"]}
+    pm_fees: dict[str, Any] = {"verified": False, "venue": "polymarket_us",
+                               "unknown_fields": ["schedule_version", "maker_taker_assumption", "rounding", "fee_terms"]}
+    k_received = p_received = datetime.now(UTC).isoformat()
+    try:
+        try:
+            response = await kalshi.client.get(f"/markets/{ticker}")
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and isinstance(payload.get("market"), dict):
+                kalshi_market = payload["market"]
+            k_received = datetime.now(UTC).isoformat()
+            k_depth_raw = {"source": "Kalshi public market detail",
+                           "yes_bid_size": kalshi_market.get("yes_bid_size_fp"),
+                           "yes_ask_size": kalshi_market.get("yes_ask_size_fp")}
+        except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError, OSError):
+            pass
+        try:
+            terms = await kalshi.taker_fee_terms(ticker)
+            from dataclasses import asdict
+            k_fees = {"verified": True, "venue": "kalshi",
+                      "schedule_version": terms.schedule_version,
+                      "maker_taker_assumption": "taker",
+                      "rounding": "Kalshi fee terms implementation; conservative cent rounding",
+                      "terms": {key: str(value) for key, value in asdict(terms).items()},
+                      "source": "Kalshi official series/event API", "unknown_fields": []}
+        except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError, OSError):
+            pass
+        try:
+            pm_market = await polymarket.market_by_slug(slug)
+        except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
+                KeyError, TypeError, OSError):
+            pass
+        try:
+            result = await asyncio.to_thread(polymarket.client.markets.bbo, slug)
+            bbo = result.get("marketData", {}) if isinstance(result, dict) else {}
+            p_received = datetime.now(UTC).isoformat()
+        except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
+                KeyError, TypeError, OSError):
+            pass
+        try:
+            p_depth_raw = await asyncio.to_thread(polymarket.client.markets.book, slug)
+        except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
+                KeyError, TypeError, OSError):
+            pass
+    finally:
+        await kalshi.close()
+        polymarket.close()
+
+    k_bid, k_ask = _number(kalshi_market.get("yes_bid_dollars")), _number(kalshi_market.get("yes_ask_dollars"))
+    p_bid = _number((bbo.get("bestBid") or {}).get("value"))
+    p_ask = _number((bbo.get("bestAsk") or {}).get("value"))
+    k_depth = None
+    k_bid_size = _number((k_depth_raw or {}).get("yes_bid_size"))
+    k_ask_size = _number((k_depth_raw or {}).get("yes_ask_size"))
+    if all(value is not None and value > 0 for value in (k_bid, k_ask, k_bid_size, k_ask_size)):
+        k_depth = {"yes_bids": [{"price": str(k_bid), "contracts": str(k_bid_size)}],
+                   "yes_asks": [{"price": str(k_ask), "contracts": str(k_ask_size)}],
+                   "normalization": "Kalshi public market detail fixed-point YES quote sizes"}
+    pm_depth = _normalize_polymarket_depth(p_depth_raw, slug)
+    k_rules = "\n".join(str(kalshi_market.get(key) or "") for key in ("rules_primary", "rules_secondary")
+                         if kalshi_market.get(key))
+    pm_rules = str(pm_market.get("description") or "")
+    k_url = f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}"
+    pm_url = f"https://api.polymarket.us/v1/market/slug/{slug}"
+    k_clauses = extract_clause_evidence("kalshi", ticker, k_rules, k_url,
+                                        source_field="rules_primary + rules_secondary")
+    pm_clauses = extract_clause_evidence("polymarket_us", slug, pm_rules, pm_url,
+                                         source_field="description")
+    clauses: dict[str, Any] = {}
+    for name in (key for key in k_clauses if not key.startswith("_")):
+        left, right = k_clauses[name], pm_clauses[name]
+        clauses[name] = {
+            "kalshi": {"text": left["text"], "status": left["status"], "source_evidence": left["citation"]},
+            "polymarket_us": {"text": right["text"], "status": right["status"], "source_evidence": right["citation"]},
+            "citations": {"kalshi": left["citation"], "polymarket_us": right["citation"]},
+        }
+    clauses["_source_text"] = {"kalshi": k_rules or None, "polymarket_us": pm_rules or None}
+    comparison = dict((candidate.get("canonical_identity") or {}).get("comparison") or {})
+    identity = dict(candidate.get("canonical_identity") or {})
+    identity["comparison"] = comparison
+    identity["contracts"] = [
+        {**kalshi_identity, "venue": "kalshi", "active_at_observation": kalshi_market.get("status") == "active"},
+        {**pm_identity, "venue": "polymarket-us",
+         "active_at_observation": pm_market.get("active") is True and pm_market.get("closed") is not True},
+    ]
+    return {
+        **candidate, "canonical_identity": identity, "contract_clauses": clauses,
+        "kalshi": {"market_id": ticker, "ticker": ticker, "title": kalshi_market.get("title"),
+                   "yes_bid": k_bid, "yes_ask": k_ask, "quote_observed_at": k_received,
+                   "source_timestamp": None,
+                   "source_timestamp_semantics": "Kalshi market updated_at is record-level, not a documented YES quote timestamp; only NOEMA receipt time is available.",
+                   "fees": k_fees, "raw_depth": k_depth_raw, "normalized_depth": k_depth,
+                   "capacity": "unknown", "book_source": (k_depth_raw or {}).get("source"),
+                   "resolution_rules": k_rules or None, "rule_source_url": k_url,
+                   "market_status_at_observation": kalshi_market.get("status")},
+        "polymarket_us": {"market_id": slug, "ticker": slug, "title": pm_market.get("title"),
+                          "yes_bid": p_bid, "yes_ask": p_ask, "quote_observed_at": p_received,
+                          "source_timestamp": None,
+                          "source_timestamp_semantics": "Official Polymarket US BBO response schema provides no quote-origin timestamp; only NOEMA receipt time is available.",
+                          "fees": {**pm_fees,
+                                   "source": "Official Polymarket US market response; feeCoefficient retained as raw evidence but its official taker formula, rounding, and applicability are unverified.",
+                                   "raw_fee_coefficient": pm_market.get("feeCoefficient")},
+                          "raw_depth": p_depth_raw, "normalized_depth": pm_depth,
+                          "capacity": "unknown", "book_source": "Polymarket US public market book" if pm_depth else None,
+                          "resolution_rules": pm_rules or None, "rule_source_url": pm_url,
+                          "market_status_at_observation": {"active": pm_market.get("active"),
+                                                            "closed": pm_market.get("closed")}},
+        "observed_at": min(k_received, p_received),
+        "unadjusted_yes_ask_difference": None if p_ask is None or k_ask is None else round(p_ask-k_ask, 6),
+    }
+
+
 def _count_records(payload: Any, key: str) -> int | None:
     if isinstance(payload, list):
         return len(payload)
@@ -731,6 +952,39 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
                 _registered_identity_review_at = monotonic()
         else:
             comparison["persistence_status"] = "no_candidate_to_record"
+        db_path = os.getenv("NOEMA_DB_PATH", "data/noema.db")
+        fixed_pairs = await asyncio.to_thread(_fixed_lifecycle_pairs, db_path)
+        for candidate in comparison.get("matches", [])[:5]:
+            contracts = (candidate.get("canonical_identity") or {}).get("contracts", [])
+            by_venue = {str(item.get("venue")): item for item in contracts if isinstance(item, dict)}
+            pair = (str((by_venue.get("kalshi") or {}).get("contract_id") or ""),
+                    str((by_venue.get("polymarket-us") or {}).get("contract_id") or ""))
+            if pair not in fixed_pairs:
+                continue
+            try:
+                lifecycle_candidate = await _lifecycle_evidence(candidate)
+                if lifecycle_candidate is None:
+                    continue
+                evaluation = evaluate_candidate(lifecycle_candidate)
+                lifecycle = await asyncio.to_thread(
+                    persist_evaluation, db_path, lifecycle_candidate, evaluation,
+                )
+                candidate.update(lifecycle_candidate)
+                candidate["experiment_evaluation"] = evaluation
+                candidate["trial_id"] = lifecycle.get("trial_id")
+                candidate["research_run_id"] = lifecycle.get("run_id")
+                candidate["evidence_hash"] = lifecycle.get("evidence_hash")
+            except (OSError, sqlite3.Error, RuntimeError, TypeError, ValueError):
+                candidate["experiment_lifecycle_status"] = "unavailable"
+        try:
+            paper_maturation = await asyncio.to_thread(mature_paper_pairs, db_path)
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            paper_maturation = {"status": "unavailable", "matured": 0,
+                                "matured_total": 0, "paper_fill_count": 0,
+                                "rule_divergences": 0, "pending": 0,
+                                "live_trade_count": 0, "capacity": "unknown",
+                                "walk_forward": None}
+        experiment_history = await asyncio.to_thread(recent_evaluations, db_path, limit=20)
         live_resolver_keys: set[tuple[str, str]] = set()
         live_proposition_families: set[str] = set()
         for candidate in comparison.get("matches", []):
@@ -805,6 +1059,8 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
             },
             "venues": [kalshi, polymarket],
             "cross_venue_comparison": comparison,
+            "cross_venue_paper_maturation": paper_maturation,
+            "cross_venue_experiment_history": experiment_history,
         }
         _cache.update(at=monotonic(), payload=payload)
         return payload

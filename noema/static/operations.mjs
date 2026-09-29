@@ -367,6 +367,32 @@ function renderPredictionVenues(payload) {
     root.append(row);
   }
   const match = payload?.cross_venue_comparison;
+  const maturation = payload?.cross_venue_paper_maturation ?? {};
+  const maturationCard = element('article', undefined, 'prediction-overlap-candidate');
+  maturationCard.append(
+    element('strong', `PAPER MATURATION · ${maturation.status ?? 'state unknown'}`),
+    element('span', `Paper fills ${maturation.paper_fill_count ?? 0} · matured ${maturation.matured_total ?? 0} · rule divergences ${maturation.rule_divergences_total ?? maturation.rule_divergences ?? 0} · pending outcomes ${maturation.pending ?? 0} · live trades ${maturation.live_trade_count ?? 0} · capacity ${maturation.capacity === 'unknown' ? 'UNKNOWN' : JSON.stringify(maturation.capacity ?? 'unknown')}`),
+    element('span', `Walk-forward ${maturation.walk_forward?.status ?? 'waiting for independent matured events'} · diagnostics invoked ${maturation.walk_forward?.diagnostics_invoked === true ? 'YES' : 'NO'}`),
+  );
+  root.append(maturationCard);
+  const lifecycleHistory = payload?.cross_venue_experiment_history ?? [];
+  const renderLifecycle = candidate => {
+    const evaluation = candidate.experiment_evaluation ?? {};
+    const equivalence = evaluation.contract_equivalence ?? {};
+    const freshness = evaluation.freshness ?? {};
+    const depth = evaluation.depth ?? {};
+    const quotes = evaluation.quotes ?? {};
+    const simulation = evaluation.paper_simulation ?? {};
+    const rejection = evaluation.rejection_reasons ?? [];
+    return [
+      element('strong', `${evaluation.verdict ?? 'LIFECYCLE'} · ${candidate.event ?? 'Event'} · ${candidate.team_code ?? 'OUTCOME'}`),
+      element('span', `Rules ${equivalence.status ?? 'unverified'} · unresolved ${equivalence.unresolved_clauses?.join(', ') || 'unknown'}`),
+      element('span', `Freshness ${freshness.status ?? 'unknown'} · source timestamps ${JSON.stringify(freshness.source_timestamps ?? {})}`),
+      element('span', `Fees Kalshi ${quotes.kalshi?.fee_status ?? 'unknown'} · Polymarket US ${quotes.polymarket_us?.fee_status ?? 'unknown'}`),
+      element('span', `Depth ${depth.status ?? 'unknown'} · capacity ${depth.capacity === 'unknown' ? 'UNKNOWN' : JSON.stringify(depth.capacity ?? 'unknown')} · simulation ${simulation.status ?? 'not run'}`),
+      element('small', rejection.length ? `Why NOEMA said no: ${rejection.join(' · ')}` : (evaluation.contract_equivalence?.reason ?? 'Evidence incomplete.')),
+    ];
+  };
   if (match?.matches?.length) {
     for (const candidate of match.matches) {
       const compare = element('article', undefined, 'prediction-overlap-candidate');
@@ -381,10 +407,16 @@ function renderPredictionVenues(payload) {
         element('small', candidate.settlement_difference ?? 'Venue settlement rules are not reconciled.'),
         element('small', candidate.reason ?? 'Outcome equivalence has not been proven.'),
       );
+      if (candidate.experiment_evaluation) compare.append(...renderLifecycle(candidate));
       root.append(compare);
     }
   } else {
     root.append(element('p', match?.reason ?? 'No validated cross-venue comparison is available.', 'prediction-match-state'));
+  }
+  for (const candidate of lifecycleHistory) {
+    const card = element('article', undefined, 'prediction-overlap-candidate');
+    card.append(...renderLifecycle(candidate));
+    root.append(card);
   }
   const identity = payload?.canonical_market_identity ?? {};
   const coverage = identity.coverage ?? {};
