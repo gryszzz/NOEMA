@@ -31,6 +31,18 @@ def test_ecosystem_endpoint_is_safe_without_database(monkeypatch, tmp_path) -> N
     assert response.json()["database_present"] is False
 
 
+def test_execution_gateway_endpoint_is_read_only_and_fail_closed_without_database(
+    monkeypatch, tmp_path,
+) -> None:
+    path = tmp_path / "missing-gateway.db"
+    monkeypatch.setenv("NOEMA_DB_PATH", str(path))
+    response = TestClient(app).get("/api/execution-gateway")
+    assert response.status_code == 200
+    assert response.json()["status"] == "FAIL CLOSED · NOT ARMED"
+    assert response.json()["recent_requests"] == []
+    assert not path.exists()
+
+
 def test_prediction_venues_endpoint_returns_read_only_status(monkeypatch) -> None:
     async def fake_status():
         return {"execution_enabled": False, "venues": [], "cross_venue_comparison": {"matches": []}}

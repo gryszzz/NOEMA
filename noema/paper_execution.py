@@ -50,7 +50,9 @@ class FeeTerms:
         if raw_multiplier is None:
             raw_multiplier = series.get("fee_multiplier")
         multiplier = _decimal(raw_multiplier)
-        if fee_type != "quadratic" or multiplier < 0:
+        # A separate maker schedule does not change this paper model's
+        # immediate taker-fill formula.
+        if fee_type not in {"quadratic", "quadratic_with_maker_fees"} or multiplier < 0:
             raise ValueError("unsupported or invalid taker fee terms")
         return cls(fee_type, multiplier)
 
@@ -61,7 +63,8 @@ def taker_fee(price: Decimal, contracts: Decimal, terms: FeeTerms) -> Decimal:
     Kalshi specifies round up of fee plus position cost to a centicent. Keep
     that rounding, then conservatively round the fee up to a full cent.
     """
-    if (terms.fee_type != "quadratic" or terms.taker_multiplier < 0
+    if (terms.fee_type not in {"quadratic", "quadratic_with_maker_fees"}
+            or terms.taker_multiplier < 0
             or terms.schedule_version != SCHEDULE_VERSION):
         raise ValueError("unverified fee terms")
     if not 0 < price < 1 or contracts <= 0:

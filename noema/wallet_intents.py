@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from .wallet_types import Chain
@@ -28,6 +29,9 @@ class WalletIntent:
     fee_limit_wei: int | None = None
     fee_limit_sats: int | None = None
     operational_validation: bool = False
+    wallet_id: str | None = None
+    network: str | None = None
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)

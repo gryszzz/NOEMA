@@ -31,6 +31,15 @@ def test_kalshi_fee_schedule_and_event_override():
         FeeTerms.from_api({"fee_type": "flat", "fee_multiplier": 1}, {})
 
 
+def test_kalshi_taker_fee_supports_series_with_separate_maker_fees():
+    terms = FeeTerms.from_api(
+        {"fee_type": "quadratic_with_maker_fees", "fee_multiplier": 1},
+        {},
+    )
+    assert terms.fee_type == "quadratic_with_maker_fees"
+    assert taker_fee(Decimal("0.5"), Decimal(1), terms) == Decimal("0.02")
+
+
 @pytest.mark.asyncio
 async def test_fee_lookup_applies_event_override_only_for_matching_tickers():
     def handler(request):
@@ -199,7 +208,7 @@ async def test_oversized_paper_quote_is_recorded_as_pass(tmp_path):
     assert store.audit()["selected_quote_count"] == 0
 
 
-def test_prototype_cost_does_not_double_count_spread_and_live_kalshi_is_blocked(tmp_path):
+def test_prototype_cost_does_not_double_count_spread_and_gateway_exists_for_live(tmp_path):
     snapshot = MarketSnapshot("kalshi:demo", "TICKER", "Clear", .4, .6, .4, .6,
                               1000, None, "Clear")
     assert CostModel().estimate(snapshot) == pytest.approx(.04)
@@ -207,6 +216,6 @@ def test_prototype_cost_does_not_double_count_spread_and_live_kalshi_is_blocked(
     class Venue:
         name = "kalshi:production"
 
-    with pytest.raises(RuntimeError, match="verified fee and depth"):
-        NoemaEngine(Venue(), object(), RiskEngine(RiskPolicy(mode=Mode.LIVE)),
-                    ForecastLedger(str(tmp_path / "ledger.db")))
+    engine = NoemaEngine(Venue(), object(), RiskEngine(RiskPolicy(mode=Mode.LIVE)),
+                         ForecastLedger(str(tmp_path / "ledger.db")))
+    assert engine.execution_gateway is not None

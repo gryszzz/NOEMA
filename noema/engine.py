@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from .execution_gateway import ExecutionGateway, ExecutionProposal
 from .ledger import ForecastLedger
-from .models import Forecast, MarketSnapshot, Mode, Opportunity
+from .models import Forecast, MarketSnapshot, Opportunity
 from .risk import RiskEngine
 from .validation import validate_market_snapshot
 from .venues.base import VenueAdapter
@@ -32,19 +35,20 @@ class NoemaEngine:
         risk: RiskEngine,
         ledger: ForecastLedger,
         cost_model: CostModel | None = None,
+        execution_gateway: ExecutionGateway | None = None,
     ) -> None:
         self.venue = venue
-        if risk.policy.mode is Mode.LIVE and venue.name.startswith("kalshi"):
-            raise RuntimeError(
-                "Kalshi live execution requires verified fee and depth integration; "
-                "paper quote research cannot authorize orders"
-            )
         self.forecaster = forecaster
         self.risk = risk
         self.ledger = ledger
         self.cost_model = cost_model or CostModel()
+        self.execution_gateway = execution_gateway or ExecutionGateway(
+            os.getenv("NOEMA_DB_PATH", "data/noema.db")
+        )
 
-    async def scan_once(self, bankroll_usd: float) -> list[str]:
+    async def scan_once(
+        self, bankroll_usd: float, *, mission_id: str | None = None,
+    ) -> list[str]:
         results: list[str] = []
 
         async for market in self.venue.markets():
@@ -82,9 +86,37 @@ class NoemaEngine:
             self.ledger.append(market, forecast, opportunity, action)
 
             if action.decision.value.startswith("live_"):
-                if not self.venue.supports_live_execution:
-                    raise RuntimeError("risk engine requested live action on non-live venue")
-                await self.venue.execute(action)
+                if not mission_id or not forecast.evidence_ids:
+                    results.append(
+                        f"{market.venue}:{market.market_id}:gateway_rejected:"
+                        "mission and evidence are required"
+                    )
+                    continue
+                proposal = ExecutionProposal.from_opportunity(
+                    proposal_id=f"{mission_id}:{market.venue}:{market.market_id}:{forecast.created_at.isoformat()}",
+                    mission_id=mission_id,
+                    opportunity=opportunity,
+                    action=action,
+                    evidence_refs=forecast.evidence_ids,
+                    expires_at=datetime.now(UTC) + timedelta(
+                        seconds=max(1, int(self.risk.policy.max_market_data_age_seconds)),
+                    ),
+                )
+                self.execution_gateway.record_proposal(proposal)
+                gateway_result = await self.execution_gateway.submit_prediction_order(
+                    proposal=proposal,
+                    opportunity=opportunity,
+                    action=action,
+                    risk_engine=self.risk,
+                    venue_adapter=self.venue,
+                    bankroll_usd=bankroll_usd,
+                )
+                if not gateway_result.allowed:
+                    results.append(
+                        f"{market.venue}:{market.market_id}:gateway_rejected:"
+                        + "|".join(gateway_result.reasons)
+                    )
+                    continue
 
             results.append(f"{market.venue}:{market.market_id}:{action.decision.value}")
 
