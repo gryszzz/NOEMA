@@ -17,6 +17,11 @@ from noema.paper_execution import FeeTerms
 from noema.paper_research import PaperResearchStore
 
 
+@pytest.fixture(autouse=True)
+def no_external_polymarket_collection(monkeypatch):
+    monkeypatch.setenv("NOEMA_POLYMARKET_US_ENABLED", "0")
+
+
 @pytest.mark.asyncio
 async def test_bad_optional_wallet_setup_is_degraded_without_crashing() -> None:
     state = await _evm_state(AgentConfig(evm_rpc_url="https://example.com", evm_address="bad"))
@@ -100,6 +105,9 @@ async def test_cycle_rejects_incomplete_event_then_records_verified_paper_pair(
     class FakeVenue:
         name = "kalshi:demo"
         complete = False
+
+        def __init__(self, config=None):
+            pass
 
         async def market_page(self, *, cursor=None, limit=100):
             return [market async for market in self.markets()], None

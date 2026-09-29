@@ -1,3 +1,39 @@
-:root{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e4eaf0;background:#0c1117;color-scheme:dark}*{box-sizing:border-box}body{margin:0}button,input{font:inherit}button,a{color:#acdcd9}button{border:1px solid #35434e;background:#15202a;padding:8px 12px;border-radius:3px;cursor:pointer;min-height:40px}button:disabled{opacity:.5;cursor:wait}button[aria-pressed=true]{background:#224641;color:#edfffb;border-color:#7bb5ab}a{text-underline-offset:4px}header{padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #2b3741}header strong{letter-spacing:.04em}header span{font-weight:400;color:#a7b6c4}header div{display:flex;align-items:center;gap:20px}.statusline{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding:10px 24px;background:#121a23;color:#b9c9d8;font-size:12px}#error{margin:12px 24px;color:#ffbc94}.economics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid #2b3741}.economics>div{padding:18px 24px;border-right:1px solid #2b3741;min-width:0}.economics span,.economics small{display:block;color:#a7b6c4;font-size:12px}.economics strong{display:block;font-size:24px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;font-weight:550;margin:5px 0}main{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-height:60vh}.records{padding:18px 24px;min-width:0}nav{display:flex;flex-wrap:wrap;gap:6px}.tools{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:20px}h1{font-size:20px;font-weight:550;margin:0}label{font-size:12px;color:#adbdcc}input{display:block;width:240px;max-width:100%;padding:8px;border:1px solid #455461;border-radius:3px;background:#111b24;color:#f0f6fc}#record-status{font-size:12px;color:#b2c2d0}.table-wrap{overflow:auto;border-top:1px solid #34414c}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{padding:10px 10px;border-bottom:1px solid #26333e;text-align:left;max-width:270px;min-width:100px;overflow-wrap:anywhere}th{font-size:11px;color:#a9bccb;font-weight:500}td{font-size:13px}td button{background:none;border:0;text-align:left;padding:0;min-height:32px}tr[data-selected=true]{background:#203732}aside{border-left:1px solid #2b3741;padding:20px;min-width:0;background:#101821}h2{font-size:15px;margin:0}aside p{color:#aabccb;font-size:13px}dl{margin:0}dt{font-size:11px;color:#99acbb;margin-top:14px}dd{margin:3px 0;overflow-wrap:anywhere;white-space:pre-wrap}#links button{display:block;margin-top:8px;width:100%;text-align:left}footer{border-top:1px solid #2b3741;display:flex;justify-content:space-between;gap:10px;padding:12px 24px;font-size:11px;color:#a7b6c4}.skip{position:absolute;top:-70px;background:#10252a;padding:10px}.skip:focus{top:0;z-index:5}:focus-visible{outline:2px solid #8fe3d0;outline-offset:3px}@media(max-width:1000px){main{grid-template-columns:1fr}aside{border-left:0;border-top:1px solid #2b3741}.economics{grid-template-columns:repeat(2,minmax(0,1fr))}.economics>div{border-bottom:1px solid #2b3741}}@media(max-width:550px){header,.statusline,.records,footer{padding:12px}.economics>div{padding:12px}.economics strong{font-size:20px}.tools{align-items:stretch;flex-direction:column}input{width:100%}footer{flex-direction:column}nav button{padding:7px 10px;font-size:12px}}
-
-.runtime-detail{padding:8px 24px;border-bottom:1px solid #2b3741;font-size:12px;color:#b9c9d8}.runtime-detail summary{cursor:pointer;min-height:30px}.runtime-detail dl{display:grid;grid-template-columns:180px 1fr;gap:5px}.runtime-detail dt,.runtime-detail dd{margin:0}
+:root {
+  color-scheme: dark;
+  --ink: #0b0f13;
+  --surface: #11171d;
+  --surface-raised: #161e26;
+  --surface-soft: #0e1419;
+  --line: #2a343e;
+  --line-soft: #1d2730;
+  --paper: #e6e9e7;
+  --muted: #a0a9ae;
+  --faint: #74818a;
+  --mint: #8bcbb2;
+  --mint-dim: #406858;
+  --amber: #e1ad72;
+  --blue: #91add8;
+  --red: #d98275;
+  --body: 'Noema Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --display: 'Noema Display', Impact, sans-serif;
+  --mono: 'Noema Mono', 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  background: var(--ink);
+  color: var(--paper);
+}
+* { box-sizing: border-box; }
+body { min-width: 320px; margin: 0; background: var(--ink); color: var(--paper); }
+button, input { color: inherit; font: inherit; }
+button { cursor: pointer; }
+a { color: var(--mint); text-underline-offset: 4px; }
+button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--mint); outline-offset: 3px;
+}
+.skip { position: absolute; z-index: 20; top: -60px; left: 12px; padding: 10px 14px; background: var(--surface-raised); }
+.skip:focus { top: 10px; }
+[hidden] { display: none !important; }
+/* Source-linked learning is a compact evidence panel, not an agent activity display. */
+.learning-overview{display:grid;gap:12px}.knowledge-stats{display:flex;flex-wrap:wrap;gap:8px}.knowledge-stats span,.knowledge-source,.knowledge-belief{border:1px solid var(--line,#273039);border-radius:10px;padding:10px 12px;background:rgba(255,255,255,.02)}.knowledge-sources,.knowledge-beliefs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.knowledge-source{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:.82rem}.knowledge-source a{color:var(--accent,#8dc7b1)}.knowledge-belief{display:grid;gap:6px}.knowledge-belief strong{font-size:.9rem}.knowledge-belief span,.knowledge-belief small{color:var(--muted,#9ba6ad);font-size:.78rem}

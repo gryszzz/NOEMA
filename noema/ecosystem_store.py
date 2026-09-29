@@ -153,8 +153,14 @@ class EcosystemStore:
             LIMIT 1
             """
         ).fetchone()
-        if previous is not None and str(previous[1]) == payload:
-            return int(previous[0])
+        if previous is not None:
+            try:
+                prior_plan = json.loads(str(previous[1]))
+                prior_plan.pop("mission_review", None)
+                if json.dumps(prior_plan, sort_keys=True, default=str) == payload:
+                    return int(previous[0])
+            except (TypeError, ValueError):
+                pass
 
         cursor = self.conn.execute(
             """
@@ -168,6 +174,35 @@ class EcosystemStore:
                 plan.idle_fraction,
                 payload,
             ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def record_mission_review(self, plan: EcosystemPlan, review: dict[str, object]) -> int:
+        """Persist an explicit mission-linked allocation decision in the existing audit trail."""
+        if review.get("outcome") not in {"NO_CHANGE", "INCREASE", "DECREASE", "QUARANTINE"}:
+            raise ValueError("invalid mission allocation review outcome")
+        mission_id = review.get("mission_id")
+        if not isinstance(mission_id, str) or not mission_id.strip():
+            raise ValueError("mission allocation review requires a mission id")
+        payload = asdict(plan)
+        payload["mission_review"] = review
+        serialized = json.dumps(payload, sort_keys=True, default=str, allow_nan=False)
+        self.conn.execute("BEGIN IMMEDIATE")
+        for review_id, existing_json in self.conn.execute(
+            "SELECT id,payload_json FROM ecosystem_reviews ORDER BY id DESC LIMIT 200"
+        ):
+            try:
+                existing = json.loads(str(existing_json)).get("mission_review")
+            except (TypeError, ValueError):
+                continue
+            if isinstance(existing, dict) and existing.get("mission_id") == mission_id:
+                self.conn.commit()
+                return int(review_id)
+        cursor = self.conn.execute(
+            "INSERT INTO ecosystem_reviews(created_at,dominant_specialist,idle_fraction,payload_json) "
+            "VALUES(?,?,?,?)",
+            (datetime.now(UTC).isoformat(), plan.dominant_specialist, plan.idle_fraction, serialized),
         )
         self.conn.commit()
         return int(cursor.lastrowid)

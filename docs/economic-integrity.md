@@ -51,6 +51,22 @@ It does not create a missing database.
   coverage and attribution exist. A positive cash subtotal does not prove that
   the operation is self-funded. Invalid records are counted and surfaced.
 
+Record verified receipts and expenses against the work that caused them using the
+existing append-only bill journal:
+
+```bash
+noema bill-entry --kind receipt --amount 12.00 --source payment-processor \
+  --reference payout-or-charge-id --activity-id <research-trial-or-mission-id>
+noema bill-entry --kind expense --amount 1.25 --source provider-invoice \
+  --reference invoice-line-id --activity-id <research-trial-or-mission-id>
+```
+
+The reference must identify the underlying processor or invoice record. Model
+reservations and token-price calculations remain estimates, not cash expenses.
+Unpriced local compute, delivery, data, or hosting keeps full net profit unknown;
+do not enter a zero-dollar estimate to make the ledger look complete. The Ops
+Home shows job-linked cash alongside those separate estimates.
+
 The report is a measurement surface, not another source of authority. Internal
 Economic OS snapshots are planning records supplied by a caller, not an audited
 bank balance. A live Stripe account alone does not establish project revenue;

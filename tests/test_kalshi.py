@@ -9,6 +9,26 @@ def test_demo_is_default_environment() -> None:
     assert config.allow_live_orders is False
 
 
+def test_environment_uses_keychain_id_and_standard_owner_only_pem(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
+    import noema.config as config_module
+
+    pem = tmp_path / "kalshi.pem"
+    pem.write_text("not parsed here")
+    monkeypatch.setenv("NOEMA_KALSHI_ENV", "production")
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.setattr(config_module, "kalshi_key_id_present", lambda: True)
+    monkeypatch.setattr(config_module, "load_kalshi_key_id_in_api_boundary", lambda: "fixture-id")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".config/noema/credentials").mkdir(parents=True)
+    target = tmp_path / ".config/noema/credentials/kalshi.pem"
+    target.write_text("fixture")
+    assert config_module.KalshiConfig.from_env().key_id == "fixture-id"
+    assert config_module.KalshiConfig.from_env().private_key_path == str(target)
+
+
 def test_market_mapping_uses_fixed_point_dollars() -> None:
     raw = {
         "ticker": "TEST-YES",

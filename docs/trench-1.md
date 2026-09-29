@@ -185,11 +185,27 @@ Enable it explicitly:
 NOEMA_TRENCH_ENABLED=1
 NOEMA_JUPITER_API_KEY=...
 NOEMA_SOLANA_RPC_URL=https://...
+# Optional independent read-only RPC endpoint for holder-data failover.
+NOEMA_SOLANA_RPC_FALLBACK_URL=https://...
 ```
 
 The API key is optional for Jupiter keyless prototyping, but the default request pause is
 conservative for the current 0.5 RPS keyless tier. Configure the pause for the rate limit of the
 connected Jupiter plan.
+Jupiter collection retries only transient transport, rate-limit, and server failures with bounded
+backoff; an observation is still rejected if the response arrives outside its scheduled freshness
+window. Solana RPC retries transient failures and uses the optional fallback only for holder
+enrichment. Both endpoints must return compatible token-supply context; stale or inconsistent
+slots are rejected. The fallback URL is never used for signing or wallet actions.
+
+NOEMA's autonomous mission queue registers the fixed one-hour survival audit only after the
+collector has produced at least 70 verified, launch-distinct forward labels (50 training and 20
+walk-forward test labels). Those labels join the predeclared 5-minute assessment to later
+one-hour observations and counterfactuals; repeated observations of one mint do not inflate the
+sample. The registered trial then competes for the existing `trench-1` research allocation. Until
+the collector is explicitly enabled and those labels exist, the Web3 desk remains capability-only
+and no audit mission is fabricated. API, model and compute costs remain unknown unless separately
+metered; the audit is paper research and cannot authorize a transaction.
 
 Operator commands:
 

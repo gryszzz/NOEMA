@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+DEFAULT_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
 
 def _enabled(name: str, default: str = "0") -> bool:
@@ -11,21 +13,22 @@ def _enabled(name: str, default: str = "0") -> bool:
 @dataclass(frozen=True)
 class TrenchCollectorConfig:
     enabled: bool = False
-    jupiter_api_key: str | None = None
-    solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
+    jupiter_api_key: str | None = field(default=None, repr=False)
+    solana_rpc_url: str = field(default=DEFAULT_SOLANA_RPC_URL, repr=False)
+    solana_rpc_fallback_url: str | None = field(default=None, repr=False)
     due_limit: int = 12
     enrichment_limit: int = 1
     request_pause_seconds: float = 2.1
 
     @classmethod
     def from_env(cls) -> TrenchCollectorConfig:
+        primary_rpc = os.getenv("NOEMA_SOLANA_RPC_URL", DEFAULT_SOLANA_RPC_URL).strip()
+        configured_fallback = (os.getenv("NOEMA_SOLANA_RPC_FALLBACK_URL") or "").strip()
         return cls(
             enabled=_enabled("NOEMA_TRENCH_ENABLED"),
             jupiter_api_key=os.getenv("NOEMA_JUPITER_API_KEY") or None,
-            solana_rpc_url=os.getenv(
-                "NOEMA_SOLANA_RPC_URL",
-                "https://api.mainnet-beta.solana.com",
-            ).strip(),
+            solana_rpc_url=primary_rpc,
+            solana_rpc_fallback_url=configured_fallback or None,
             due_limit=int(os.getenv("NOEMA_TRENCH_DUE_LIMIT", "12")),
             enrichment_limit=int(os.getenv("NOEMA_TRENCH_ENRICHMENT_LIMIT", "1")),
             request_pause_seconds=float(

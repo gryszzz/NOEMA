@@ -127,6 +127,12 @@ class AgentStore:
                         {"status": "disabled", "detail": "cycle predates Trench collection"},
                     )
                 ),
+                polymarket_us=AgentConnectionState(
+                    **last_cycle_raw.get(
+                        "polymarket_us",
+                        {"status": "unconfigured", "detail": "cycle predates Polymarket US collection"},
+                    )
+                ),
             )
 
         return AgentStatus(

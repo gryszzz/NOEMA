@@ -5,5 +5,6 @@ def test_public_policy_contains_no_secret_material() -> None:
     view = public_wallet_policy()
     assert view["master_halt"] is True
     assert view["signer_state"] == "disabled"
+    assert view["signing_enabled"] is False
     assert "private_key" not in view
     assert "secret" not in view

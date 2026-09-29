@@ -82,10 +82,13 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
       <h2>Wallet Topology</h2>
       <div class="row"><span>Human treasury</span><b id="phantom-state">NOT CONNECTED</b></div>
       <div class="row"><span>Agent signer</span><b id="agent-signer">DISABLED</b></div>
+      <div class="row"><span>Agent Keychain item</span><b id="agent-credential">UNKNOWN</b></div>
       <div class="row"><span>Agent master halt</span><b id="agent-halt" class="warn">ON</b></div>
       <div class="row"><span>Allowed chains</span><b id="agent-chains">—</b></div>
       <div class="row"><span>Per-tx cap</span><b id="agent-tx-cap">—</b></div>
       <div class="row"><span>Daily cap</span><b id="agent-day-cap">—</b></div>
+      <div id="wallet-network-table" class="small" style="margin-top:10px">Wallet network state unavailable.</div>
+      <div id="wallet-ledger-state" class="small" style="margin-top:8px">No reconciled NOEMA wallet transactions recorded.</div>
       <button class="refresh" style="margin-top:10px" onclick="connectPhantom()">CONNECT PHANTOM</button>
       <div id="phantom-address" class="small" style="margin-top:8px">Client-only connection. NOEMA never receives your seed phrase.</div>
     </div>
@@ -190,6 +193,19 @@ function renderExec(rows){
  if(!rows||!rows.length){el.className='empty';el.textContent='No fills/orders observed yet.';return}
  el.className='';el.innerHTML='<table><thead><tr><th>ORDER</th><th>FILLED</th><th>REMAINING</th><th>AVG PRICE</th><th>FEES</th><th>MAKER %</th></tr></thead><tbody>'+rows.slice(0,100).map(r=>'<tr><td>'+esc(r.order_id)+'</td><td>'+esc(r.observed_filled_count)+'</td><td>'+esc(r.remaining_count)+'</td><td>'+esc(r.average_fill_price??'—')+'</td><td>'+esc(r.fees_paid??'—')+'</td><td>'+(r.maker_fraction==null?'—':pct(r.maker_fraction))+'</td></tr>').join('')+'</tbody></table>'
 }
+function renderWalletNetworks(rows){
+ const el=document.getElementById('wallet-network-table');
+ if(!rows||!rows.length){el.className='empty';el.textContent='No dedicated wallet credentials found.';return}
+ el.className='';
+ el.innerHTML='<table><thead><tr><th>NETWORK</th><th>CHAIN ID</th><th>PUBLIC ADDRESS</th><th>BALANCE</th><th>ASSETS</th><th>STATE</th></tr></thead><tbody>'+rows.map(r=>{
+  const balance=r.sol??r.native_balance??r.btc??'—';
+  const asset=r.chain==='bitcoin'?'BTC':r.chain==='solana'?'SOL':'native';
+  const tokens=r.token_status==='unavailable'?'token index unavailable':(r.tokens&&r.tokens.length?r.tokens.length+' token balance(s)':r.token_status==='indexed'?'0 indexed ERC-20 balances':'—');
+  const state=r.status==='unavailable'?'READ FAILED':(r.status||'unknown').replaceAll('_',' ').toUpperCase();
+  const addr=r.address?String(r.address).slice(0,10)+'…'+String(r.address).slice(-6):'—';
+  return '<tr><td>'+esc(r.chain)+' / '+esc(r.network)+'</td><td>'+esc(r.chain_id??'—')+'</td><td title="'+esc(r.address||'')+'">'+esc(addr)+'</td><td>'+esc(balance)+' '+asset+'</td><td>'+esc(tokens)+'</td><td>'+esc(state)+'</td></tr>';
+ }).join('')+'</tbody></table>';
+}
 async function refreshAll(){
  try{
   try{
@@ -238,13 +254,54 @@ async function refreshAll(){
   try{
    const cognition=await getJSON('/api/cognition');
    const el=document.getElementById('cognition-panel');
+   el.className='';
    if(cognition.latest){
     const p=cognition.latest.packet;
-    el.className='';
-    el.innerHTML='<div class="row"><span>Deployment</span><b>'+esc(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+esc(cognition.latest.market_id)+'</b></div><div class="row"><span>Mode</span><b>'+esc(p.recommended_mode)+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+esc(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+esc(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+esc(p.thesis)+'<br><b>Unknowns:</b> '+(p.unknowns||[]).map(esc).join('; ')+'</div>';
-   }else{
-    el.className='empty';
-    el.textContent=cognition.configured?'Foundry configured; waiting for an eligible market.':'Foundry not configured yet.';
+    el.innerHTML='<div class="row"><span>Provider</span><b>'+esc(cognition.provider)+'</b></div><div class="row"><span>Deployment</span><b>'+esc(cognition.deployment||'—')+'</b></div><div class="row"><span>Market</span><b>'+esc(cognition.latest.market_id)+'</b></div><div class="row"><span>Mode</span><b>'+esc(p.recommended_mode)+'</b></div><div class="row"><span>Confidence</span><b>'+pct(p.confidence)+'</b></div><div class="row"><span>Research backlog</span><b>'+esc(cognition.pending_research_count||0)+'</b></div><div class="row"><span>Tokens / hour</span><b>'+esc(cognition.tokens_last_hour||0)+'</b></div><div class="small" style="margin-top:8px"><b>Thesis:</b> '+esc(p.thesis)+'<br><b>Unknowns:</b> '+(p.unknowns||[]).map(esc).join('; ')+'</div>';
+   } else el.innerHTML='<div class="row"><span>Primary provider</span><b>'+esc(cognition.provider)+' · '+esc(cognition.configured?'configured':'unavailable')+'</b></div><div class="small">Waiting for eligible work.</div>';
+   const runtime=cognition.runtime_providers||{};
+   const costGate=cognition.hosted_cost_gate||{};
+   if(costGate.status){
+    const row=document.createElement('div');row.className='row';
+    const left=document.createElement('span');left.textContent='Hosted spend gate';
+    const right=document.createElement('b');right.textContent=costGate.status;
+    row.append(left,right);el.append(row);
+   }
+   for(const [name,provider] of Object.entries(runtime)){
+    const status=provider.status||'unknown';
+    const label=name.replaceAll('_',' ');
+    const detail=document.createElement('div');detail.className='row';
+    const left=document.createElement('span');left.textContent=label;
+    const right=document.createElement('b');right.textContent=status;
+    detail.append(left,right);el.append(detail);
+    for(const model of provider.models||[]){
+     const row=document.createElement('div');row.className='small';
+     row.textContent=model.id+' · '+model.capabilities.join(', ');el.append(row);
+    }
+    for(const [service,health] of Object.entries(provider)){
+     if(name==='hosted_providers')continue;
+     if(['status','endpoint','models','selected_model','selected_model_available'].includes(service))continue;
+     if(health&&typeof health==='object'){
+      const row=document.createElement('div');row.className='row';
+      const left=document.createElement('span');left.textContent=service;
+      const right=document.createElement('b');right.textContent=health.status||'unknown';
+      row.append(left,right);el.append(row);
+     }
+    }
+    if(name==='hosted_providers'){
+     for(const [hostedName,hosted] of Object.entries(provider)){
+      if(!hosted||typeof hosted!=='object')continue;
+      const row=document.createElement('div');row.className='row';
+      const left=document.createElement('span');left.textContent=hostedName.replaceAll('_',' ');
+      const right=document.createElement('b');right.textContent=hosted.status||'unknown';
+      row.append(left,right);el.append(row);
+      if(hosted.model){
+       const modelRow=document.createElement('div');modelRow.className='small';
+       modelRow.textContent=hosted.model+(hosted.model_available===true?' · verified':hosted.model_available===false?' · not verified':'');
+       el.append(modelRow);
+      }
+     }
+    }
    }
   }catch(e){}
   try{
@@ -289,11 +346,15 @@ async function refreshAll(){
   try{
    const w=await getJSON('/api/wallet-policy');
    document.getElementById('agent-signer').textContent=String(w.signer_state||'unknown').toUpperCase();
+   document.getElementById('agent-credential').textContent=w.credential_present?'PRESENT · SIGNING DISABLED':'ABSENT';
    document.getElementById('agent-halt').textContent=w.master_halt?'ON':'OFF';
    document.getElementById('agent-halt').className=w.master_halt?'warn':'good';
    document.getElementById('agent-chains').textContent=(w.allowed_chains||[]).join(', ')||'none';
-   document.getElementById('agent-tx-cap').textContent=money(w.max_transaction_usd);
-   document.getElementById('agent-day-cap').textContent=money(w.max_daily_notional_usd);
+   document.getElementById('agent-tx-cap').textContent=w.delegated_capital_authority?'wallet capital':money(w.max_transaction_usd);
+   document.getElementById('agent-day-cap').textContent=w.delegated_capital_authority?'wallet capital':money(w.max_daily_notional_usd);
+   const ws=await getJSON('/api/wallet-status');
+   renderWalletNetworks(ws.networks||[]);
+   document.getElementById('wallet-ledger-state').textContent='Confirmed activity is written to the NOEMA economic ledger when an authorized mission executes. Live signer controls remain owner-held.';
   }catch(e){}
  }catch(e){document.getElementById('db-pill').textContent='DB ERROR'}
  try{

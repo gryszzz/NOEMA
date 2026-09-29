@@ -67,3 +67,12 @@ class WalletBudgetLedger:
             (wallet_id, f"{prefix}%"),
         ).fetchall()
         return sum((Decimal(row[0]) for row in rows), Decimal(0))
+
+    def update_status(self, intent_id: str, status: str) -> None:
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE wallet_intent_budget SET status=? WHERE intent_id=?",
+                (status, intent_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError("wallet intent budget record does not exist")

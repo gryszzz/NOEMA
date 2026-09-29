@@ -316,11 +316,18 @@ def _survival_label(
     )
 
 
-def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalExample]:
-    if not Path(path).exists():
+def load_verified_examples(
+    path: str = "data/noema.db",
+    *,
+    connection: sqlite3.Connection | None = None,
+    now: datetime | None = None,
+) -> list[TrenchSurvivalExample]:
+    """Load only complete, forward-timed labels; an optional caller connection is never owned."""
+    if connection is None and not Path(path).exists():
         return []
 
-    conn = sqlite3.connect(path)
+    owns_connection = connection is None
+    conn = connection if connection is not None else sqlite3.connect(path)
     try:
         rows = conn.execute(
             """
@@ -350,11 +357,15 @@ def load_verified_examples(path: str = "data/noema.db") -> list[TrenchSurvivalEx
     except sqlite3.OperationalError:
         return []
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
     examples: list[TrenchSurvivalExample] = []
     seen_mints: set[str] = set()
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    now = now.astimezone(UTC)
     for (
         candidate_id,
         mint,
@@ -589,5 +600,18 @@ def audit_database(path: str = "data/noema.db") -> TrenchSurvivalAudit:
         audit = audit_examples(examples)
         store.put(fingerprint, audit)
         return audit
+    finally:
+        store.conn.close()
+
+
+def cached_database_audit(path: str = "data/noema.db") -> TrenchSurvivalAudit:
+    """The observation loop reads earned evidence; only a bounded worker fits models."""
+    examples = load_verified_examples(path)
+    store = TrenchSurvivalAuditStore(path)
+    try:
+        cached = store.get(_fingerprint(examples))
+        return cached or TrenchSurvivalAudit(
+            MODEL_VERSION, "bounded_experiment_required", len(examples), 0, 0,
+        )
     finally:
         store.conn.close()

@@ -40,8 +40,15 @@ class BillTracker:
                 amount_usd TEXT NOT NULL,
                 source TEXT NOT NULL,
                 reference TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                activity_id TEXT
             )"""
+        )
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(bill_entries)")}
+        if "activity_id" not in columns:
+            self.conn.execute("ALTER TABLE bill_entries ADD COLUMN activity_id TEXT")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS bill_entries_activity_id ON bill_entries(activity_id)"
         )
         self.conn.commit()
 
@@ -65,7 +72,7 @@ class BillTracker:
 
     def record(
         self, *, kind: str, amount_usd: Decimal, source: str,
-        reference: str, now: datetime | None = None,
+        reference: str, now: datetime | None = None, activity_id: str | None = None,
     ) -> None:
         if kind not in {"receipt", "expense"}:
             raise ValueError("kind must be receipt or expense")
@@ -73,13 +80,15 @@ class BillTracker:
             raise ValueError("entry amount must be positive")
         if not source.strip() or not reference.strip():
             raise ValueError("source and unique reference are required")
+        if activity_id is not None and (not activity_id.strip() or len(activity_id) > 128):
+            raise ValueError("activity_id must be a non-empty identifier of at most 128 characters")
         at = (now or datetime.now(UTC)).astimezone(UTC)
         self.conn.execute(
             """INSERT INTO bill_entries
-            (month_utc, kind, amount_usd, source, reference, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)""",
+            (month_utc, kind, amount_usd, source, reference, created_at, activity_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (at.strftime("%Y-%m"), kind, str(amount_usd), source.strip(),
-             reference.strip(), at.isoformat()),
+             reference.strip(), at.isoformat(), activity_id.strip() if activity_id else None),
         )
         self.conn.commit()
 

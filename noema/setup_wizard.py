@@ -39,7 +39,7 @@ def _quote(value: str) -> str:
 def write_local_env(
     values: dict[str, str],
     *,
-    path: str = DEFAULT_LOCAL_ENV,
+    path: str | Path = DEFAULT_LOCAL_ENV,
 ) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +69,7 @@ def write_local_env(
 
 def run_setup_wizard(
     *,
-    path: str = DEFAULT_LOCAL_ENV,
+    path: str | Path = DEFAULT_LOCAL_ENV,
     input_fn: Callable[[str], str] = input,
     secret_fn: Callable[[str], str] = getpass.getpass,
 ) -> Path:

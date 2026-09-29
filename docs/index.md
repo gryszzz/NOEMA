@@ -1,8 +1,10 @@
 # NOEMA documentation
 
+- [Master mission](master-mission.md) — durable purpose, autonomous work, economic discipline, and authority.
 - [Quick connection guide](quick-connect.md) — install, optional providers, local console.
 - [Operator guide](operator-guide.md) — full commands and current capabilities.
 - [Agent runtime](agent-runtime.md) and [persistent hosting](hosting-paper-agent.md).
+- [Prediction venues](prediction-venues.md) — Kalshi and Polymarket US read-only adapters, credentials, and current live-data boundary.
 - [Public experience and Pages](public-experience.md) — static site, report import, deployment checks.
 - [Economic integrity](economic-integrity.md) — cash, reservations, allocation, promotion, paper settlement.
 - [Evaluation](evaluation.md), [truth and timing](truth-timing.md), [evidence ladder](real-life-ladder.md).

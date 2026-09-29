@@ -11,7 +11,7 @@ from .history_forecaster import MODEL_VERSION
 from .paired_evaluation import compare_history_to_market
 from .paper_performance import settled_paper_performance
 from .specialist_evolution import SpecialistEvidence
-from .trench_survival_model import audit_database as audit_trench_survival
+from .trench_survival_model import cached_database_audit as audit_trench_survival
 
 
 def _candidate_calibration(path: str) -> float | None:
@@ -110,7 +110,8 @@ def trench1_evidence(
             else None
         )
         return SpecialistEvidence(
-            resolved=audit.walk_forward_tests,
+            resolved=(audit.total_labels if audit.status == "bounded_experiment_required"
+                      else audit.walk_forward_tests),
             brier=audit.model_brier,
             market_baseline_brier=audit.baseline_brier,
             after_cost_return=None,

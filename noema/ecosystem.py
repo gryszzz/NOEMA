@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .specialists import SpecialistProfile, SpecialistState, specialist_attention_multiplier
@@ -77,6 +78,7 @@ def allocate_specialist_attention(
     *,
     exploration_fraction: float = 0.15,
     family_cap: float = 0.65,
+    negative_return_scale: float = 0.10,
 ) -> EcosystemPlan:
     """Allocate research attention across independent specialist families.
 
@@ -85,15 +87,37 @@ def allocate_specialist_attention(
     compete for the remaining pool using their evidence-backed attention multiplier.
     """
 
-    if not 0 <= exploration_fraction <= 0.50:
+    if not math.isfinite(exploration_fraction) or not 0 <= exploration_fraction <= 0.50:
         raise ValueError("exploration_fraction must be in [0, 0.50]")
-    if not 0 < family_cap <= 1:
+    if not math.isfinite(family_cap) or not 0 < family_cap <= 1:
         raise ValueError("family_cap must be in (0, 1]")
+    if not math.isfinite(negative_return_scale) or negative_return_scale <= 0:
+        raise ValueError("negative_return_scale must be positive and finite")
 
     unique: dict[str, SpecialistProfile] = {}
     for profile in profiles:
         if not profile.name.strip():
             raise ValueError("specialist name cannot be empty")
+        if not profile.family.strip() or not isinstance(profile.state, SpecialistState):
+            raise ValueError("specialist family and state must be valid")
+        if type(profile.resolved) is not int or profile.resolved < 0:
+            raise ValueError("resolved must be a non-negative integer")
+        for name in (
+            "reliability", "calibration_error", "after_cost_return", "drawdown_fraction",
+        ):
+            value = getattr(profile, name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{name} must be finite when available")
+        if profile.reliability is None:
+            raise ValueError("reliability must be finite")
+        for name in ("calibration_error", "drawdown_fraction"):
+            value = getattr(profile, name)
+            if value is not None and not 0 <= value <= 1:
+                raise ValueError(f"{name} must be in [0, 1]")
         if profile.name in unique:
             raise ValueError(f"duplicate specialist name: {profile.name}")
         unique[profile.name] = profile
@@ -144,7 +168,7 @@ def allocate_specialist_attention(
         exploration_pool = exploration_fraction
         exploitation_pool = 1.0 - exploration_fraction
     elif shadows:
-        exploration_pool = 1.0
+        exploration_pool = exploration_fraction
         exploitation_pool = 0.0
     else:
         exploration_pool = 0.0
@@ -169,6 +193,14 @@ def allocate_specialist_attention(
     families = {name: profile.family for name, profile in available.items()}
     shares = _apply_family_cap(shares, families, cap=family_cap)
 
+    # Negative after-cost observations reduce further research regardless of the
+    # competing weights. Do this after normalization so a lone losing specialist
+    # cannot regain the entire pool. Released attention stays idle. These returns
+    # may be paper evidence; this is a research discount, never realized dollar EV.
+    for name, profile in available.items():
+        if profile.after_cost_return is not None and profile.after_cost_return < 0:
+            shares[name] *= 1 / (1 + abs(profile.after_cost_return) / negative_return_scale)
+
     allocations: list[AttentionAllocation] = []
     for name, profile in sorted(unique.items()):
         if name in quarantined:
@@ -184,6 +216,8 @@ def allocate_specialist_attention(
                 reason = "evidence-weighted exploitation"
             else:
                 reason = "no evidence-backed attention weight"
+            if profile.after_cost_return is not None and profile.after_cost_return < 0:
+                reason += "; reduced by negative after-cost research evidence"
         allocations.append(
             AttentionAllocation(
                 specialist=name,

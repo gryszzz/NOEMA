@@ -87,19 +87,67 @@ Current intended roles:
 
 Provider selection should happen after testing current SDK/API support for the target chains.
 
+## Local Phantom signer decision
+
+NOEMA uses three distinct macOS login Keychain identities: Solana
+(`com.noema.solana.owner-wallet` / `noema-owner`), EVM
+(`com.noema.evm.owner-wallet` / `noema-owner`), and Bitcoin
+(`com.noema.bitcoin.owner-wallet` / `noema-owner`). The EVM identity is shared by
+Ethereum, Base and Polygon after an on-chain `eth_chainId` check. No credential is
+copied to `.env.local`, SQLite, Docker, prompts, the dashboard or an ordinary agent
+process. A short-lived signer child reads only the requested chain's Keychain item;
+its parent receives structured public results only.
+
+`WalletIntent` continues through `AgentWallet` and the deterministic policy into a
+chain-specific signer. The owner-funded wallet balance is the capital boundary in
+dedicated mode, so there is no routine approval click or daily discretionary cap.
+The owner-controlled global and per-chain master halts remain outside model
+authority, and each chain has an explicit signer-enable flag. Signers reject
+unsupported actions, mismatched wallet identity, wrong chain ID, unavailable RPC,
+failed simulation or preflight, insufficient native/token funds, and fees above the
+intent ceiling.
+
+Current adapters support native SOL transfers, native EVM transfers and standard
+ERC-20 transfers, plus Bitcoin mainnet native-SegWit sends. Solana and EVM swaps,
+arbitrary protocol calls, bridges and Bitcoin script types beyond native SegWit are
+not enabled. A future adapter must decode a structured action, simulate or perform
+an equivalent deterministic preflight, and reconcile its chain receipt before it
+can be called a supported action.
+
+### Current state
+
+- Confirmed public identities are checked against their isolated Keychain items;
+  the Home reads current public balances and chain IDs without returning any key.
+- Solana and Base transaction construction, fee/gas estimation, simulation and
+  local signing were verified without broadcasting. Solana simulation succeeded;
+  Base `eth_call` and `eth_estimateGas` succeeded.
+- Base ERC-20 holdings are read from the Base Blockscout token-balance index. It
+  reported no tokens for the confirmed account. Other EVM chains support direct
+  `balanceOf` reads for explicitly supplied token contracts.
+- Bitcoin balance is zero, so there are no confirmed UTXOs to construct or sign a
+  spend. Bitcoin does not have an EVM-style transaction simulation RPC; the adapter
+  uses confirmed-UTXO and fee preflight instead.
+- EVM and Solana broadcast, receipt confirmation and reconciliation paths are
+  implemented, but no mainnet transaction has been broadcast. All signer-enable
+  flags are off and the owner master halt is on. No live execution is available
+  until the owner enables it after reviewing the runtime configuration.
+- A confirmed transaction records its chain, public transaction reference, status,
+  fee and balance reconciliation in the economic ledger and its owning mission;
+  transfers and fees are never classified as revenue.
+
 ## Current agent policy
 
-The default wallet policy is deliberately inert:
+The ordinary wallet policy stays fail-closed. The dedicated-wallet policy uses the
+deposited wallet capital as its economic ceiling and retains:
 
 - master halt **ON**;
 - evidence required;
-- small transaction cap;
-- small daily notional cap;
-- minimum reserve enforced;
-- limited default chains;
-- no venue/contract considered trusted unless explicitly configured.
+- explicit supported-chain and supported-action validation;
+- per-intent fee ceilings and on-chain balance checks;
+- per-chain signer-enable flags;
+- a global owner-controlled master halt.
 
-The default signer is `DisabledWalletSigner`, which always fails closed.
+`DisabledWalletSigner` remains the default when no local owner signer is selected.
 
 ## Wallet intent
 
@@ -213,18 +261,22 @@ Implemented:
 - deterministic wallet policy;
 - daily budget ledger;
 - provider-neutral signer protocol;
-- disabled fail-closed signer;
+- isolated macOS Keychain signer process for Solana, EVM and Bitcoin;
+- chain-ID checked EVM adapter for Ethereum, Base and Polygon;
+- Solana simulation and native transfer signer;
+- EVM native/ERC-20 construction, gas estimation, `eth_call`, signing, send and receipt reconciliation;
+- Bitcoin native-SegWit UTXO/fee preflight, signing, broadcast and confirmation;
 - wallet coordinator;
-- unit tests.
+- economic and mission receipt persistence;
+- read-only multi-chain wallet status in NOEMA Home;
+- unit tests and live construction/simulation/signing checks.
 
 Not yet implemented:
 
-- Privy or Turnkey production signer adapter;
-- Solana/EVM transaction construction;
-- DEX adapters;
-- token/contract registry;
-- transaction simulation;
-- chain-specific gas / priority-fee models;
-- bridge execution.
+- DEX swap adapters and protocol-call allowlists;
+- token registry and automatic ERC-20 discovery on Ethereum/Polygon;
+- Bitcoin fee/UTXO transaction construction test (the confirmed account balance is zero);
+- live mainnet broadcast/confirmation test (no economically justified live intent has been executed);
+- USD valuation for wallet balance and on-chain fees.
 
 Those should be added one adapter at a time against current provider documentation and testnets before mainnet capital is considered.

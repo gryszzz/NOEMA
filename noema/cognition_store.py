@@ -44,7 +44,8 @@ class CognitionStore:
                 estimated_usd REAL NOT NULL CHECK (estimated_usd > 0),
                 created_at TEXT NOT NULL,
                 estimated_tokens INTEGER,
-                market_id TEXT
+                market_id TEXT,
+                activity_id TEXT
             )
             """
         )
@@ -66,6 +67,14 @@ class CognitionStore:
                 self.conn.execute(
                     "ALTER TABLE cognition_budget_reservations ADD COLUMN market_id TEXT"
                 )
+            if "activity_id" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE cognition_budget_reservations ADD COLUMN activity_id TEXT"
+                )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS cognition_reservations_activity_id "
+                "ON cognition_budget_reservations(activity_id)"
+            )
 
     def reserve_estimated_cost(
         self, cost_usd: float, *, daily_limit_usd: float,
@@ -74,6 +83,7 @@ class CognitionStore:
         estimated_tokens: int | None = None,
         hourly_token_limit: int | None = None,
         market_id: str | None = None,
+        activity_id: str | None = None,
         cooldown_seconds: float = 0,
         now: datetime | None = None,
     ) -> bool:
@@ -99,6 +109,10 @@ class CognitionStore:
         if (not math.isfinite(cooldown_seconds) or cooldown_seconds < 0
                 or (cooldown_seconds > 0 and not market_id)):
             raise ValueError("cooldown must be non-negative and associated with a market")
+        if activity_id is not None and (
+            not isinstance(activity_id, str) or not activity_id.strip() or len(activity_id) > 128
+        ):
+            raise ValueError("activity_id must be a non-empty identifier of at most 128 characters")
         now = _utc_time(now)
         day = now.date().isoformat()
         self.conn.execute("BEGIN IMMEDIATE")
@@ -144,9 +158,9 @@ class CognitionStore:
                     return False
             self.conn.execute(
                 "INSERT INTO cognition_budget_reservations "
-                "(day_utc, estimated_usd, created_at, estimated_tokens, market_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (day, cost_usd, now.isoformat(), estimated_tokens, market_id),
+                "(day_utc, estimated_usd, created_at, estimated_tokens, market_id, activity_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (day, cost_usd, now.isoformat(), estimated_tokens, market_id, activity_id),
             )
             self.conn.commit()
             return True
