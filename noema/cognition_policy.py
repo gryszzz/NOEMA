@@ -23,7 +23,20 @@ class CognitionPolicy:
     output_usd_per_million: float | None = None
 
     @classmethod
-    def from_env(cls) -> CognitionPolicy:
+    def from_env(
+        cls, *, provider: str | None = None, model: str | None = None,
+    ) -> CognitionPolicy:
+        provider = (provider or os.getenv("NOEMA_COGNITION_PROVIDER", "auto")).strip().lower()
+        if provider not in {"foundry", "openai", "cloudflare"}:
+            raise ValueError("unsupported cognition pricing provider")
+        price_prefix = f"NOEMA_{provider.upper()}"
+        model = model or os.getenv(
+            f"NOEMA_{provider.upper()}_MODEL",
+            os.getenv("NOEMA_OPENAI_MODEL") if provider == "openai" else None,
+        )
+        price_matches_model = provider == "foundry" or bool(
+            model and os.getenv(f"NOEMA_{provider.upper()}_PRICING_MODEL") == model
+        )
         return cls(
             min_attention=float(
                 os.getenv("NOEMA_COGNITION_MIN_ATTENTION", "0.70")
@@ -50,11 +63,15 @@ class CognitionPolicy:
                 os.getenv("NOEMA_COGNITION_MAX_ESTIMATED_USD_PER_DAY", "0.50")
             ),
             input_usd_per_million=(
-                float(value) if (value := os.getenv("NOEMA_FOUNDRY_INPUT_USD_PER_MILLION"))
+                float(value) if price_matches_model and (
+                    value := os.getenv(f"{price_prefix}_INPUT_USD_PER_MILLION")
+                )
                 else None
             ),
             output_usd_per_million=(
-                float(value) if (value := os.getenv("NOEMA_FOUNDRY_OUTPUT_USD_PER_MILLION"))
+                float(value) if price_matches_model and (
+                    value := os.getenv(f"{price_prefix}_OUTPUT_USD_PER_MILLION")
+                )
                 else None
             ),
         )

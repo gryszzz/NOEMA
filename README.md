@@ -3,9 +3,11 @@
 **An evidence-first economic intelligence laboratory.**
 
 NOEMA observes public markets, records immutable forecasts, evaluates later
-outcomes, and allocates bounded research attention. Its broader mission is an
-ecosystem whose specialists earn resources through measurable evidence across
-legitimate economic environments.
+outcomes, and allocates bounded research attention. Its [master mission](docs/master-mission.md)
+is autonomous discovery and pursuit of legitimate economic edge across prediction
+markets, Web3, and the programmable internet, within approved resources and
+deterministic limits. Strategies compete on measured contribution after costs;
+doing nothing is valid when no opportunity earns those resources.
 
 **Today:** autonomous paper research, optional model cognition, chronological
 evaluation, and a local Ops Console. Live execution and demonstrated self-funding

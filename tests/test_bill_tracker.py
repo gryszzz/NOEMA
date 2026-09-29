@@ -50,6 +50,27 @@ def test_model_reservation_respects_monthly_budget_across_days(tmp_path):
     )
 
 
+def test_legacy_entries_migrate_and_cash_can_be_attributed_to_one_job(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "noema.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TABLE bill_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, month_utc TEXT NOT NULL,
+            kind TEXT NOT NULL, amount_usd TEXT NOT NULL, source TEXT NOT NULL,
+            reference TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)""")
+        conn.execute("""INSERT INTO bill_entries VALUES
+            (1,'2026-09','expense','1.25','provider invoice','legacy-1',
+             '2026-09-26T00:00:00+00:00')""")
+    tracker = BillTracker(str(path))
+    tracker.record(kind="receipt", amount_usd=Decimal(4), source="processor payout",
+                   reference="receipt-1", activity_id="trial-123",
+                   now=datetime(2026, 9, 26, tzinfo=UTC))
+    row = tracker.conn.execute("SELECT activity_id FROM bill_entries WHERE reference='receipt-1'").fetchone()
+    assert row == ("trial-123",)
+    assert tracker.conn.execute("SELECT activity_id FROM bill_entries WHERE reference='legacy-1'").fetchone() == (None,)
+
+
 @pytest.mark.parametrize("amount", ["NaN", "Infinity", "-1", "0.001"])
 def test_bill_tracker_rejects_invalid_amounts(tmp_path, amount):
     tracker = BillTracker(str(tmp_path / "noema.db"))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -13,9 +14,11 @@ from .agent_identity import AgentIdentity
 from .agent_models import AgentConnectionState, AgentCycleState, AgentStatus
 from .agent_planner import choose_goal, refine_goal_with_cognition
 from .agent_store import AgentStore
+from .autonomous_research import run_research_work
 from .baseline_recording import record_market_baseline
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
+from .config import kalshi_production_read_only_config
 from .economic_dashboard import build_economic_overview
 from .ecosystem_controller import review_research_ecosystem
 from .ecosystem_evolution import evolve_default_specialists
@@ -27,14 +30,17 @@ from .opportunity_radar import build_radar
 from .outcomes import OutcomeStore
 from .paper_research import PaperResearchStore, collect_paper_quote
 from .provenance import EvidenceStore
+from .research_allocation import CollectionQuotas, collection_quotas
 from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
 from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
+from .stripe_economy import sync_stripe_economy
 from .sync import sync_kalshi_outcomes
 from .trench_collector import collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
+from .venues.polymarket_us import PolymarketUSVenue
 
 
 def _log(event: str, **fields: object) -> None:
@@ -50,7 +56,7 @@ def _log(event: str, **fields: object) -> None:
 
 async def _kalshi_state() -> AgentConnectionState:
     try:
-        telemetry = KalshiTelemetry()
+        telemetry = KalshiTelemetry(kalshi_production_read_only_config())
     except (RuntimeError, ValueError, OSError, TypeError) as exc:
         return AgentConnectionState("unconfigured", f"{type(exc).__name__}: account unavailable")
 
@@ -96,7 +102,9 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
         await client.close()
 
 
-async def _trench_state(db_path: str) -> AgentConnectionState:
+async def _trench_state(
+    db_path: str, *, quotas: CollectionQuotas | None = None,
+) -> AgentConnectionState:
     config = TrenchCollectorConfig.from_env()
     if not config.enabled:
         return AgentConnectionState("disabled", "Trench collector disabled")
@@ -105,22 +113,43 @@ async def _trench_state(db_path: str) -> AgentConnectionState:
         summary = await collect_trench_cycle(
             db_path=db_path,
             jupiter=JupiterTrenchResearchClient(api_key=config.jupiter_api_key),
-            solana=SolanaRpcResearchClient(rpc_url=config.solana_rpc_url),
+            solana=SolanaRpcResearchClient(
+                rpc_url=config.solana_rpc_url,
+                fallback_rpc_url=config.solana_rpc_fallback_url,
+            ),
             due_limit=config.due_limit,
-            enrichment_limit=config.enrichment_limit,
+            enrichment_limit=(config.enrichment_limit if quotas is None
+                              else quotas.trench_enrichment),
             request_pause_seconds=config.request_pause_seconds,
+            discover_new=quotas is None or quotas.trench_due > 0,
         )
+        status = ("degraded" if summary.failed or summary.unavailable
+                  or summary.provider_failures else "connected")
         return AgentConnectionState(
-            "connected",
+            status,
             (
                 f"discovered={summary.discovered} due={summary.due} "
                 f"recorded={summary.recorded} unavailable={summary.unavailable} "
                 f"failed={summary.failed} assessments={summary.assessments_recorded} "
-                f"counterfactuals={summary.counterfactuals_recorded}"
+                f"counterfactuals={summary.counterfactuals_recorded} "
+                f"provider_failures={','.join(summary.provider_failures) or 'none'}"
             ),
         )
+    except httpx.HTTPStatusError as exc:
+        host = exc.request.url.host or "configured provider"
+        provider = "Jupiter" if host == "api.jup.ag" else "Solana RPC"
+        return AgentConnectionState(
+            "degraded",
+            f"{provider} returned HTTP {exc.response.status_code} during read-only collection",
+        )
+    except httpx.RequestError as exc:
+        host = exc.request.url.host or "configured provider"
+        provider = "Jupiter" if host == "api.jup.ag" else "Solana RPC"
+        return AgentConnectionState(
+            "degraded",
+            f"{provider} transport failure during read-only collection: {type(exc).__name__}",
+        )
     except (
-        httpx.HTTPError,
         RuntimeError,
         ValueError,
         TypeError,
@@ -145,6 +174,32 @@ async def run_cycle(
     identity = identity or AgentIdentity()
     store = store or AgentStore(config.db_path)
     started = datetime.now(UTC)
+    try:
+        stripe_economy = await sync_stripe_economy(config.db_path)
+    except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
+        stripe_economy = {"status": "unavailable", "reason": "read-only Stripe sync failed"}
+    if stripe_economy.get("status") not in {"cached", "disabled"}:
+        _log("agent_stripe_economy", status=stripe_economy.get("status"),
+             payment_intent_count=stripe_economy.get("payment_intent_count"),
+             succeeded_count=stripe_economy.get("succeeded_count"),
+             new_successful_payment_count=stripe_economy.get("new_successful_payment_count"))
+
+    # Persisted evidence determines real discretionary work before collecting data.
+    # Small public baseline observation and existing outcome obligations continue even
+    # when a strategy is quarantined; these are measurement, never trade authority.
+    try:
+        prior_plan = review_research_ecosystem(config.db_path)
+        trench_config = TrenchCollectorConfig.from_env()
+        trench_config.validate()
+        quotas = collection_quotas(
+            prior_plan, kalshi_market_limit=config.max_markets_per_cycle,
+            kalshi_event_limit=config.max_event_checks_per_cycle,
+            trench_due_limit=trench_config.due_limit,
+            trench_enrichment_limit=trench_config.enrichment_limit, cycle_id=cycle_id,
+        )
+    except (sqlite3.Error, ValueError, OSError, KeyError, TypeError):
+        quotas = CollectionQuotas()
+        _log("agent_allocation_error", error="research allocation unavailable")
 
     soak_store = SoakStore(config.db_path)
     forecast_ledger = ForecastLedger(config.db_path)
@@ -158,7 +213,7 @@ async def run_cycle(
         observed_markets.append(market)
 
     try:
-        venue = KalshiVenue()
+        venue = KalshiVenue(kalshi_production_read_only_config())
     except (httpx.HTTPError, RuntimeError, ValueError, OSError, TypeError) as exc:
         venue = None
         collection = None
@@ -168,7 +223,7 @@ async def run_cycle(
             collection = await collect_rotating_market_batch(
                 venue,
                 soak_store,
-                max_markets=config.max_markets_per_cycle,
+                max_markets=max(min(10, config.max_markets_per_cycle), quotas.kalshi_markets),
                 on_valid=record_forecasts,
             )
         except (httpx.HTTPError, RuntimeError, ValueError, TypeError) as exc:
@@ -177,13 +232,37 @@ async def run_cycle(
         finally:
             await venue.close()
 
+    # Polymarket US enters the same immutable forecast/evidence ledger as
+    # Kalshi. Collection is public/read-only and never creates an order.
+    polymarket_connection = AgentConnectionState("disabled", "public market collection disabled")
+    if os.getenv("NOEMA_POLYMARKET_US_ENABLED", "1") == "1":
+        try:
+            polymarket = PolymarketUSVenue()
+            try:
+                pm_collection = await collect_rotating_market_batch(
+                    polymarket,
+                    soak_store,
+                    max_markets=5,
+                    on_valid=lambda market: record_market_baseline(market, forecast_ledger),
+                )
+                polymarket_connection = AgentConnectionState(
+                    "connected" if pm_collection.valid else "degraded",
+                    f"scanned={pm_collection.scanned} valid={pm_collection.valid} invalid={pm_collection.invalid}",
+                )
+            finally:
+                polymarket.close()
+        except (httpx.HTTPError, RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
+            polymarket_connection = AgentConnectionState(
+                "degraded", f"{type(exc).__name__}: public market collection failed",
+            )
+
     # Verify complete event membership via the official public event endpoint.
     groups: dict[str, list] = {}
     for market in observed_markets:
         groups.setdefault(market.market_id.rsplit("-", 1)[0], []).append(market)
-    if groups:
+    if groups and quotas.kalshi_event_checks > 0:
         try:
-            verifier = KalshiVenue()
+            verifier = KalshiVenue(kalshi_production_read_only_config())
         except (httpx.HTTPError, RuntimeError, ValueError, OSError, TypeError) as exc:
             verifier = None
             _log("agent_event_setup_error", error=type(exc).__name__)
@@ -210,7 +289,7 @@ async def run_cycle(
                     ).fetchone()[0]
                     if prior_events < 30:
                         continue
-                    if checks_used >= config.max_event_checks_per_cycle:
+                    if checks_used >= quotas.kalshi_event_checks:
                         break
                     checks_used += 1
                     try:
@@ -256,7 +335,7 @@ async def run_cycle(
     kalshi, evm, trench = await asyncio.gather(
         _kalshi_state(),
         _evm_state(config),
-        _trench_state(config.db_path),
+        _trench_state(config.db_path, quotas=quotas),
     )
     radar = build_radar(config.db_path, limit=config.max_radar_rows)
     economic = build_economic_overview(config.db_path)
@@ -301,6 +380,19 @@ async def run_cycle(
         )
 
     goal = refine_goal_with_cognition(goal, cognition_result)
+    try:
+        research_work = await run_research_work(
+            config.db_path, ecosystem_plan, selected_goal=goal.goal,
+        )
+    except (sqlite3.Error, ValueError, OSError, KeyError, TypeError):
+        research_work = {"status": "degraded", "reason": "research policy or store unavailable"}
+    if research_work.get("status") == "completed" and research_work.get("trial_id"):
+        goal = replace(goal, goal="execute_registered_research",
+                       reason=f"selected trial={research_work['trial_id']}")
+        # The next wake uses this measured feedback; research results never promote
+        # financial authority or rewrite immutable forecasting evidence.
+        ecosystem_plan = review_research_ecosystem(config.db_path)
+        ecosystem_focus = ecosystem_plan.dominant_specialist
     cognition_state = AgentConnectionState(
         cognition_result.status,
         cognition_result.detail,
@@ -314,6 +406,8 @@ async def run_cycle(
         or cognition_result.status == "degraded"
         or ecosystem_state == "degraded"
         or trench.status == "degraded"
+        or polymarket_connection.status == "degraded"
+        or research_work["status"] in {"degraded", "failed", "timed_out"}
     ):
         health = "degraded"
     elif kalshi.status == "unconfigured" or evm.status == "unconfigured":
@@ -334,16 +428,23 @@ async def run_cycle(
         cognition=cognition_state,
         market_data=market_data,
         trench=trench,
+        polymarket_us=polymarket_connection,
         note=(
-            goal.reason
+            f"{goal.reason}; research_work={research_work['status']}"
             if collection is None
             else (
                 f"{goal.reason}; cognition={cognition_result.status}; "
+                f"research_work={research_work['status']}; "
+                f"research_reason={research_work['reason']}; "
+                f"market_quota={quotas.kalshi_markets}; "
+                f"event_quota={quotas.kalshi_event_checks}; "
                 f"ecosystem_focus={ecosystem_focus or 'none'}; "
                 f"ecosystem_idle={0.0 if ecosystem_plan is None else ecosystem_plan.idle_fraction:.3f}; "
                 f"evolution_reviews={evolution_reviews}; "
                 f"challengers_registered={challenger_count}; "
                 f"trench={trench.status}; "
+                f"polymarket_us={polymarket_connection.status}; "
+                f"stripe_economy={stripe_economy.get('status')}; "
                 f"collected={collection.scanned} "
                 f"valid={collection.valid} invalid={collection.invalid} "
                 f"history_candidates={candidates_recorded}"
@@ -384,7 +485,7 @@ async def _heartbeat_loop(
 
 
 async def _sync_outcomes(config: AgentConfig) -> None:
-    history = KalshiHistory()
+    history = KalshiHistory(kalshi_production_read_only_config())
     try:
         result = await sync_kalshi_outcomes(
             OutcomeStore(config.db_path), history,
@@ -404,6 +505,8 @@ async def run_agent(
     config.validate()
     identity = identity or AgentIdentity()
     store = AgentStore(config.db_path)
+    prior_status = store.read_status(identity)
+    cycle_id = 0 if prior_status.last_cycle is None else prior_status.last_cycle.cycle_id
 
     starting = AgentStatus(
         agent_id=identity.agent_id,
@@ -412,7 +515,7 @@ async def run_agent(
         mission=identity.mission,
         running=True,
         last_heartbeat_at=datetime.now(UTC),
-        last_cycle=None,
+        last_cycle=prior_status.last_cycle,
     )
     store.write_status(starting)
     store.append_heartbeat(starting)
@@ -426,7 +529,6 @@ async def run_agent(
         )
     )
 
-    cycle_id = 0
     next_outcome_sync = 0.0
     try:
         while True:
@@ -439,12 +541,13 @@ async def run_agent(
                 except (httpx.HTTPError, RuntimeError, ValueError,
                         OSError, KeyError, TypeError) as exc:
                     _log("agent_outcome_sync_error", error=type(exc).__name__)
-            await run_cycle(
-                cycle_id=cycle_id,
-                config=config,
-                identity=identity,
-                store=store,
-            )
+            try:
+                await run_cycle(
+                    cycle_id=cycle_id, config=config, identity=identity, store=store,
+                )
+            except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
+                    KeyError, TypeError) as exc:
+                _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:

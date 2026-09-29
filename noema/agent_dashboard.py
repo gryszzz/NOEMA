@@ -25,16 +25,19 @@ def build_agent_overview(
         heartbeat = status.last_heartbeat_at
         if heartbeat.tzinfo is None:
             heartbeat = heartbeat.replace(tzinfo=UTC)
-        heartbeat_age_seconds = max(
-            0.0,
-            (now - heartbeat.astimezone(UTC)).total_seconds(),
-        )
-        alive = status.running and heartbeat_age_seconds <= stale_after_seconds
+        heartbeat_age_seconds = (now - heartbeat.astimezone(UTC)).total_seconds()
+        if heartbeat_age_seconds < 0:
+            heartbeat_age_seconds = None
+        alive = (status.running and heartbeat_age_seconds is not None
+                 and heartbeat_age_seconds <= stale_after_seconds)
+    cycle_health = status.last_cycle.health if status.last_cycle else "unknown"
 
     return {
         **asdict(status),
         "principles": identity.principles,
         "alive": alive,
+        "health": cycle_health,
+        "healthy": alive and cycle_health == "healthy",
         "heartbeat_age_seconds": heartbeat_age_seconds,
         "stale_after_seconds": stale_after_seconds,
     }

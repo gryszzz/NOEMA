@@ -9,6 +9,11 @@ dependencies = [
   "websockets>=15,<16",
   "fastapi>=0.116,<1",
   "uvicorn>=0.35,<1",
+  "mcp>=1.26,<2",
+  "solders>=0.29,<0.30",
+  "eth-account>=0.13,<0.14",
+  "embit>=0.8,<0.9",
+  "polymarket-us>=2,<3",
 ]
 
 [project.optional-dependencies]
@@ -30,9 +35,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["openclaw"]
 
 [tool.setuptools.package-data]
-noema = ["static/*.html", "static/*.css", "static/*.mjs", "static/brand/*.png"]
+noema = ["static/*.html", "static/*.css", "static/*.mjs", "static/brand/*.png", "static/fonts/*"]
 
 [tool.setuptools.packages.find]
 include = ["noema", "noema.*"]

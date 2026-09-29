@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_LOCAL_ENV = ".env.local"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_LOCAL_ENV = REPOSITORY_ROOT / ".env.local"
 
 
 def _unquote(value: str) -> str:
@@ -14,11 +15,11 @@ def _unquote(value: str) -> str:
 
 
 def load_local_env(
-    path: str = DEFAULT_LOCAL_ENV,
+    path: str | Path | None = None,
     *,
     override: bool = False,
 ) -> dict[str, str]:
-    file = Path(path)
+    file = Path(path) if path is not None else DEFAULT_LOCAL_ENV
     if not file.exists():
         return {}
 
@@ -38,5 +39,6 @@ def load_local_env(
     return loaded
 
 
-def env_local_present(path: str = DEFAULT_LOCAL_ENV) -> bool:
-    return Path(path).exists()
+def env_local_present(path: str | Path | None = None) -> bool:
+    file = Path(path) if path is not None else DEFAULT_LOCAL_ENV
+    return file.exists()

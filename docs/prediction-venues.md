@@ -1,0 +1,9 @@
+# Prediction venue integration
+
+Kalshi and Polymarket US are separate venue adapters that feed NOEMA's existing immutable market snapshot and forecast ledger. Kalshi production is used for current read-only market and account observation. Production order authority remains off unless the existing explicit owner settings are enabled; this integration does not enable them. Polymarket US public discovery uses the official `polymarket-us` SDK, and current public quotes are recorded as market benchmarks in the same forecast ledger.
+
+Kalshi credentials are loaded from macOS Keychain service `com.noema.kalshi.key-id` (account `noema-owner`) and the owner-only file `~/.config/noema/credentials/kalshi.pem`. The PEM is not copied. Polymarket US uses the official SDK's Key ID and Secret Key, stored separately in Keychain services `com.noema.polymarket-us.key-id` and `com.noema.polymarket-us.secret-key` (account `noema-owner`). Neither value is emitted to runtime status or the workstation.
+
+`GET /api/prediction-venues` performs cached read-only health checks for public market discovery, one current quote/book per venue, and authenticated account state where credentials exist. The Home view labels a same-outcome candidate separately from an executable opportunity. It does not infer arbitrage from a raw price difference when settlement rules, fees, or depth are unknown.
+
+This pass does not place orders. Kalshi already has a venue-specific executor behind the pre-existing deterministic gates. Polymarket US order creation, fill/settlement reconciliation, fee accounting, and promotion into live execution are not enabled by the read-only adapter and require their own verified integration before any order path is exposed.

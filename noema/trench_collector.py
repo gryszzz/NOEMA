@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ import httpx
 
 from .solana_research import (
     JupiterTrenchResearchClient,
+    ProviderFailure,
     SolanaRpcResearchClient,
     jupiter_control_state,
     jupiter_first_pool_at,
@@ -25,6 +27,14 @@ from .trench_store import TrenchResearchStore
 DEFAULT_HORIZONS = (30, 60, 120, 300, 900, 3600, 21_600, 86_400)
 ASSESSMENT_HORIZON = 300
 ENRICHMENT_HORIZONS = frozenset({300, 3600, 86_400})
+_SAFE_NORMALIZATION_REASONS = {
+    "Jupiter token price unavailable": "price_unavailable",
+    "Jupiter token liquidity unavailable": "liquidity_unavailable",
+    "observation precedes first pool": "observation_precedes_launch",
+    "stats24h launch normalization only supports <=24h tokens": "launch_age_out_of_range",
+    "stale or premature observation rejected": "stale_or_premature_observation",
+    "provider returned a different token than the scheduled launch": "token_identity_mismatch",
+}
 
 
 def horizon_lateness_seconds(horizon_seconds: int) -> float:
@@ -50,6 +60,7 @@ class TrenchCollectionSummary:
     failed: int
     assessments_recorded: int
     counterfactuals_recorded: int
+    provider_failures: tuple[str, ...] = ()
 
 
 def _json(value: object) -> str:
@@ -105,6 +116,7 @@ class TrenchCollectorStore:
                 control_json TEXT NOT NULL,
                 raw_token_json TEXT NOT NULL,
                 holder_shares_json TEXT NOT NULL,
+                provider_provenance_json TEXT,
                 PRIMARY KEY (mint, horizon_seconds),
                 FOREIGN KEY(mint) REFERENCES trench_launches(mint)
             )
@@ -124,7 +136,19 @@ class TrenchCollectorStore:
             )
             """
         )
+        columns = {row[1] for row in self.conn.execute(
+            "PRAGMA table_info(trench_observations)"
+        )}
+        if "provider_provenance_json" not in columns:
+            # Existing snapshots remain explicitly unattributed; provenance cannot
+            # be reconstructed safely after the fact.
+            self.conn.execute(
+                "ALTER TABLE trench_observations ADD COLUMN provider_provenance_json TEXT"
+            )
         self.conn.commit()
+
+    def close(self) -> None:
+        self.conn.close()
 
     def register_recent(
         self,
@@ -248,13 +272,22 @@ class TrenchCollectorStore:
                     continue
                 attempts = self.conn.execute(
                     """
-                    SELECT COUNT(*) FROM trench_collection_attempts
-                    WHERE mint = ? AND horizon_seconds = ?
+                    SELECT COUNT(*), MAX(attempted_at) FROM trench_collection_attempts
+                    WHERE mint = ? AND horizon_seconds = ? AND status IN ('error','unavailable')
                     """,
                     (mint, horizon),
                 ).fetchone()
-                if attempts is not None and int(attempts[0]) >= max_attempts:
-                    continue
+                failures = int(attempts[0]) if attempts else 0
+                if failures and attempts[1]:
+                    delay = min(120.0, 10.0 * (2 ** min(failures - 1, 4)))
+                    try:
+                        latest_attempt = datetime.fromisoformat(str(attempts[1])).astimezone(UTC)
+                    except (TypeError, ValueError):
+                        latest_attempt = now
+                    if (now - latest_attempt).total_seconds() < delay:
+                        continue
+                # max_attempts remains accepted for API compatibility, but a temporary
+                # outage never permanently abandons a still-on-time observation.
                 due.append(DueObservation(str(mint), first_pool, horizon, scheduled))
                 if len(due) >= limit:
                     self.conn.commit()
@@ -304,13 +337,35 @@ class TrenchCollectorStore:
         control: TokenControlState,
         raw_token: dict[str, Any],
         holder_shares: tuple[float, ...],
+        provider_provenance: dict[str, Any] | None = None,
     ) -> bool:
+        if due.first_pool_at.tzinfo is None or due.scheduled_at.tzinfo is None:
+            raise ValueError("observation schedule must be timezone-aware")
+        if due.horizon_seconds <= 0:
+            raise ValueError("observation horizon must be positive")
+        first_pool = due.first_pool_at.astimezone(UTC)
+        scheduled = due.scheduled_at.astimezone(UTC)
+        if scheduled != first_pool + timedelta(seconds=due.horizon_seconds):
+            raise ValueError("observation schedule does not match its launch horizon")
+        observed = tick.observed_at.astimezone(UTC)
+        if (not tick.price_usd > 0 or not math.isfinite(tick.price_usd)
+                or not math.isfinite(tick.liquidity_usd)):
+            raise ValueError("invalid observation price or liquidity")
+        lateness = horizon_lateness_seconds(due.horizon_seconds)
+        if observed < scheduled or (observed - scheduled).total_seconds() > lateness:
+            raise ValueError("stale or premature observation rejected")
+        token_mint = raw_token.get("id") or raw_token.get("address")
+        if not isinstance(token_mint, str) or not token_mint.strip():
+            raise ValueError("provider token identity is missing")
+        if token_mint.strip() != due.mint:
+            raise ValueError("provider returned a different token than the scheduled launch")
         cursor = self.conn.execute(
             """
             INSERT OR IGNORE INTO trench_observations (
                 mint, horizon_seconds, scheduled_at, observed_at,
-                tick_json, control_json, raw_token_json, holder_shares_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                tick_json, control_json, raw_token_json, holder_shares_json,
+                provider_provenance_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 due.mint,
@@ -321,6 +376,7 @@ class TrenchCollectorStore:
                 _control_payload(control),
                 _json(raw_token),
                 _json(holder_shares),
+                None if provider_provenance is None else _json(provider_provenance),
             ),
         )
         self.conn.commit()
@@ -363,6 +419,27 @@ class TrenchCollectorStore:
             values[name] = 0 if row is None else int(row[0])
         return values
 
+    def pending_reconciliation_mints(self) -> list[str]:
+        """Find persisted snapshots whose derived assessment/outcome may be unfinished."""
+        tables = {str(row[0]) for row in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if not {"trench_candidates", "trench_counterfactuals"} <= tables:
+            return []
+        return [str(row[0]) for row in self.conn.execute(
+            """SELECT DISTINCT o.mint FROM trench_observations o
+               WHERE o.horizon_seconds=300 AND (
+                 (NOT EXISTS (SELECT 1 FROM trench_candidates c WHERE c.token_mint=o.mint)
+                  AND (SELECT COUNT(*) FROM trench_observations early
+                       WHERE early.mint=o.mint AND early.horizon_seconds<=300) >= 2)
+                 OR EXISTS (SELECT 1 FROM trench_observations one
+                   JOIN trench_candidates c ON c.token_mint=o.mint
+                   WHERE one.mint=o.mint AND one.horizon_seconds=3600
+                     AND NOT EXISTS (SELECT 1 FROM trench_counterfactuals cf
+                       WHERE cf.candidate_id=c.candidate_id AND cf.horizon_seconds=3600))
+               ) ORDER BY o.mint""")
+        ]
+
 
 def _max_drawdown(prices: list[float]) -> float:
     peak = 0.0
@@ -383,6 +460,19 @@ def update_trench_research_from_observations(
 
     collector = TrenchCollectorStore(db_path)
     research = TrenchResearchStore(db_path)
+    try:
+        return _update_trench_research_with_stores(collector, research, mint=mint)
+    finally:
+        collector.close()
+        research.conn.close()
+
+
+def _update_trench_research_with_stores(
+    collector: TrenchCollectorStore,
+    research: TrenchResearchStore,
+    *,
+    mint: str,
+) -> tuple[int, int]:
     assessments = 0
     counterfactuals = 0
 
@@ -443,37 +533,88 @@ def update_trench_research_from_observations(
     return assessments, counterfactuals
 
 
-async def collect_trench_cycle(
+async def _collect_trench_cycle(
     *,
     db_path: str,
+    store: TrenchCollectorStore,
     jupiter: JupiterTrenchResearchClient,
     solana: SolanaRpcResearchClient,
     now: datetime | None = None,
     due_limit: int = 20,
     enrichment_limit: int = 2,
     request_pause_seconds: float = 0.0,
+    discover_new: bool = True,
 ) -> TrenchCollectionSummary:
-    """Run one bounded discovery + snapshot cycle without submitting transactions."""
+    """Collect authorized new launches and complete already-scheduled observations.
 
+    Disabling discovery preserves forward outcome collection, including unfavorable
+    observations after a specialist loses its discretionary research allocation.
+    """
+
+    fixed_clock = now is not None
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     now = now.astimezone(UTC)
     if due_limit <= 0 or enrichment_limit < 0 or request_pause_seconds < 0:
         raise ValueError("invalid collector limits")
+    if type(discover_new) is not bool:
+        raise ValueError("discover_new must be a boolean")
 
-    store = TrenchCollectorStore(db_path)
-    recent = await jupiter.recent_tradeable_tokens()
-    discovered = store.register_recent(recent, now=now)
+    discovered = 0
+    provider_failures: list[str] = []
+    assessments = counterfactuals = 0
+    # Observation and derived-label writes are separate durable transactions. Replay
+    # only derivation from persisted, already time-validated snapshots after a restart.
+    for mint in store.pending_reconciliation_mints():
+        added_assessments, added_counterfactuals = update_trench_research_from_observations(
+            db_path, mint=mint,
+        )
+        assessments += added_assessments
+        counterfactuals += added_counterfactuals
+    if discover_new:
+        try:
+            recent = await jupiter.recent_tradeable_tokens()
+            discovered = store.register_recent(recent, now=now)
+        except ProviderFailure as exc:
+            provider_failures.append(f"{exc.provider}:{exc.error_class}")
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            provider_failures.append(f"jupiter:{type(exc).__name__}")
     due = store.due_observations(now=now, limit=due_limit)
     if not due:
-        return TrenchCollectionSummary(discovered, 0, 0, 0, 0, 0, 0)
+        return TrenchCollectionSummary(
+            discovered, 0, 0, 0, 0, assessments, counterfactuals, tuple(provider_failures),
+        )
 
     if request_pause_seconds:
         await asyncio.sleep(request_pause_seconds)
 
-    by_mint = await jupiter.tokens_by_mint(tuple(item.mint for item in due))
-    recorded = unavailable = failed = assessments = counterfactuals = 0
+    try:
+        by_mint = await jupiter.tokens_by_mint(tuple(item.mint for item in due))
+    except ProviderFailure as exc:
+        provider_failures.append(f"{exc.provider}:{exc.error_class}")
+        for item in due:
+            store.record_attempt(
+                item, status="unavailable",
+                detail=f"provider unavailable: {exc.provider}:{exc.error_class}",
+                attempted_at=now if fixed_clock else datetime.now(UTC),
+            )
+        return TrenchCollectionSummary(
+            discovered, len(due), 0, len(due), 0, 0, 0, tuple(provider_failures),
+        )
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        error_class = type(exc).__name__
+        provider_failures.append(f"jupiter:{error_class}")
+        for item in due:
+            store.record_attempt(
+                item, status="unavailable", detail=f"provider unavailable: jupiter:{error_class}",
+                attempted_at=now if fixed_clock else datetime.now(UTC),
+            )
+        return TrenchCollectionSummary(
+            discovered, len(due), 0, len(due), 0, 0, 0, tuple(provider_failures),
+        )
+    jupiter_received_at = now if fixed_clock else datetime.now(UTC)
+    recorded = unavailable = failed = 0
     enrichment_used = 0
 
     for item in due:
@@ -483,13 +624,14 @@ async def collect_trench_cycle(
                 item,
                 status="unavailable",
                 detail="token absent from Jupiter search response",
-                attempted_at=now,
+                attempted_at=now if fixed_clock else datetime.now(UTC),
             )
             unavailable += 1
             continue
 
         holder_shares: tuple[float, ...] = ()
         enrichment_detail: str | None = None
+        enrichment_error_class: str | None = None
         if (
             item.horizon_seconds in ENRICHMENT_HORIZONS
             and enrichment_used < enrichment_limit
@@ -497,29 +639,86 @@ async def collect_trench_cycle(
             enrichment_used += 1
             try:
                 holder_shares = await solana.top_account_supply_shares(item.mint)
+                rpc_attempt = getattr(solana, "last_attempt_provenance", None) or {}
+                failed_providers = rpc_attempt.get("failed_providers", [])
+                failure_summary = ", ".join(
+                    f"{failure.get('source_alias', 'provider')}:{failure.get('error_class', 'failure')}"
+                    + (f" HTTP {failure['http_status']}" if failure.get("http_status") else "")
+                    for failure in failed_providers if isinstance(failure, dict)
+                )
+                enrichment_detail = (
+                    f"holder enrichment recorded: solana_rpc:{solana.last_provider or 'unknown'}"
+                    + (f" (fallback after {failure_summary})" if failure_summary else "")
+                )
             except (httpx.HTTPError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-                enrichment_detail = f"holder enrichment unavailable: {type(exc).__name__}"
+                error_class = (exc.error_class if isinstance(exc, ProviderFailure)
+                               else type(exc).__name__)
+                enrichment_error_class = error_class
+                http_status = getattr(exc, "http_status", None)
+                rpc_attempt = getattr(solana, "last_attempt_provenance", None) or {}
+                failed_providers = rpc_attempt.get("failed_providers", [])
+                failure_summary = ", ".join(
+                    f"{failure.get('source_alias', 'provider')}:{failure.get('error_class', 'failure')}"
+                    + (f" HTTP {failure['http_status']}" if failure.get("http_status") else "")
+                    for failure in failed_providers if isinstance(failure, dict)
+                )
+                if not failure_summary:
+                    failure_summary = f"{error_class}" + (f" HTTP {http_status}" if http_status else "")
+                fallback_note = (
+                    "; fallback not configured"
+                    if rpc_attempt and len(
+                        getattr(solana, "providers", lambda: (("primary", None),))()
+                    ) < 2 else ""
+                )
+                enrichment_detail = f"holder enrichment unavailable: solana_rpc:{failure_summary}{fallback_note}"
+                provider_failures.append(f"solana_rpc:{error_class}")
 
         try:
             tick = jupiter_launch_tick(
                 token,
-                observed_at=now,
+                observed_at=jupiter_received_at,
                 holder_shares=holder_shares,
             )
             control = jupiter_control_state(token)
+            provenance = {
+                "observation": {"provider": "jupiter", "source_alias": "primary",
+                                "received_at": jupiter_received_at.isoformat(),
+                                "freshness_basis": "local_response_received_at",
+                                "upstream_quote_timestamp": "unavailable"},
+                "fields": {
+                    "first_pool_at": "jupiter.firstPool",
+                    "price_usd": "jupiter.usdPrice",
+                    "liquidity_usd": "jupiter.liquidity",
+                    "flow_and_participant_metrics": "jupiter.stats24h",
+                    "token_controls": "jupiter.audit",
+                    "holder_shares": (f"solana_rpc.{solana.last_provider}"
+                                       if holder_shares else None),
+                },
+                "solana_rpc": (
+                    {"status": "recorded", "source_alias": solana.last_provider,
+                     "context_slot": solana.last_context_slot,
+                     **(getattr(solana, "last_attempt_provenance", None) or {})}
+                    if holder_shares else
+                    {"status": ("unavailable" if "unavailable" in (enrichment_detail or "")
+                                else "no_data" if enrichment_detail else "not_queried"),
+                     "error_class": enrichment_error_class,
+                     **(getattr(solana, "last_attempt_provenance", None) or {})}
+                ),
+            }
             inserted = store.record_observation(
                 item,
                 tick=tick,
                 control=control,
                 raw_token=token,
                 holder_shares=holder_shares,
+                provider_provenance=provenance,
             )
             store.record_attempt(
                 item,
                 status="recorded",
                 detail=enrichment_detail,
                 raw=token,
-                attempted_at=now,
+                attempted_at=datetime.now(UTC) if not fixed_clock else tick.observed_at,
             )
             if inserted:
                 recorded += 1
@@ -532,12 +731,13 @@ async def collect_trench_cycle(
                 assessments += added_assessments
                 counterfactuals += added_counterfactuals
         except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+            reason = _SAFE_NORMALIZATION_REASONS.get(str(exc), "invalid_provider_or_observation_data")
             store.record_attempt(
                 item,
                 status="error",
-                detail=f"normalization failed: {type(exc).__name__}",
+                detail=f"normalization failed: {type(exc).__name__} ({reason})",
                 raw=token,
-                attempted_at=now,
+                attempted_at=now if fixed_clock else datetime.now(UTC),
             )
             failed += 1
 
@@ -549,4 +749,28 @@ async def collect_trench_cycle(
         failed=failed,
         assessments_recorded=assessments,
         counterfactuals_recorded=counterfactuals,
+        provider_failures=tuple(provider_failures),
     )
+
+
+async def collect_trench_cycle(
+    *,
+    db_path: str,
+    jupiter: JupiterTrenchResearchClient,
+    solana: SolanaRpcResearchClient,
+    now: datetime | None = None,
+    due_limit: int = 20,
+    enrichment_limit: int = 2,
+    request_pause_seconds: float = 0.0,
+    discover_new: bool = True,
+) -> TrenchCollectionSummary:
+    """Run one bounded collection cycle and close its persistent-store handle."""
+    store = TrenchCollectorStore(db_path)
+    try:
+        return await _collect_trench_cycle(
+            db_path=db_path, store=store, jupiter=jupiter, solana=solana, now=now,
+            due_limit=due_limit, enrichment_limit=enrichment_limit,
+            request_pause_seconds=request_pause_seconds, discover_new=discover_new,
+        )
+    finally:
+        store.close()

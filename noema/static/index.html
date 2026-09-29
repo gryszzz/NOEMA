@@ -1,8 +1,151 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'"><title>NOEMA · Operations</title><link rel="stylesheet" href="/static/operations.css"><script type="module" src="/static/operations.mjs"></script></head>
-<body><a class="skip" href="#work">Skip to work</a><header><strong>NOEMA <span>/ Operations</span></strong><div><a href="/detailed">Diagnostics</a><button id="refresh">Refresh</button></div></header>
-<div class="statusline"><span id="runtime">Runtime unknown</span><span id="updated">No snapshot loaded</span></div><p id="error" role="alert" hidden></p>
-<details class="runtime-detail"><summary>Runtime & provider state</summary><dl id="runtime-detail"></dl></details>
-<section class="economics" aria-label="Economic measurement"><div><span>Recorded net cash · USD</span><strong id="cash">Unknown</strong><small>Operator reported · unreconciled</small></div><div><span>Model reservations · USD</span><strong id="reserved">Unknown</strong><small>Estimated · includes failed attempts</small></div><div><span>Paper net · USD</span><strong id="paper">Unknown</strong><small>Hypothetical · execution costs only</small></div><div><span>Full economic profit</span><strong>Unknown</strong><small id="economic-status">Measurement unavailable</small></div></section>
-<main id="work"><section class="records"><nav aria-label="Operational records" id="views"></nav><div class="tools"><h1 id="title">Research queue</h1><label>Filter loaded records<input id="search" type="search" placeholder="Market, specialist, status…" maxlength="240"></label></div><p id="record-status" role="status">Loading records…</p><div class="table-wrap" tabindex="0" aria-label="Records table"><table><thead id="columns"></thead><tbody id="rows"></tbody></table></div></section><aside aria-label="Record inspector"><h2>Selected record</h2><p id="selection">Select a record to inspect its fields.</p><dl id="detail"></dl><button id="back" hidden>Back to previous record</button><div id="links"></div></aside></main>
-<footer><span id="economics-time">Economic snapshot unavailable</span><span>Read-only console</span></footer></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'">
+  <meta name="theme-color" content="#0b0f13">
+  <title>NOEMA · Autonomous economy</title>
+  <link rel="stylesheet" href="/static/operations.css">
+  <link rel="stylesheet" href="/static/operations-habitat.css">
+  <script type="module" src="/static/operations.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#world">Skip to operating world</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="NOEMA Home"><span class="brand-mark" aria-hidden="true">N</span><span>NOEMA</span><small>ECONOMIC INTELLIGENCE</small></a>
+    <div class="topbar-right"><span class="topbar-date" id="updated">Awaiting first snapshot</span><a href="/detailed">Deep diagnostics <span aria-hidden="true">↗</span></a><button id="refresh" class="icon-button" type="button" aria-label="Refresh live state" title="Refresh live state"><span aria-hidden="true">↻</span></button></div>
+  </header>
+
+  <div class="runtime-ribbon" id="runtime-ribbon" role="status">
+    <span class="runtime-indicator" id="runtime-indicator" aria-hidden="true"></span>
+    <strong id="runtime">Connecting to NOEMA</strong>
+    <span class="ribbon-divider"></span>
+    <span id="lead-cycle">Cycle unavailable</span>
+    <span class="ribbon-spacer"></span>
+    <span class="ribbon-sync">LIVE SNAPSHOT · 15 SEC</span>
+  </div>
+  <p id="error" role="alert" hidden></p>
+  <p id="live-change" class="live-change" aria-live="polite" aria-atomic="true"></p>
+
+  <main id="world" class="world">
+    <section class="world-heading" aria-labelledby="world-title">
+      <div><p class="eyebrow">THE AUTONOMOUS INTERNET ECONOMY</p><h1 id="world-title">NOEMA <span>OPERATING WORLD</span></h1><p class="world-description">A live view of work, evidence, resources and economic consequence.</p></div>
+      <div class="world-presence"><span id="lead-state" class="presence-state">UNKNOWN</span><span id="sync-state" class="sync-state" data-state="connecting">SYNCING</span><span id="lead-cognition">Cognition unavailable</span></div>
+    </section>
+
+    <section class="world-map" aria-labelledby="world-map-title">
+      <div class="section-title-row world-map-heading"><div><p class="eyebrow">CANONICAL RELATIONSHIPS · PERSISTED STATE</p><h2 id="world-map-title">NOEMA live topology</h2></div><span id="world-map-state">Waiting for operating snapshot</span></div>
+      <div class="world-map-frame">
+        <canvas id="world-map-canvas" aria-label="Interactive spatial map of persisted NOEMA missions, agents, experiments and their recorded relationships" tabindex="0"></canvas>
+        <div class="world-map-hud"><span>DRAG · ORBIT</span><span>SHIFT-DRAG · PAN</span><span>SCROLL · DEPTH</span><span>SELECT · ISOLATE</span><button id="world-reset" type="button">RESET VIEW</button></div>
+        <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by persisted runtime records.</p></aside>
+      </div>
+      <div class="world-timebar"><div class="world-time-label"><span>KNOWLEDGE REPLAY · persisted event time</span><strong id="world-time-value">Latest known state</strong></div><input id="world-time-range" type="range" min="0" max="0" value="0" aria-label="Replay persisted NOEMA mission events by time"><div class="world-time-actions"><button id="world-time-live" type="button">FOLLOW LIVE</button><span id="world-time-count">No timeline events recorded</span></div></div>
+      <div id="world-event-list" class="world-event-list" aria-label="Persisted event timeline"></div>
+      <div id="world-entity-list" class="world-entity-list" aria-label="Accessible list of entities in the topology"></div>
+      <p class="truth-note">Spatial positions are for navigation; links require exact persisted mission, session, experiment, or handoff identifiers. Quiet state is shown without simulated activity.</p>
+    </section>
+
+    <section class="mission-stage" aria-label="Current operating state and mission">
+      <div class="noema-core" id="noema-lead">
+        <div class="core-orbit" aria-hidden="true"><span class="orbit orbit-a"></span><span class="orbit orbit-b"></span><span class="core-glyph">N</span></div>
+        <div class="core-copy"><span class="micro-label">PRIMARY AGENT · PERSISTENT IDENTITY</span><strong>NOEMA</strong><span id="core-role">Autonomous economic intelligence</span><span id="core-heartbeat" class="core-foot">Heartbeat unavailable</span></div>
+      </div>
+      <div class="stage-connector" aria-hidden="true"><span></span><i></i><span></span></div>
+      <div class="mission-now">
+        <div class="section-kicker"><span>MISSION / LATEST RESOLUTION</span><span id="focus-stage">No mission history</span></div>
+        <div class="mission-now-body"><span id="mission-status-mark" class="mission-status-mark">—</span><div class="mission-copy"><h2 id="focus-title">No mission recorded</h2><p id="focus-detail">NOEMA is idle until evidence justifies bounded work.</p></div></div>
+        <div class="mission-now-footer"><span id="focus-cost">Cost unknown</span><span id="focus-economics">No job-linked cash entries recorded.</span><button id="inspect-mission" type="button" class="text-button">Inspect mission <span aria-hidden="true">→</span></button></div>
+      </div>
+      <div class="stage-connector stage-connector-short" aria-hidden="true"><span></span><i></i><span></span></div>
+      <div class="resource-gate" id="resource-gate">
+        <div class="section-kicker"><span>RESOURCE GATE</span><span class="gate-seal">DETERMINISTIC</span></div>
+        <strong id="support-state">Unknown</strong>
+        <p id="support-detail">Resource state unavailable.</p>
+        <div class="gate-foot"><span id="support-worker">Worker state unavailable</span><span id="support-memory">Memory state unavailable</span></div>
+      </div>
+    </section>
+
+    <section class="signal-grid" aria-label="Evidence and financial history">
+      <article class="panel evidence-panel" aria-labelledby="evidence-title">
+        <div class="panel-heading"><div><p class="eyebrow">OBSERVED WORK · NOT ECONOMIC VALUE</p><h2 id="evidence-title">Evidence volume</h2><p id="evidence-caption">Recorded observations per bounded experiment. Volume does not establish edge, demand, or revenue.</p></div><div class="chart-stat"><strong id="evidence-total">—</strong><span id="evidence-run-count">NO RECORDED RUNS</span></div></div>
+        <div id="evidence-chart" class="evidence-chart" role="img" aria-label="Recorded evidence volume by completed research run"><p class="chart-empty">Waiting for bounded experiment results.</p></div>
+        <div class="chart-legend"><span><i class="legend-pass"></i>critic accepted</span><span><i class="legend-open"></i>unreviewed / incomplete</span><span id="chart-range">History range unavailable</span></div>
+      </article>
+
+      <article class="panel account-panel" aria-labelledby="account-title">
+        <div class="panel-heading"><div><p class="eyebrow">TREASURY · RECONCILED HISTORY</p><h2 id="account-title">Economic curve</h2><p id="account-note">No verified account balance series is available.</p></div><span id="wallet-state" class="series-state">UNMEASURED</span></div>
+        <div id="account-chart" class="account-chart" aria-label="Treasury balance history unavailable">
+          <svg viewBox="0 0 440 180" role="img" aria-labelledby="account-chart-title account-chart-desc" preserveAspectRatio="none">
+            <title id="account-chart-title">Verified treasury history</title><desc id="account-chart-desc">No reconciled wallet or cash history has been recorded; no curve is drawn.</desc>
+            <path class="account-gridline" d="M42 22H430M42 60H430M42 98H430M42 136H430M42 174H430"/><path class="account-axis" d="M42 14V174H430"/>
+            <text x="42" y="12">USD</text><text x="42" y="179">HISTORY</text>
+          </svg>
+          <div class="account-empty"><span class="empty-emblem" aria-hidden="true">∅</span><strong id="account-empty-title">No verified series</strong><span id="account-empty-detail">Cash ledger has no entries; wallet history is unavailable.</span></div>
+        </div>
+        <div class="account-legend"><span>RECORDED CASH <strong id="metric-cash">Unknown</strong></span><span>VERIFIED REVENUE <strong id="metric-revenue">Unknown</strong></span><span>MODEL COST <strong id="metric-model-cost">Unknown</strong></span><span>PAPER NET <strong id="metric-paper">Unknown</strong></span><span>ALL-IN PROFIT <strong id="metric-net">Unknown</strong></span></div>
+      </article>
+    </section>
+
+    <section class="economy-section" aria-labelledby="lanes-title">
+      <div class="section-title-row"><div><p class="eyebrow">ONE TREASURY · MULTIPLE INCOME DESKS</p><h2 id="lanes-title">Economic lanes</h2></div><span id="lane-asof">Awaiting persisted evidence</span></div>
+      <div id="lane-rows" class="lane-world"><p class="quiet">Loading persisted lane evidence…</p></div>
+      <details class="other-lanes"><summary><span id="other-lanes-label">Other desks</span><span>Show inactive lanes</span></summary><div id="inactive-lanes" class="inactive-lane-list"></div></details>
+      <p class="truth-note"><span aria-hidden="true">◇</span> Activity, paper results, owner funding and collected revenue stay separate. Unknown is not zero.</p>
+    </section>
+
+    <section class="economy-section prediction-venues" aria-labelledby="prediction-venues-title">
+      <div class="section-title-row"><div><p class="eyebrow">OFFICIAL VENUE DATA · READ ONLY</p><h2 id="prediction-venues-title">Prediction market desks</h2></div><span id="prediction-venues-asof">Venue state loading</span></div>
+      <div id="prediction-venue-list" class="prediction-venue-list"><p class="quiet">Checking venue APIs…</p></div>
+      <p class="truth-note">Live orders are disabled. Venue-specific account state, fees, settlement and contract rules stay separate; no cross-venue edge is shown until outcome equivalence is validated.</p>
+    </section>
+
+    <section class="economy-section web3-evidence" aria-labelledby="web3-evidence-title">
+      <div class="section-title-row"><div><p class="eyebrow">READ-ONLY · FORWARD-LABEL QUALIFICATION</p><h2 id="web3-evidence-title">Web3 evidence pipeline</h2></div><span id="web3-runtime-state">Loading collector state…</span></div>
+      <div id="web3-evidence-grid" class="web3-evidence-grid"><p class="quiet">Loading persisted observations and label progress…</p></div>
+      <p id="web3-evidence-note" class="truth-note">Research collection does not grant wallet authority. Web3 financial execution remains behind separate deterministic policy.</p>
+    </section>
+
+    <section class="economy-section wallet-economy" aria-labelledby="wallets-title">
+      <div class="section-title-row"><div><p class="eyebrow">OWNER-FUNDED · CHAIN-ISOLATED SIGNERS</p><h2 id="wallets-title">Dedicated wallet capital</h2></div><span id="wallets-asof">Balance state loading</span></div>
+      <div id="wallet-networks" class="wallet-network-grid"><p class="quiet">Reading public chain state…</p></div>
+      <div class="wallet-ledger-heading"><span>RECONCILED WALLET ACTIVITY</span><span>Fees and transfers are not revenue</span></div>
+      <div id="wallet-activity" class="wallet-activity-list"><p class="quiet">No reconciled NOEMA wallet transactions recorded.</p></div>
+    </section>
+
+    <section class="economy-section stripe-economy" aria-labelledby="stripe-title">
+      <div class="section-title-row"><div><p class="eyebrow">STRIPE · READ-ONLY ACCOUNT OBSERVATIONS</p><h2 id="stripe-title">Collected revenue rail</h2></div><span id="stripe-state">Stripe state not observed</span></div>
+      <div id="stripe-balance" class="stripe-balance-grid"><p class="quiet">Waiting for the agent's protected-profile sync…</p></div>
+      <div id="stripe-history" class="stripe-history" aria-label="Persisted Stripe USD balance observations"></div>
+      <div class="stripe-payment-heading"><span>RECENT PAYMENT INTENTS</span><span id="stripe-payment-count">No Stripe records yet</span></div>
+      <div id="stripe-payments" class="stripe-payment-list"><p class="quiet">Payments unavailable until the agent performs its read-only sync.</p></div>
+      <p id="stripe-note" class="truth-note">Stripe balance and successful gross payments are distinct from net revenue; fees, refunds, payouts and attribution remain unknown until supported records are available.</p>
+    </section>
+
+    <section class="team-resource-grid" aria-label="Specialists and resource allocation">
+      <article class="panel team-panel" aria-labelledby="roster-title"><div class="section-title-row"><div><p class="eyebrow">REAL WORKERS · PERSISTED STATE</p><h2 id="roster-title">Specialist team</h2></div><span id="roster-count">Unknown</span></div><div id="roster-list" class="roster-list"><p class="quiet">Loading persisted specialists…</p></div></article>
+      <article class="panel treasury-panel" aria-labelledby="treasury-title"><div class="section-title-row"><div><p class="eyebrow">ALLOCATED CAPACITY · NOT WALLET BALANCE</p><h2 id="treasury-title">Resources & authority</h2></div><span class="read-only">READ ONLY</span></div><div class="allocation-chart" id="allocation-chart"><p class="quiet">Allocation history unavailable.</p></div><div class="treasury-readout"><div><span>Research budget</span><strong id="treasury-research">Unknown</strong></div><div><span>Strategy capital</span><strong id="treasury-strategy">Unknown</strong></div><div><span>System reserve</span><strong id="treasury-reserve">Unknown</strong></div><div><span>Infrastructure</span><strong id="treasury-infrastructure">Unknown</strong></div></div><div class="authority-line"><span id="authority-state">Execution authority unavailable</span><span id="resource-state">Resource state unavailable</span></div></article>
+    </section>
+
+    <section class="economy-section learning-surface" aria-labelledby="learning-title">
+      <div class="section-title-row"><div><p class="eyebrow">DOCUMENTED MECHANICS · EMPIRICAL BELIEFS SEPARATE</p><h2 id="learning-title">Learning & source evidence</h2></div><span id="learning-state">Learning state loading</span></div>
+      <div id="learning-overview" class="learning-overview"><p class="quiet">Loading source coverage and persisted beliefs…</p></div>
+      <p class="truth-note">Documentation teaches mechanics; it does not prove profitability. Retrieved material never grants tools, wallet access, payment authority, or permission to execute.</p>
+    </section>
+
+    <section class="mission-history-section" aria-label="Mission history and persisted transitions">
+      <article class="panel mission-board" aria-labelledby="mission-title"><div class="section-title-row"><div><p class="eyebrow">PERSISTED WORK · REAL COORDINATION</p><h2 id="mission-title">Missions</h2></div><span id="mission-count">No missions recorded</span></div><div id="mission-list" class="mission-list"><p class="quiet">Loading mission history…</p></div></article>
+      <article class="panel trace-board" aria-labelledby="trace-title"><div class="section-title-row"><div><p class="eyebrow">SELECT A MISSION TO FOLLOW ITS HISTORY</p><h2 id="trace-title">Mission lineage</h2></div><span id="trace-limit">Persisted transitions</span></div><div id="lineage-strip" class="lineage-strip" aria-label="Selected mission collaborators"></div><ol id="event-trace" class="event-trace"><li>No runtime events recorded.</li></ol></article>
+    </section>
+
+    <details id="deep-records" class="deep-records">
+      <summary><span>Deep inspection</span><small>Evidence records · sessions · provider routes · experiment results · immutable forecasts</small><span aria-hidden="true">＋</span></summary>
+      <div class="deep-record-layout"><section class="records"><nav aria-label="Operational records" id="views"></nav><div class="tools"><h2 id="title">Autonomous sessions</h2><label>Filter loaded records<input id="search" type="search" placeholder="Mission, specialist, status…" maxlength="240"></label></div><p id="record-status" role="status">Loading records…</p><div class="table-wrap" tabindex="0" aria-label="Records table"><table><thead id="columns"></thead><tbody id="rows"></tbody></table></div></section><aside aria-label="Record inspector"><h3>Selected record</h3><p id="selection">Select a record to inspect its evidence.</p><dl id="detail"></dl><button id="back" hidden>Back to previous record</button><div id="links"></div></aside></div>
+    </details>
+  </main>
+
+  <details class="runtime-detail"><summary>Runtime & provider diagnostics</summary><dl id="runtime-detail"></dl></details>
+  <footer><span id="economics-time">Economic snapshot unavailable</span><span>NOEMA · read-only observer</span></footer>
+</body>
+</html>

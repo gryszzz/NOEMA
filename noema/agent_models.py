@@ -27,6 +27,7 @@ class AgentCycleState:
     note: str | None = None
     market_data: AgentConnectionState = AgentConnectionState("unconfigured")
     trench: AgentConnectionState = AgentConnectionState("disabled")
+    polymarket_us: AgentConnectionState = AgentConnectionState("unconfigured")
 
 
 @dataclass(frozen=True)

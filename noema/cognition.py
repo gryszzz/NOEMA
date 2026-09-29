@@ -6,12 +6,20 @@ import sqlite3
 import httpx
 
 from .bill_tracker import BillTracker
+from .cloudflare_client import CloudflareCognitionClient
+from .cloudflare_config import CloudflareConfig
+from .cognition_config import (
+    CognitionConfig,
+    cognition_config_from_env,
+    cognition_provider_name,
+)
 from .cognition_models import CognitionResult
 from .cognition_policy import CognitionPolicy, assess_cognition
 from .cognition_store import CognitionStore
 from .foundry_client import FoundryCognitionClient
-from .foundry_config import FoundryConfig
 from .llm_evidence import context_for_row
+from .openai_client import OpenAICognitionClient
+from .openai_config import OpenAIConfig
 from .opportunity_radar import RadarRow
 from .provenance import EvidenceStore
 from .research_queue import ResearchQueueStore
@@ -21,16 +29,25 @@ async def maybe_run_cognition(
     rows: list[RadarRow],
     *,
     db_path: str,
-    config: FoundryConfig | None = None,
+    config: CognitionConfig | None = None,
     policy: CognitionPolicy | None = None,
 ) -> CognitionResult:
-    config = config or FoundryConfig.from_env()
-    policy = policy or CognitionPolicy.from_env()
+    try:
+        config = config or cognition_config_from_env()
+        provider = cognition_provider_name(config)
+        config.validate()
+        policy_provider = "cloudflare" if isinstance(config, CloudflareConfig) else provider
+        policy = policy or CognitionPolicy.from_env(
+            provider=policy_provider,
+            model=config.model if isinstance(config, (OpenAIConfig, CloudflareConfig)) else None,
+        )
+    except (ValueError, TypeError):
+        return CognitionResult("unconfigured", detail="cognition provider configuration invalid")
 
     if not config.enabled:
         return CognitionResult("disabled", detail="cognition disabled")
     if not config.ready:
-        return CognitionResult("unconfigured", detail="Foundry not configured")
+        return CognitionResult("unconfigured", detail=f"{provider} not configured")
 
     store = CognitionStore(db_path)
     eligible: list[RadarRow] = []
@@ -69,7 +86,12 @@ async def maybe_run_cognition(
     except (sqlite3.Error, ValueError, OSError):
         return CognitionResult("degraded", detail="bill budget unavailable")
     try:
-        client = FoundryCognitionClient(config)
+        if isinstance(config, OpenAIConfig):
+            client = OpenAICognitionClient(config)
+        elif isinstance(config, CloudflareConfig):
+            client = CloudflareCognitionClient(config)
+        else:
+            client = FoundryCognitionClient(config)
     except (RuntimeError, ValueError) as exc:
         return CognitionResult(
             "degraded",
@@ -111,6 +133,7 @@ async def maybe_run_cognition(
         httpx.HTTPError,
         RuntimeError,
         ValueError,
+        TypeError,
         KeyError,
         json.JSONDecodeError,
     ) as exc:
@@ -122,11 +145,13 @@ async def maybe_run_cognition(
         await client.close()
 
     if result.packet is None:
-        return CognitionResult("degraded", detail="Foundry returned no packet")
+        return CognitionResult("degraded", detail=f"{provider} returned no packet")
 
     try:
         store.append(
-            deployment=str(config.deployment),
+            deployment=(f"openai:{config.model}" if isinstance(config, OpenAIConfig)
+                        else f"cloudflare:{config.model}" if isinstance(config, CloudflareConfig)
+                        else str(config.deployment)),
             packet=result.packet,
             response_id=result.detail,
             input_tokens=result.input_tokens,

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -36,11 +37,21 @@ def test_revenue_less_full_recorded_expenses_is_a_loss_and_estimates_are_not_dou
                    now=NOW + timedelta(days=1))
     tracker.record(kind='receipt', amount_usd=Decimal(999), source='prior', reference='p',
                    now=NOW - timedelta(days=30))
+    tracker.record(kind='expense', amount_usd=Decimal(3), source='pilot delivery',
+                   reference='job-cost', activity_id='trial-1', now=NOW)
+    tracker.record(kind='receipt', amount_usd=Decimal(10), source='processor payout',
+                   reference='job-receipt', activity_id='trial-1', now=NOW)
     EconomicLedger(path).append_snapshot(bootstrap_economy(Decimal(10000)))
     CognitionStore(path).reserve_estimated_cost(2, daily_limit_usd=5, now=NOW)
     report = build_economic_measurement(path, now=NOW)
-    assert report['cash']['net_cash_usd'] == '-20'
-    assert report['cash']['entry_count'] == 2
+    assert report['cash']['net_cash_usd'] == '-13'
+    assert report['cash']['entry_count'] == 4
+    assert report['activity_cash']['rows'] == [{
+        'activity_id': 'trial-1', 'recorded_receipts_usd': '10',
+        'recorded_expenses_usd': '3', 'recorded_cash_net_usd': '7',
+        'entry_count': 2, 'full_net_economic_profit_usd': None,
+        'status': 'cash recorded; complete cost coverage not attested',
+    }]
     assert report['operating_estimates']['model_reserved_usd'] == '2.0'
     assert report['status'] == 'recorded_cash_deficit'
     assert report['net_economic_profit_usd'] is None
@@ -61,3 +72,26 @@ def test_positive_cash_does_not_claim_self_funding_and_corrupt_values_are_visibl
     assert report['status'] == 'records_invalid'
     assert report['invalid_accounting_records'] == 1
     json.dumps(report, allow_nan=False)
+
+
+def test_failed_model_reservation_and_usage_estimate_link_to_research_trial(tmp_path):
+    path = str(tmp_path / 'noema.db')
+    store = CognitionStore(path)
+    assert store.reserve_estimated_cost(
+        .25, daily_limit_usd=1, activity_id='session-1', now=NOW,
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TABLE cognitive_sessions (
+            session_id TEXT, created_at TEXT, result_json TEXT,
+            estimated_model_cost_usd REAL, compute_cost_usd REAL)""")
+        conn.execute("INSERT INTO cognitive_sessions VALUES (?,?,?,?,?)", (
+            'session-1', NOW.isoformat(), json.dumps({'trial_id': 'trial-1'}), .12, None,
+        ))
+    report = build_economic_measurement(path, now=NOW)
+    row = report['activity_costs']['rows'][0]
+    assert row['activity_id'] == 'trial-1'
+    assert row['estimated_model_cost_usd'] == '0.12'
+    assert row['model_budget_reserved_usd'] == '0.25'
+    assert row['recorded_compute_cost_usd'] is None
+    assert row['compute_cost_status'] == 'unknown'
+    assert row['full_net_economic_profit_usd'] is None

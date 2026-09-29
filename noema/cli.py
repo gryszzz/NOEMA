@@ -21,6 +21,7 @@ from .economic_ledger import EconomicLedger
 from .economic_measurement import build_economic_measurement
 from .ecosystem_dashboard import build_ecosystem_overview
 from .kalshi_telemetry import KalshiTelemetry
+from .knowledge import KnowledgeStore, build_knowledge_overview
 from .ladder import build_ladder_report
 from .local_env import load_local_env
 from .outcomes import OutcomeStore
@@ -171,13 +172,38 @@ def _trench_show(db: str) -> None:
     print(json.dumps(build_trench_overview(db), sort_keys=True, default=str))
 
 
+def _knowledge_show(db: str) -> None:
+    print(json.dumps(build_knowledge_overview(db), sort_keys=True, default=str))
+
+
+def _knowledge_init(db: str) -> None:
+    store = KnowledgeStore(db)
+    try:
+        print(json.dumps(store.overview(), sort_keys=True, default=str))
+    finally:
+        store.close()
+
+
+def _knowledge_refresh(db: str, source_id: str | None, limit: int) -> None:
+    store = KnowledgeStore(db)
+    try:
+        result = ([store.refresh_source(source_id)] if source_id
+                  else store.refresh_due(limit=limit))
+        print(json.dumps(result, sort_keys=True, default=str))
+    finally:
+        store.close()
+
+
 async def _trench_once(db: str) -> None:
     config = TrenchCollectorConfig.from_env()
     config.validate()
     summary = await collect_trench_cycle(
         db_path=db,
         jupiter=JupiterTrenchResearchClient(api_key=config.jupiter_api_key),
-        solana=SolanaRpcResearchClient(rpc_url=config.solana_rpc_url),
+        solana=SolanaRpcResearchClient(
+            rpc_url=config.solana_rpc_url,
+            fallback_rpc_url=config.solana_rpc_fallback_url,
+        ),
         due_limit=config.due_limit,
         enrichment_limit=config.enrichment_limit,
         request_pause_seconds=config.request_pause_seconds,
@@ -307,6 +333,17 @@ def main() -> None:
     trench_model_audit = sub.add_parser("trench-model-audit")
     trench_model_audit.add_argument("--db", default="data/noema.db")
 
+    knowledge_init = sub.add_parser("knowledge-init")
+    knowledge_init.add_argument("--db", default="data/noema.db")
+
+    knowledge_show = sub.add_parser("knowledge-show")
+    knowledge_show.add_argument("--db", default="data/noema.db")
+
+    knowledge_refresh = sub.add_parser("knowledge-refresh")
+    knowledge_refresh.add_argument("--db", default="data/noema.db")
+    knowledge_refresh.add_argument("--source", default=None)
+    knowledge_refresh.add_argument("--limit", type=int, default=3)
+
     bill_config = sub.add_parser("bill-config")
     bill_config.add_argument("--db", default="data/noema.db")
     bill_config.add_argument("--hosting", type=Decimal, required=True)
@@ -320,6 +357,8 @@ def main() -> None:
     bill_entry.add_argument("--amount", type=Decimal, required=True)
     bill_entry.add_argument("--source", required=True)
     bill_entry.add_argument("--reference", required=True)
+    bill_entry.add_argument("--activity-id", default=None,
+                            help="research trial/job identifier; ties verified cash to its source work")
 
     bill_show = sub.add_parser("bill-show")
     bill_show.add_argument("--db", default="data/noema.db")
@@ -387,6 +426,12 @@ def main() -> None:
         _trench_show(args.db)
     elif args.command == "trench-model-audit":
         print(json.dumps(audit_trench_survival(args.db).as_dict(), sort_keys=True))
+    elif args.command == "knowledge-init":
+        _knowledge_init(args.db)
+    elif args.command == "knowledge-show":
+        _knowledge_show(args.db)
+    elif args.command == "knowledge-refresh":
+        _knowledge_refresh(args.db, args.source, args.limit)
     elif args.command == "bill-config":
         tracker = BillTracker(args.db)
         tracker.configure(hosting_usd=args.hosting, other_usd=args.other,
@@ -396,7 +441,8 @@ def main() -> None:
     elif args.command == "bill-entry":
         tracker = BillTracker(args.db)
         tracker.record(kind=args.kind, amount_usd=args.amount,
-                       source=args.source, reference=args.reference)
+                       source=args.source, reference=args.reference,
+                       activity_id=args.activity_id)
         print(json.dumps(tracker.overview(), sort_keys=True))
     elif args.command == "bill-show":
         print(json.dumps(BillTracker(args.db).overview(), sort_keys=True))
