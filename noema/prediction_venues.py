@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -13,7 +15,13 @@ import httpx
 from polymarket_us.errors import PolymarketUSError
 
 from .account import KalshiAccount
+from .canonical_market_identity import (
+    compare_contract_identities,
+    identify_mlb_world_series_champion,
+    registered_resolvers,
+)
 from .config import KalshiConfig, kalshi_production_read_only_config
+from .ledger import ForecastLedger
 from .venues.kalshi import KalshiVenue
 from .venues.polymarket_us import PolymarketUSVenue
 from .wallet_credentials import (
@@ -268,9 +276,10 @@ async def _cross_venue_candidate() -> dict[str, Any]:
         if not kalshi_events:
             return {"status": "no_current_candidate", "matches": [], "reason": "No active Kalshi MLB champion event."}
 
+        season = datetime.now(UTC).year
         search = await asyncio.to_thread(
             polymarket.client.search.query,
-            {"query": f"{datetime.now(UTC).year} MLB World Series Champion"},
+            {"query": f"{season} MLB World Series Champion"},
         )
         events = search.get("events", []) if isinstance(search, dict) else []
         chosen_event = next((
@@ -289,13 +298,24 @@ async def _cross_venue_candidate() -> dict[str, Any]:
         for event in kalshi_events:
             for k_market in event.get("markets", []):
                 ticker = str(k_market.get("ticker", ""))
-                k_team = ticker.rsplit("-", 1)[-1].lower()
-                if not k_team or len(k_team) < 2:
+                k_title = str(k_market.get("title") or "")
+                k_identity = identify_mlb_world_series_champion(
+                    venue="kalshi", contract_id=ticker, season=season,
+                    title=k_title, outcome_text=ticker,
+                    resolution_rules=str(k_market.get("rules_primary") or "") or None,
+                )
+                if k_identity.identity_status != "identified":
                     continue
                 for pm_market in pm_markets:
                     slug = str(pm_market.get("slug", ""))
-                    pm_team = slug.rsplit("-", 1)[-1].lower()
-                    if k_team != pm_team or "champ" not in slug.lower():
+                    pm_title = str(pm_market.get("title") or pm_market.get("question") or "")
+                    pm_identity = identify_mlb_world_series_champion(
+                        venue="polymarket-us", contract_id=slug, season=season,
+                        title=pm_title, outcome_text=slug,
+                        resolution_rules=str(pm_market.get("description") or "") or None,
+                    )
+                    identity_comparison = compare_contract_identities(k_identity, pm_identity)
+                    if identity_comparison["semantic_match"] != "confirmed":
                         continue
                     try:
                         bbo_result = await asyncio.to_thread(polymarket.client.markets.bbo, slug)
@@ -312,13 +332,18 @@ async def _cross_venue_candidate() -> dict[str, Any]:
                     pm_rules = str(pm_market.get("description") or "")
                     kalshi_rules = str(k_market.get("rules_primary") or "")
                     candidates.append({
-                        "status": "same_outcome_candidate_rules_not_equivalent",
-                        "team_code": k_team.upper(),
+                        "observed_at": datetime.now(UTC).isoformat(),
+                        "status": "canonical_identity_match_settlement_unverified",
+                        "team_code": k_identity.outcome_id,
                         "event": str(pm_event.get("title") or chosen_event.get("title")),
-                        "year": datetime.now(UTC).year,
+                        "year": season,
+                        "canonical_identity": {
+                            "comparison": identity_comparison,
+                            "contracts": [k_identity.to_dict(), pm_identity.to_dict()],
+                        },
                         "kalshi": {
                             "market_id": ticker,
-                            "title": str(k_market.get("title") or ""),
+                            "title": k_title,
                             "yes_bid": k_bid,
                             "yes_ask": k_ask,
                             "spread": round(k_ask - k_bid, 6),
@@ -326,7 +351,7 @@ async def _cross_venue_candidate() -> dict[str, Any]:
                         },
                         "polymarket_us": {
                             "market_id": slug,
-                            "title": str(pm_market.get("title") or pm_market.get("question") or ""),
+                            "title": pm_title,
                             "yes_bid": p_bid,
                             "yes_ask": p_ask,
                             "spread": round(p_ask - p_bid, 6),
@@ -408,11 +433,44 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
         kalshi, polymarket, comparison = await asyncio.gather(
             _kalshi_status(), _polymarket_us_status(), _cross_venue_candidate(),
         )
+        if comparison.get("matches"):
+            comparison["persistence_status"] = await asyncio.to_thread(
+                _persist_canonical_observations, comparison["matches"],
+            )
+        else:
+            comparison["persistence_status"] = "no_candidate_to_record"
         payload = {
             "as_of": datetime.now(UTC).isoformat(),
             "execution_enabled": False,
+            "canonical_market_identity": {
+                "ontology_levels": [
+                    "topic", "event", "proposition", "outcome", "semantic_match",
+                    "settlement_equivalence", "economic_comparability",
+                    "executable_comparability",
+                ],
+                "registered_resolvers": [
+                    {"topic_id": topic, "proposition_family": family}
+                    for topic, family in registered_resolvers()
+                ],
+                "unsupported_families": "remain unresolved; no fuzzy identity promotion",
+                "settlement_equivalence_default": "unverified",
+                "execution_authority": "disabled",
+            },
             "venues": [kalshi, polymarket],
             "cross_venue_comparison": comparison,
         }
         _cache.update(at=monotonic(), payload=payload)
         return payload
+
+
+def _persist_canonical_observations(observations: list[dict[str, Any]]) -> str:
+    ledger: ForecastLedger | None = None
+    try:
+        ledger = ForecastLedger(os.getenv("NOEMA_DB_PATH", "data/noema.db"))
+        inserted = sum(ledger.append_canonical_pair_observation(item) for item in observations)
+        return "recorded" if inserted else "already_recorded"
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return "unavailable"
+    finally:
+        if ledger is not None:
+            ledger.conn.close()
