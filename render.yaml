@@ -1,5 +1,12 @@
-# Paper research only. Deploy one worker with a persistent SQLite database.
-# Do not add trading credentials or expose the dashboard through this Blueprint.
+# Paper research only. The worker owns the source SQLite database. The authenticated
+# console has its own persistent replica, refreshed from consistent worker backups.
+# The public explorer remains the independent static site in the GitHub Pages workflow.
+envVarGroups:
+  - name: noema-console-replication
+    envVars:
+      - key: NOEMA_CONSOLE_SNAPSHOT_TOKEN
+        generateValue: true
+
 services:
   - type: worker
     name: noema-paper-agent
@@ -15,6 +22,8 @@ services:
       mountPath: /opt/render/project/src/data
       sizeGB: 1
     envVars:
+      - key: NOEMA_CONSOLE_AUTH_REQUIRED
+        value: "1"
       - key: NOEMA_DB_PATH
         value: /opt/render/project/src/data/noema.db
       - key: NOEMA_AGENT_CYCLE_SECONDS
@@ -23,3 +32,34 @@ services:
         value: 3600
       - key: NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC
         value: 500
+      - key: NOEMA_CONSOLE_INTERNAL_ADDRESS
+        fromService:
+          name: noema-operations-console
+          type: web
+          property: hostport
+      - fromGroup: noema-console-replication
+
+  - type: web
+    name: noema-operations-console
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: pip install .
+    startCommand: noema-dashboard-web
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    healthCheckPath: /healthz
+    disk:
+      name: noema-console-replica
+      mountPath: /opt/render/project/src/console-data
+      sizeGB: 1
+    envVars:
+      - key: NOEMA_DB_PATH
+        value: /opt/render/project/src/console-data/noema.db
+      - key: NOEMA_RUNTIME_SOURCE
+        value: worker-sqlite-replica
+      - key: NOEMA_CONSOLE_USERNAME
+        value: noema-owner
+      - key: NOEMA_CONSOLE_PASSWORD
+        sync: false
+      - fromGroup: noema-console-replication

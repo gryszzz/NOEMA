@@ -20,6 +20,7 @@ from .baseline_recording import record_market_baseline
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .config import kalshi_production_read_only_config
+from .console_replication import publish_console_snapshot
 from .cross_venue_experiment import mature_paper_pairs
 from .economic_dashboard import build_economic_overview
 from .ecosystem_controller import review_research_ecosystem
@@ -574,6 +575,11 @@ async def run_agent(
             except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                     KeyError, TypeError) as exc:
                 _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
+            try:
+                snapshot_status = await publish_console_snapshot(config.db_path)
+            except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError):
+                snapshot_status = "unavailable"
+            _log("agent_console_snapshot", status=snapshot_status, cycle_id=cycle_id)
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
