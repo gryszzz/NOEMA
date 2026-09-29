@@ -8,6 +8,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 import httpx
+from polymarket_us.errors import PolymarketUSError
 
 from .agent_config import AgentConfig
 from .agent_identity import AgentIdentity
@@ -19,6 +20,7 @@ from .baseline_recording import record_market_baseline
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .config import kalshi_production_read_only_config
+from .cross_venue_experiment import mature_paper_pairs
 from .economic_dashboard import build_economic_overview
 from .ecosystem_controller import review_research_ecosystem
 from .ecosystem_evolution import evolve_default_specialists
@@ -35,7 +37,11 @@ from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
 from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
 from .stripe_economy import sync_stripe_economy
-from .sync import sync_kalshi_outcomes
+from .sync import (
+    cross_venue_outcome_targets,
+    sync_kalshi_outcomes,
+    sync_polymarket_us_outcomes,
+)
 from .trench_collector import collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
 from .venues.kalshi import KalshiVenue
@@ -485,15 +491,35 @@ async def _heartbeat_loop(
 
 
 async def _sync_outcomes(config: AgentConfig) -> None:
-    history = KalshiHistory(kalshi_production_read_only_config())
+    store = OutcomeStore(config.db_path)
+    kalshi_targets, polymarket_targets = cross_venue_outcome_targets(config.db_path)
     try:
-        result = await sync_kalshi_outcomes(
-            OutcomeStore(config.db_path), history,
-            max_markets=config.max_outcomes_per_sync,
-        )
-        _log("agent_outcome_sync", **asdict(result))
+        history = KalshiHistory(kalshi_production_read_only_config())
+        try:
+            result = await sync_kalshi_outcomes(
+                store, history,
+                max_markets=config.max_outcomes_per_sync,
+                canonical_propositions=kalshi_targets,
+            )
+            _log("agent_outcome_sync", **asdict(result))
+        except (httpx.HTTPError, RuntimeError, ValueError, OSError, KeyError, TypeError) as exc:
+            _log("agent_outcome_sync_error", venue="kalshi", error=type(exc).__name__)
+        finally:
+            await history.close()
+        if polymarket_targets:
+            venue = PolymarketUSVenue()
+            try:
+                result = await sync_polymarket_us_outcomes(store, venue, polymarket_targets)
+                _log("agent_polymarket_us_outcome_sync", **asdict(result))
+            except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
+                    OSError, KeyError, TypeError, sqlite3.Error) as exc:
+                _log("agent_polymarket_us_outcome_sync_error", error=type(exc).__name__)
+            finally:
+                venue.close()
     finally:
-        await history.close()
+        store.conn.close()
+    maturity = await asyncio.to_thread(mature_paper_pairs, config.db_path)
+    _log("agent_cross_venue_maturation", **maturity)
 
 
 async def run_agent(

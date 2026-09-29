@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -31,6 +32,9 @@ class OutcomeStore:
                 resolved_at TEXT,
                 first_seen_at TEXT NOT NULL,
                 raw_json TEXT NOT NULL,
+                canonical_proposition_id TEXT,
+                source TEXT,
+                source_url TEXT,
                 PRIMARY KEY (venue, market_id)
             )
             """
@@ -49,6 +53,24 @@ class OutcomeStore:
                 "UPDATE outcomes SET first_seen_at = ? WHERE first_seen_at IS NULL",
                 (datetime.now(UTC).isoformat(),),
             )
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(outcomes)")}
+        for name in ("canonical_proposition_id", "source", "source_url"):
+            if name not in columns:
+                self.conn.execute(f"ALTER TABLE outcomes ADD COLUMN {name} TEXT")
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS outcome_observations (
+                evidence_hash TEXT PRIMARY KEY,
+                venue TEXT NOT NULL,
+                market_id TEXT NOT NULL,
+                canonical_proposition_id TEXT,
+                outcome_yes INTEGER NOT NULL CHECK (outcome_yes IN (0, 1)),
+                observed_at TEXT NOT NULL,
+                resolved_at TEXT,
+                source TEXT NOT NULL,
+                source_url TEXT,
+                raw_json TEXT NOT NULL
+            )
+        """)
         self.conn.commit()
 
     def scan_cursor(self, source: str) -> str | None:
@@ -104,28 +126,51 @@ class OutcomeStore:
         resolved_at: str | None,
         raw: dict[str, object],
         seen_at: datetime | None = None,
+        canonical_proposition_id: str | None = None,
+        source: str | None = None,
+        source_url: str | None = None,
     ) -> None:
         if outcome_yes not in {0, 1}:
             raise ValueError("outcome_yes must be 0 or 1")
         seen_at = seen_at or datetime.now(UTC)
         if seen_at.tzinfo is None:
             raise ValueError("seen_at must be timezone-aware")
+        raw_json = json.dumps(raw, sort_keys=True, separators=(",", ":"))
+        observed_at = seen_at.astimezone(UTC).isoformat()
         self.conn.execute(
             """
             INSERT INTO outcomes
-            (venue, market_id, outcome_yes, resolved_at, first_seen_at, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (venue, market_id, outcome_yes, resolved_at, first_seen_at, raw_json,
+             canonical_proposition_id, source, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(venue, market_id) DO UPDATE SET
               outcome_yes=excluded.outcome_yes,
               resolved_at=excluded.resolved_at,
               first_seen_at=CASE WHEN outcomes.outcome_yes != excluded.outcome_yes
                   THEN excluded.first_seen_at ELSE outcomes.first_seen_at END,
-              raw_json=excluded.raw_json
+              raw_json=excluded.raw_json,
+              canonical_proposition_id=COALESCE(excluded.canonical_proposition_id,
+                  outcomes.canonical_proposition_id),
+              source=COALESCE(excluded.source, outcomes.source),
+              source_url=COALESCE(excluded.source_url, outcomes.source_url)
             """,
             (
                 venue, market_id, outcome_yes, resolved_at,
-                seen_at.astimezone(UTC).isoformat(), json.dumps(raw, sort_keys=True),
+                observed_at, raw_json, canonical_proposition_id, source, source_url,
             ),
+        )
+        evidence_identity = json.dumps(
+            [venue, market_id, outcome_yes, resolved_at, source, source_url, raw],
+            sort_keys=True, separators=(",", ":"), default=str,
+        )
+        digest = hashlib.sha256(evidence_identity.encode()).hexdigest()
+        self.conn.execute(
+            """INSERT OR IGNORE INTO outcome_observations
+               (evidence_hash,venue,market_id,canonical_proposition_id,outcome_yes,
+                observed_at,resolved_at,source,source_url,raw_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (digest, venue, market_id, canonical_proposition_id, outcome_yes,
+             observed_at, resolved_at, source or "unspecified", source_url, raw_json),
         )
         self.conn.commit()
 

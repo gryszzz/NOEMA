@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from noema.prediction_venues import _count_records
+from noema.prediction_venues import _count_records, _normalize_polymarket_depth
 from noema.venues.polymarket_us import PolymarketUSVenue
 
 
@@ -65,3 +65,21 @@ def test_polymarket_positions_count_preserves_empty_and_unknown():
     assert _count_records({"positions": {}}, "positions") == 0
     assert _count_records({"positions": []}, "positions") == 0
     assert _count_records({"unexpected": []}, "positions") is None
+
+
+def test_polymarket_l2_depth_requires_exact_market_and_sorted_positive_contract_levels():
+    raw = {"marketData": {
+        "marketSlug": "fixed-market",
+        "bids": [{"px": {"value": "0.42"}, "qty": "2"}],
+        "offers": [{"px": {"value": "0.44"}, "qty": "1.5"}],
+    }}
+    normalized = _normalize_polymarket_depth(raw, "fixed-market")
+    assert normalized["yes_bids"] == [{"price": "0.42", "contracts": "2"}]
+    assert normalized["yes_asks"] == [{"price": "0.44", "contracts": "1.5"}]
+    assert "capacity" not in normalized
+
+    assert _normalize_polymarket_depth(raw, "other-market") is None
+    malformed = {"marketData": {**raw["marketData"],
+                "offers": [{"px": {"value": "0.45"}, "qty": "1"},
+                           {"px": {"value": "0.44"}, "qty": "2"}]}}
+    assert _normalize_polymarket_depth(malformed, "fixed-market") is None

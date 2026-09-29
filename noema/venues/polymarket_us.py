@@ -148,3 +148,13 @@ class PolymarketUSVenue(VenueAdapter):
             raise ValueError("invalid Polymarket US market slug")
         payload = await asyncio.to_thread(self.client.markets.settlement, slug)
         return payload if isinstance(payload, dict) else {}
+
+    async def market_by_slug(self, slug: str) -> dict[str, Any]:
+        """Read one official market record; never interpret quotes as outcomes."""
+        if not slug or "/" in slug:
+            raise ValueError("invalid Polymarket US market slug")
+        payload = await asyncio.to_thread(self.client.markets.retrieve_by_slug, slug)
+        market = payload.get("market") if isinstance(payload, dict) else None
+        if not isinstance(market, dict) or market.get("slug") != slug:
+            raise ValueError("Polymarket US market response does not match requested slug")
+        return market
