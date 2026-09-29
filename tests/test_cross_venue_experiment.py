@@ -268,6 +268,7 @@ def test_paper_pair_matures_only_from_prospective_matching_venue_outcomes(tmp_pa
     outcomes.conn.close()
 
     maturity = mature_paper_pairs(path, now=decision_at + timedelta(seconds=12))
+    restarted_maturity = mature_paper_pairs(path, now=decision_at + timedelta(seconds=13))
     history = recent_evaluations(path)
     conn = sqlite3.connect(path)
     try:
@@ -275,10 +276,16 @@ def test_paper_pair_matures_only_from_prospective_matching_venue_outcomes(tmp_pa
             "SELECT amount_usd,payload_json FROM economic_events "
             "WHERE event_type='paper_cross_venue_settlement'"
         ).fetchone()
+        event_count = conn.execute(
+            "SELECT COUNT(*) FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
+        ).fetchone()[0]
     finally:
         conn.close()
 
     assert maturity["matured"] == 1
+    assert restarted_maturity["matured"] == 0
+    assert restarted_maturity["matured_total"] == 1
+    assert event_count == 1
     assert maturity["walk_forward"]["status"] == "insufficient_independent_matured_events"
     assert event[0] is None
     event_payload = json.loads(event[1])
