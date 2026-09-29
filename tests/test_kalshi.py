@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from noema.config import KalshiConfig
 from noema.venues.kalshi import KalshiVenue
 
@@ -54,3 +56,110 @@ def test_market_mapping_uses_fixed_point_dollars() -> None:
     assert market.no_bid == 0.53
     assert market.resolution_rules == "Resolves YES if the test passes."
     assert market.liquidity_usd == 66.5
+
+
+def test_kalshi_reconciliation_matches_exact_stable_client_order_id(tmp_path):
+    import asyncio
+    import uuid
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def get(self, endpoint, **_kwargs):
+            if endpoint.endswith("/fills"):
+                if endpoint == "/historical/fills":
+                    return Response({"fills": [], "cursor": None})
+                return Response({"fills": [{
+                    "order_id": "provider-order-7", "fill_id": "fill-7",
+                    "ticker": "KXTEST-EVENT-A", "outcome_side": "yes",
+                    "book_side": "bid", "action": "buy",
+                    "count_fp": "2.00", "yes_price_dollars": "0.50", "fee_cost": "0.02",
+                }], "cursor": None})
+            return Response({"orders": [{
+                "client_order_id": str(uuid.uuid5(uuid.NAMESPACE_URL, "noema:proposal-7")),
+                "order_id": "provider-order-7", "ticker": "KXTEST-EVENT-A", "status": "executed",
+            }], "cursor": None})
+
+    venue = KalshiVenue(KalshiConfig(environment="demo"), client=Client())
+    venue.signer = type("Signer", (), {"headers": lambda *_args: {}})()
+    request = {"proposal_id": "proposal-7", "venue": "kalshi:demo",
+               "instrument": "KXTEST-EVENT-A", "notional_usd": "1.10"}
+
+    observation = asyncio.run(venue.reconcile_execution(request))
+
+    assert observation.status == "filled"
+    assert observation.provider_reference == "provider-order-7"
+    assert observation.source == "kalshi_authenticated_orders_and_fills_api"
+    assert observation.filled_exposure_usd == Decimal("1.0200")
+    assert observation.external_fill_ids == ("fill-7",)
+
+
+def test_kalshi_reconciliation_absence_is_inconclusive():
+    import asyncio
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def get(self, *_args, **_kwargs):
+            return Response({"orders": [], "cursor": None})
+
+    venue = KalshiVenue(KalshiConfig(environment="demo"), client=Client())
+    venue.signer = type("Signer", (), {"headers": lambda *_args: {}})()
+    result = asyncio.run(venue.reconcile_execution({
+        "proposal_id": "missing", "venue": "kalshi:demo",
+    }))
+    assert result is None
+
+
+def test_kalshi_reconciliation_checks_historical_orders_after_current_orders():
+    import asyncio
+    import uuid
+
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def get(self, endpoint, **_kwargs):
+            calls.append(endpoint)
+            if endpoint.endswith("/fills"):
+                return Response({"fills": [], "cursor": None})
+            if "historical" in endpoint:
+                return Response({"orders": [{
+                    "client_order_id": str(uuid.uuid5(uuid.NAMESPACE_URL, "noema:old")),
+                    "order_id": "historical-order", "ticker": "KXTEST-EVENT-A", "status": "canceled",
+                }], "cursor": None})
+            return Response({"orders": [], "cursor": None})
+
+    venue = KalshiVenue(KalshiConfig(environment="demo"), client=Client())
+    venue.signer = type("Signer", (), {"headers": lambda *_args: {}})()
+    observation = asyncio.run(venue.reconcile_execution({
+        "proposal_id": "old", "venue": "kalshi:demo", "instrument": "KXTEST-EVENT-A",
+    }))
+    assert calls == ["/portfolio/orders", "/historical/orders",
+                     "/portfolio/fills", "/historical/fills"]
+    assert observation.status == "cancelled"
