@@ -371,7 +371,9 @@ function renderPredictionVenues(payload) {
     for (const candidate of match.matches) {
       const compare = element('article', undefined, 'prediction-overlap-candidate');
       compare.append(
-        element('strong', `${candidate.event ?? 'Event'} · ${candidate.team_code ?? 'OUTCOME'} · candidate only`),
+        element('strong', `${candidate.event ?? 'Event'} · ${candidate.team_code ?? 'OUTCOME'} · canonical proposition matched`),
+        element('span', `Identity ${candidate.canonical_identity?.comparison?.semantic_match ?? 'unverified'} · settlement ${candidate.canonical_identity?.comparison?.settlement_equivalence ?? 'unverified'} · executable comparison unavailable`),
+        element('span', `Pair evidence ${match.persistence_status ?? 'not recorded'}`),
         element('span', `Kalshi YES ask ${money(candidate.kalshi?.yes_ask)} · spread ${candidate.kalshi?.spread == null ? 'unknown' : `${(candidate.kalshi.spread * 100).toFixed(2)}¢`}`),
         element('span', `Polymarket US YES ask ${money(candidate.polymarket_us?.yes_ask)} · spread ${candidate.polymarket_us?.spread == null ? 'unknown' : `${(candidate.polymarket_us.spread * 100).toFixed(2)}¢`}`),
         element('span', `Unadjusted ask difference ${candidate.unadjusted_yes_ask_difference == null ? 'unknown' : `${(candidate.unadjusted_yes_ask_difference * 100).toFixed(2)}¢/contract`} · executable edge ${candidate.executable_edge == null ? 'not established' : `${(candidate.executable_edge * 100).toFixed(2)}¢/contract`}`),
