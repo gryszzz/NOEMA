@@ -20,6 +20,7 @@ from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
 from .economic_measurement import build_economic_measurement
 from .ecosystem_dashboard import build_ecosystem_overview
+from .execution_gateway import ExecutionGateway
 from .kalshi_telemetry import KalshiTelemetry
 from .knowledge import build_knowledge_overview
 from .ladder import build_ladder_report
@@ -174,6 +175,11 @@ async def trench() -> dict[str, Any]:
 @app.get("/api/wallet-policy")
 async def wallet_policy() -> dict[str, Any]:
     return public_wallet_policy()
+
+
+@app.get("/api/execution-gateway")
+async def execution_gateway_status() -> dict[str, Any]:
+    return ExecutionGateway(_db_path(), initialize=False).overview()
 
 
 @app.get("/api/wallet-status")

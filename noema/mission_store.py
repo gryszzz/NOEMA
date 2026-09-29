@@ -277,6 +277,13 @@ class MissionStore:
             )
             return row["session_id"]
 
+    def current_status(self, mission_id: str) -> str | None:
+        """Read current mission state; existence alone never conveys authority."""
+        row = self.conn.execute(
+            "SELECT status FROM missions WHERE mission_id=?", (mission_id,),
+        ).fetchone()
+        return None if row is None else str(row["status"])
+
     def record_observation(self, mission_id: str, *, actor: str, event_type: str,
                            detail: str, payload: dict[str, Any]) -> None:
         """Append an external observation without changing mission status or authority."""
