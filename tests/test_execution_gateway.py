@@ -8,6 +8,7 @@ from noema.execution_gateway import (
     ExecutionGateway,
     ExecutionProposal,
     PredictionExecutionAuthority,
+    ReconciliationObservation,
 )
 from noema.models import Forecast, MarketSnapshot, Mode, Opportunity
 from noema.risk import RiskEngine, RiskPolicy
@@ -15,15 +16,19 @@ from noema.risk import RiskEngine, RiskPolicy
 
 class FakeOrderVenue:
     supports_live_execution = True
+    supports_authoritative_reconciliation = True
     execution_economics_verified = True
     execution_account_state_current = True
 
     def __init__(self):
         self.calls = 0
 
-    async def execute(self, action):
+    async def execute(self, action, *, client_order_id):
         self.calls += 1
         return "test-order-1"
+
+    async def reconcile_execution(self, request):
+        return None
 
 
 def _proposal(market_id="KXTEST-EVENT-A", proposal_id="proposal-1"):
@@ -110,6 +115,176 @@ def test_structured_proposal_record_does_not_grant_execution(tmp_path):
     assert result.allowed is False
 
 
+def test_live_preflight_requires_stable_provider_reconciliation_capability(tmp_path):
+    proposal, opportunity, action, risk = _proposal()
+
+    class NoReconciliationVenue(FakeOrderVenue):
+        supports_authoritative_reconciliation = False
+
+    reasons = ExecutionGateway(str(tmp_path / "gateway.db"))._prediction_checks(
+        proposal=proposal, opportunity=opportunity, action=action,
+        risk_engine=risk, venue_adapter=NoReconciliationVenue(), bankroll_usd=500,
+    )
+    assert "venue adapter cannot reconcile a dispatch by stable provider identity" in reasons
+
+
+def test_transition_history_is_append_only_and_provider_bound(tmp_path, monkeypatch):
+    import sqlite3
+
+    gateway = ExecutionGateway(str(tmp_path / "gateway.db"))
+    gateway._record("p1", "prediction", "execution", "kalshi:production",
+                    "unknown", Decimal(2), {"instrument": "KX", "mission_id": "mission-1"}, [])
+    observation = ReconciliationObservation(
+        provider="kalshi:production", proposal_id="p1", provider_reference="o1",
+        status="filled", observed_at=datetime.now(UTC),
+        source="kalshi_authenticated_orders_api", filled_quantity=Decimal(3),
+        filled_exposure_usd=Decimal(2), remaining_reserved_usd=Decimal(0),
+    )
+    assert not gateway.apply_reconciliation(replace(observation, provider="kalshi:demo"))
+    assert gateway.apply_reconciliation(observation)
+    assert gateway.apply_reconciliation(observation)  # identical cumulative snapshot is idempotent
+    with sqlite3.connect(gateway.db_path) as conn:
+        assert conn.execute("SELECT status,provider_reference FROM execution_gateway_requests").fetchone() == (
+            "filled", "o1",
+        )
+        transitions = conn.execute(
+            "SELECT from_status,to_status,source FROM execution_gateway_transitions ORDER BY transition_id"
+        ).fetchall()
+        assert transitions == [
+            (None, "unknown", "gateway"),
+            ("unknown", "filled", "kalshi_authenticated_orders_api"),
+        ]
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("UPDATE execution_gateway_transitions SET to_status='failed'")
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal(2)
+    assert gateway._daily_exposure("exclude") == Decimal(2)
+    monkeypatch.setenv("NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD", "3")
+    next_proposal, _, _, _ = _proposal(market_id="KXTEST-EVENT-B", proposal_id="p-next")
+    assert not gateway._reserve_prediction(next_proposal, {}, _authority())
+
+
+@pytest.mark.asyncio
+async def test_partial_fill_snapshots_advance_cumulatively_and_terminal_fill_stays_exposed(tmp_path):
+    import sqlite3
+
+    gateway = ExecutionGateway(str(tmp_path / "gateway.db"))
+    gateway._record("p-partial", "prediction", "execution", "kalshi:production",
+                    "unknown", Decimal(2), {"mission_id": "mission-1"}, [])
+    def observation(status, filled, remaining, fee, fill_ids):
+        return ReconciliationObservation(
+            provider="kalshi:production", proposal_id="p-partial", provider_reference="order-1",
+            status=status, observed_at=datetime.now(UTC), source="kalshi_authenticated_orders_api",
+            filled_quantity=filled, fee_amount=fee, fee_currency="USD",
+            external_fill_ids=tuple(fill_ids), filled_exposure_usd=filled,
+            remaining_reserved_usd=remaining,
+        )
+
+    first = observation("partial", Decimal("0.50"), Decimal("1.50"), Decimal("0.01"), ["f1"])
+    second = observation("partial", Decimal("1.00"), Decimal("1.00"), Decimal("0.02"), ["f1", "f2"])
+    final = observation("filled", Decimal("1.75"), Decimal(0), Decimal("0.03"), ["f1", "f2", "f3"])
+    assert gateway.apply_reconciliation(first)
+    assert gateway.apply_reconciliation(second)
+    assert gateway.apply_reconciliation(second)
+    regressive = replace(second, fee_amount=Decimal("0.015"), external_fill_ids=("f1",))
+    assert not gateway.apply_reconciliation(regressive)
+    class FinalSnapshotAdapter:
+        async def reconcile_execution(self, request):
+            assert request["status"] == "partial"
+            return final
+
+    assert await gateway.reconcile_pending(lambda _venue: FinalSnapshotAdapter()) == {
+        "checked": 1, "resolved": 1, "unchanged": 0,
+    }
+    assert gateway.apply_reconciliation(final)
+    with sqlite3.connect(gateway.db_path) as conn:
+        history = conn.execute(
+            "SELECT to_status FROM execution_gateway_transitions WHERE proposal_id='p-partial' ORDER BY transition_id"
+        ).fetchall()
+        row = conn.execute(
+            "SELECT status,filled_exposure_usd,remaining_reserved_usd,result_json "
+            "FROM execution_gateway_requests WHERE proposal_id='p-partial'"
+        ).fetchone()
+    assert [item[0] for item in history] == ["unknown", "partial", "partial", "filled"]
+    assert row[:3] == ("filled", "1.75", "0")
+    final_evidence = __import__("json").loads(row[3])
+    assert final_evidence["external_fill_ids"] == ["f1", "f2", "f3"]
+    assert final_evidence["fee_amount"] == "0.03"
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal("1.75")
+
+
+@pytest.mark.parametrize("terminal", ["rejected", "cancelled", "expired", "failed"])
+def test_authoritative_zero_fill_terminal_releases_only_unfilled_reservation(tmp_path, terminal):
+    gateway = ExecutionGateway(str(tmp_path / f"{terminal}.db"))
+    gateway._record("p-terminal", "prediction", "execution", "kalshi:production",
+                    "unknown", Decimal(2), {"mission_id": "mission-1"}, [])
+    result = ReconciliationObservation(
+        provider="kalshi:production", proposal_id="p-terminal", provider_reference="order-terminal",
+        status=terminal, observed_at=datetime.now(UTC), source="provider_orders_api",
+        filled_exposure_usd=Decimal(0), remaining_reserved_usd=Decimal(0),
+    )
+    assert gateway.apply_reconciliation(result)
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal(0)
+    assert gateway.apply_reconciliation(result)
+    regressive = replace(result, status="partial", filled_exposure_usd=Decimal("0.25"),
+                         remaining_reserved_usd=Decimal("0.25"))
+    assert not gateway.apply_reconciliation(regressive)
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal(0)
+
+
+def test_partial_cancel_preserves_filled_exposure_and_releases_remainder(tmp_path):
+    gateway = ExecutionGateway(str(tmp_path / "cancel.db"))
+    gateway._record("p-cancel", "prediction", "execution", "kalshi:production",
+                    "unknown", Decimal(2), {"mission_id": "mission-1"}, [])
+    partial = ReconciliationObservation(
+        provider="kalshi:production", proposal_id="p-cancel", provider_reference="order-cancel",
+        status="partial", observed_at=datetime.now(UTC), source="provider_orders_api",
+        filled_exposure_usd=Decimal("0.60"), remaining_reserved_usd=Decimal("1.40"),
+        external_fill_ids=("fill-one",),
+    )
+    cancelled = replace(partial, status="cancelled", remaining_reserved_usd=Decimal(0))
+    assert gateway.apply_reconciliation(partial)
+    assert gateway.apply_reconciliation(cancelled)
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal("0.60")
+    assert not gateway.apply_reconciliation(replace(cancelled, status="filled"))
+
+
+@pytest.mark.parametrize("terminal", ["rejected", "cancelled", "expired", "failed"])
+def test_partial_terminal_state_releases_only_remaining_reservation(tmp_path, terminal):
+    gateway = ExecutionGateway(str(tmp_path / f"partial-{terminal}.db"))
+    gateway._record("p-partial-terminal", "prediction", "execution", "kalshi:production",
+                    "unknown", Decimal(2), {"mission_id": "mission-1"}, [])
+    partial = ReconciliationObservation(
+        provider="kalshi:production", proposal_id="p-partial-terminal", provider_reference="partial-order",
+        status="partial", observed_at=datetime.now(UTC), source="provider_orders_api",
+        filled_quantity=Decimal(1), fee_amount=Decimal("0.01"), fee_currency="USD",
+        external_fill_ids=("fill-kept",), filled_exposure_usd=Decimal("0.60"),
+        remaining_reserved_usd=Decimal("1.40"),
+    )
+    final = replace(partial, status=terminal, remaining_reserved_usd=Decimal(0))
+    assert gateway.apply_reconciliation(partial)
+    assert gateway.apply_reconciliation(final)
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal("0.60")
+    assert gateway._daily_exposure("exclude") == Decimal("0.60")
+    assert not gateway.apply_reconciliation(replace(final, status="partial"))
+    assert gateway._mission_exposure("mission-1", "exclude") == Decimal("0.60")
+
+
+@pytest.mark.asyncio
+async def test_reconciler_keeps_unknown_when_provider_has_no_exact_evidence(tmp_path):
+    gateway = ExecutionGateway(str(tmp_path / "gateway.db"))
+    gateway._record("p2", "prediction", "execution", "kalshi:production",
+                    "unknown", Decimal(2), {"instrument": "KX"}, [])
+
+    class UncertainAdapter:
+        async def reconcile_execution(self, _request):
+            return None
+
+    result = await gateway.reconcile_pending(lambda _venue: UncertainAdapter())
+    assert result == {"checked": 1, "resolved": 0, "unchanged": 1}
+    assert gateway.overview()["recent_requests"][0]["status"] == "unknown"
+    assert gateway._daily_exposure("not-this-request") == Decimal(2)
+
+
 @pytest.mark.asyncio
 async def test_prediction_submission_requires_economics_and_consumes_idempotency_key(
     tmp_path, monkeypatch,
@@ -157,7 +332,7 @@ async def test_ambiguous_provider_error_keeps_exposure_and_instrument_reserved(
     proposal, opportunity, action, risk = _proposal()
 
     class AmbiguousVenue(FakeOrderVenue):
-        async def execute(self, action):
+        async def execute(self, action, *, client_order_id):
             self.calls += 1
             raise TimeoutError("provider response unavailable")
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from datetime import UTC, datetime
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from noema.config import KalshiConfig
+from noema.execution_gateway import ReconciliationObservation
 from noema.models import Action, Decision, MarketSnapshot
 from noema.paper_execution import FeeTerms
 from noema.venues.base import VenueAdapter
@@ -77,6 +79,7 @@ class KalshiSigner:
 
 class KalshiVenue(VenueAdapter):
     name = "kalshi"
+    supports_authoritative_reconciliation = True
 
     def __init__(
         self,
@@ -247,7 +250,7 @@ class KalshiVenue(VenueAdapter):
             raise RuntimeError("Kalshi demo execution requires demo API credentials")
         return await self._submit_event_order(action)
 
-    async def execute(self, action: Action) -> str:
+    async def execute(self, action: Action, *, client_order_id: str | None = None) -> str:
         if self.config.master_halt:
             raise RuntimeError("NOEMA master halt is active")
         if not self.supports_live_execution:
@@ -255,9 +258,11 @@ class KalshiVenue(VenueAdapter):
                 "Kalshi production execution is disabled. "
                 "Set production config, credentials, and NOEMA_ALLOW_LIVE_ORDERS=1."
             )
-        return await self._submit_event_order(action)
+        return await self._submit_event_order(action, client_order_id=client_order_id)
 
-    async def _submit_event_order(self, action: Action) -> str:
+    async def _submit_event_order(
+        self, action: Action, *, client_order_id: str | None = None,
+    ) -> str:
         if self.signer is None:
             raise RuntimeError("Kalshi API credentials are not configured")
         if action.max_price is None or action.stake_usd <= 0:
@@ -269,11 +274,15 @@ class KalshiVenue(VenueAdapter):
         if not Decimal(0) < price < Decimal(1):
             raise ValueError("Kalshi binary price must be between 0 and 1")
 
-        count = Decimal(str(action.stake_usd)) / price
+        count = (Decimal(str(action.stake_usd)) / price).quantize(
+            Decimal("0.01"), rounding=ROUND_DOWN,
+        )
+        if count <= 0:
+            raise ValueError("action stake is below Kalshi's minimum executable contract count")
         path = "/trade-api/v2/portfolio/events/orders"
         body = {
             "ticker": action.market_id,
-            "client_order_id": str(uuid.uuid4()),
+            "client_order_id": client_order_id or str(uuid.uuid4()),
             "side": "bid",
             "count": f"{count:.2f}",
             "price": f"{price:.4f}",
@@ -294,6 +303,140 @@ class KalshiVenue(VenueAdapter):
         response.raise_for_status()
         payload = response.json()
         return str(payload["order_id"])
+
+    async def reconcile_execution(self, request: dict[str, Any]) -> ReconciliationObservation | None:
+        """Resolve only an exact client ID from authenticated provider order state.
+
+        No match is inconclusive: current and historical API retention can differ,
+        so absence never releases an uncertain reservation.
+        """
+        if self.signer is None:
+            raise RuntimeError("Kalshi reconciliation requires API credentials")
+        import uuid
+
+        proposal_id = str(request.get("proposal_id") or "")
+        venue = str(request.get("venue") or "")
+        if not proposal_id or venue != self.name:
+            raise ValueError("request identity does not match this Kalshi environment")
+        expected_client_order_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "noema:" + proposal_id))
+        try:
+            stored_payload = json.loads(str(request.get("request_json") or "{}"))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("stored gateway request is malformed") from exc
+        client_order_id = stored_payload.get("client_order_id", expected_client_order_id)
+        if client_order_id != expected_client_order_id:
+            raise ValueError("stored client order ID does not match proposal identity")
+        matched: dict[str, Any] | None = None
+        for endpoint in ("/portfolio/orders", "/historical/orders"):
+            cursor: str | None = None
+            for _ in range(100):
+                params: dict[str, Any] = {"limit": 100}
+                if cursor:
+                    params["cursor"] = cursor
+                sign_path = f"/trade-api/v2{endpoint}"
+                response = await self.client.get(
+                    endpoint, params=params,
+                    headers=self.signer.headers("GET", sign_path),
+                )
+                response.raise_for_status()
+                page = response.json()
+                if not isinstance(page, dict) or not isinstance(page.get("orders"), list):
+                    raise TypeError("Kalshi order response is malformed")
+                matches = [item for item in page["orders"]
+                           if isinstance(item, dict) and item.get("client_order_id") == client_order_id]
+                if len(matches) > 1:
+                    raise ValueError("Kalshi returned duplicate client order identities")
+                if matches:
+                    matched = matches[0]
+                    break
+                cursor = page.get("cursor") or None
+                if not cursor:
+                    break
+            if matched is not None:
+                break
+        if matched is None:
+            return None
+        order_id = matched.get("order_id")
+        status = {"resting": "submitted", "executed": "filled", "canceled": "cancelled"}.get(
+            matched.get("status")
+        )
+        if not order_id or status is None:
+            raise ValueError("Kalshi order lacks a recognized authoritative identity/status")
+        request_instrument = str(request.get("instrument") or "")
+        if not request_instrument or str(matched.get("ticker") or "") != request_instrument:
+            raise ValueError("Kalshi order instrument does not match the gateway request")
+        async def read_fills(endpoint: str) -> list[dict[str, Any]]:
+            found: list[dict[str, Any]] = []
+            cursor = None
+            for _ in range(100):
+                params = {"order_id": str(order_id), "limit": 100}
+                if cursor:
+                    params["cursor"] = cursor
+                response = await self.client.get(
+                    endpoint, params=params,
+                    headers=self.signer.headers("GET", f"/trade-api/v2{endpoint}"),
+                )
+                response.raise_for_status()
+                page = response.json()
+                if not isinstance(page, dict) or not isinstance(page.get("fills"), list):
+                    raise TypeError("Kalshi fill response is malformed")
+                for fill in page["fills"]:
+                    if not isinstance(fill, dict) or str(fill.get("order_id")) != str(order_id):
+                        raise ValueError("Kalshi fill identity does not match the reconciled order")
+                    if (request_instrument not in {str(fill.get("ticker") or ""),
+                                                   str(fill.get("market_ticker") or "")}
+                            or fill.get("outcome_side") != "yes"
+                            or fill.get("book_side") != "bid"
+                            or fill.get("action") != "buy"):
+                        raise ValueError("Kalshi fill does not match the approved YES buy instrument")
+                    try:
+                        count = Decimal(str(fill["count_fp"]))
+                        price = Decimal(str(fill["yes_price_dollars"]))
+                        fee = Decimal(str(fill["fee_cost"]))
+                        fill_id = str(fill["fill_id"])
+                    except (KeyError, InvalidOperation, TypeError) as exc:
+                        raise ValueError("Kalshi fill facts are incomplete") from exc
+                    if (not count.is_finite() or not price.is_finite() or not fee.is_finite()
+                            or count <= 0 or not Decimal(0) < price < Decimal(1)
+                            or fee < 0 or not fill_id):
+                        raise ValueError("Kalshi fill facts are invalid")
+                    found.append({"fill_id": fill_id, "count": count,
+                                  "notional": count * price, "fee": fee})
+                cursor = page.get("cursor") or None
+                if not cursor:
+                    break
+            return found
+
+        live_fills = await read_fills("/portfolio/fills")
+        historical_fills = await read_fills("/historical/fills")
+        fills_by_id = {fill["fill_id"]: fill for fill in live_fills}
+        for fill in historical_fills:
+            previous_fill = fills_by_id.get(fill["fill_id"])
+            if previous_fill is not None and previous_fill != fill:
+                raise ValueError("Kalshi current and historical fill records conflict")
+            fills_by_id[fill["fill_id"]] = fill
+        fills = [fills_by_id[key] for key in sorted(fills_by_id)]
+        if status == "filled" and not fills:
+            # An executed order without its authoritative fill facts is not yet reconciled.
+            return None
+        filled_quantity = sum((fill["count"] for fill in fills), Decimal(0))
+        fees = sum((fill["fee"] for fill in fills), Decimal(0))
+        filled_exposure = sum((fill["notional"] for fill in fills), Decimal(0)) + fees
+        if status == "submitted" and filled_quantity > 0:
+            status = "partial"
+        if status in {"filled", "cancelled"}:
+            remaining_reserved = Decimal(0)
+        else:
+            requested_notional = Decimal(str(request.get("notional_usd") or "0"))
+            remaining_reserved = max(Decimal(0), requested_notional - filled_exposure)
+        return ReconciliationObservation(
+            provider=self.name, proposal_id=proposal_id,
+            provider_reference=str(order_id), status=status,
+            observed_at=datetime.now(UTC), source="kalshi_authenticated_orders_and_fills_api",
+            filled_quantity=filled_quantity, fee_amount=fees, fee_currency="USD",
+            external_fill_ids=tuple(sorted(fill["fill_id"] for fill in fills)),
+            filled_exposure_usd=filled_exposure, remaining_reserved_usd=remaining_reserved,
+        )
 
     @staticmethod
     def _market_snapshot(
