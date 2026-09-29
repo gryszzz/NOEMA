@@ -37,3 +37,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 [hidden] { display: none !important; }
 /* Source-linked learning is a compact evidence panel, not an agent activity display. */
 .learning-overview{display:grid;gap:12px}.knowledge-stats{display:flex;flex-wrap:wrap;gap:8px}.knowledge-stats span,.knowledge-source,.knowledge-belief{border:1px solid var(--line,#273039);border-radius:10px;padding:10px 12px;background:rgba(255,255,255,.02)}.knowledge-sources,.knowledge-beliefs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.knowledge-source{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:.82rem}.knowledge-source a{color:var(--accent,#8dc7b1)}.knowledge-belief{display:grid;gap:6px}.knowledge-belief strong{font-size:.9rem}.knowledge-belief span,.knowledge-belief small{color:var(--muted,#9ba6ad);font-size:.78rem}
+.canonical-economy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-top:14px}
+.canonical-economy-metric{display:grid;gap:7px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-soft)}
+.canonical-economy-metric span{color:var(--muted);font-size:.69rem;letter-spacing:.07em;text-transform:uppercase}
+.canonical-economy-metric strong{overflow-wrap:anywhere;font-family:var(--mono);font-size:.95rem}
+.canonical-economy-detail{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:10px;margin-top:12px}
+.canonical-economy-detail section{min-width:0;padding:12px;border:1px solid var(--line-soft);border-radius:8px;background:rgba(255,255,255,.015)}
+.canonical-economy-detail h3{margin:0 0 9px;color:var(--muted);font-size:.73rem;letter-spacing:.08em;text-transform:uppercase}
+.canonical-economy-list{display:grid;gap:7px;margin:0;padding:0;list-style:none}
+.canonical-economy-list li{overflow-wrap:anywhere;color:var(--paper);font-size:.78rem;line-height:1.45}
+.economic-investigation{display:grid;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft)}
+.economic-investigation-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:8px}
+.economic-investigation-field{min-width:0;padding:9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--surface-soft)}
+.economic-investigation-field span,.economic-investigation-alternatives>strong{color:var(--muted);font-size:.65rem;letter-spacing:.07em}
+.economic-investigation-field p{margin:5px 0 0;overflow-wrap:anywhere;font-size:.78rem;line-height:1.4}
+.economic-investigation-alternatives{display:grid;gap:7px}

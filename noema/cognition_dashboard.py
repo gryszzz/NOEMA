@@ -71,6 +71,9 @@ def _runtime_providers(config: Any) -> dict[str, Any]:
         )
         max_model_gib = max_local_model_size_gib()
         selected_available = any(item["id"] == local.model for item in models)
+        selected_capabilities = next(
+            (item["capabilities"] for item in models if item["id"] == local.model), [],
+        )
         if not selected_available:
             selected_reason = "configured local model is not installed"
         elif selected_size is None:
@@ -84,6 +87,7 @@ def _runtime_providers(config: Any) -> dict[str, Any]:
             "status": "healthy", "endpoint": local.endpoint,
             "selected_model": local.model,
             "selected_model_available": selected_available,
+            "selected_model_capabilities": selected_capabilities,
             "selected_model_size_bytes": selected_size,
             "selected_model_resource_reason": selected_reason,
             "selected_model_resource_eligible": (
@@ -157,7 +161,8 @@ def _runtime_providers(config: Any) -> dict[str, Any]:
             cloudflare_health["status"] = "unavailable"
     hosted = {
         "openai": {"status": "ready" if openai.ready else "credential_missing" if not openai_key
-                   else "disabled_or_model_missing", "credential_present": openai_key},
+                   else "disabled_or_model_missing", "credential_present": openai_key,
+                   "model": openai.model},
         "groq": {"status": "credential_present_unwired" if groq_key else "credential_missing",
                  "credential_present": groq_key},
         "cloudflare_workers_ai": cloudflare_health,
@@ -180,6 +185,7 @@ def build_provider_health() -> dict[str, Any]:
     hosted = runtime["hosted_providers"]
     local = runtime["local_model_runner"]
     services = runtime["specialists"]
+    groq = hosted.get("groq", {"status": "not_configured", "credential_present": False})
     return {
         "configured_provider": cognition_provider_name(config),
         "configured_provider_ready": bool(config.ready),
@@ -187,14 +193,24 @@ def build_provider_health() -> dict[str, Any]:
             "status", "model", "model_available", "credential_present",
         )},
         "openai": {key: hosted["openai"].get(key) for key in (
+            "status", "credential_present", "model",
+        )},
+        "groq": {key: groq.get(key) for key in (
             "status", "credential_present",
         )},
+        "foundry": {
+            "status": "configured" if getattr(config, "ready", False) and
+                cognition_provider_name(config) == "foundry" else "not_configured",
+            "deployment": getattr(config, "deployment", None)
+                if cognition_provider_name(config) == "foundry" else None,
+        },
         "docker_model_runner": {key: local.get(key) for key in (
             "status", "selected_model", "selected_model_resource_eligible",
             "selected_model_resource_reason", "model_size_ceiling_gib",
+            "selected_model_capabilities",
         )},
-        "chronos": {key: services["chronos"].get(key) for key in ("status",)},
-        "finbert": {key: services["finbert"].get(key) for key in ("status",)},
+        "chronos": {key: services["chronos"].get(key) for key in ("status", "model", "ok")},
+        "finbert": {key: services["finbert"].get(key) for key in ("status", "model", "ok")},
     }
 
 

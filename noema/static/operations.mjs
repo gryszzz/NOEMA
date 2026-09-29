@@ -20,6 +20,10 @@ const views = {
   outcomes: ['Recorded outcomes', ['market_id', 'outcome_yes', 'resolved_at', 'first_seen_at']],
 };
 let snapshot, economicsSnapshot, trenchSnapshot, providerHealth, providerHealthAt = 0;
+let walletSnapshot, gatewaySnapshot;
+const capabilityFreshness = { providers: 'unknown', wallets: 'unknown', gateway: 'unknown',
+  venues: 'unknown', operations: 'unknown', providersAt: null, walletsAt: null,
+  gatewayAt: null, venuesAt: null, operationsAt: null };
 let predictionVenuesSnapshot, predictionVenuesAt = 0;
 let stripeEconomySnapshot;
 let knowledgeSnapshot;
@@ -44,6 +48,15 @@ function parseObject(v) {
 function money(amount) {
   if (amount === null || amount === undefined || !/^-?\d+(?:\.\d+)?$/.test(String(amount))) return 'Unknown';
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Number(amount));
+}
+function moneyPrecise(amount) {
+  const raw = String(amount ?? '');
+  if (!/^-?\d+(?:\.\d+)?$/.test(raw)) return 'Unknown';
+  const negative = raw.startsWith('-');
+  const [wholeRaw, fractionRaw = ''] = raw.replace(/^-/, '').split('.');
+  const whole = wholeRaw.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const fraction = fractionRaw.replace(/0+$/, '');
+  return `${negative ? '-$' : '$'}${whole}${fraction ? `.${fraction}` : ''}`;
 }
 function dateLabel(iso, options = {}) {
   if (!iso) return 'time unavailable';
@@ -249,6 +262,18 @@ function renderLanes() {
     if (laneAllocations.length) metrics.append(element('span', `research attention ${Math.round(share * 100)}%`));
     metrics.append(element('span', 'revenue unmeasured'), element('span', 'net economics unmeasured'));
     card.append(metrics);
+    if (laneAllocations.length) {
+      const focus = element('div', undefined, 'lane-attention');
+      focus.setAttribute('role', 'progressbar');
+      focus.setAttribute('aria-label', `Recorded research attention for ${lane.name}`);
+      focus.setAttribute('aria-valuemin', '0');
+      focus.setAttribute('aria-valuemax', '100');
+      focus.setAttribute('aria-valuenow', String(Math.round(Math.max(0, Math.min(1, share)) * 100)));
+      const fill = element('span');
+      fill.style.width = `${Math.max(0, Math.min(100, share * 100))}%`;
+      focus.append(fill);
+      card.append(focus);
+    }
     $('lane-rows').append(card);
   }
   $('other-lanes-label').textContent = `${inactive.length} desks with no recorded activity`;
@@ -334,7 +359,9 @@ function renderPredictionVenues(payload) {
   const root = $('prediction-venue-list');
   if (!root) return;
   const venues = payload?.venues ?? [];
-  $('prediction-venues-asof').textContent = payload?.as_of ? `READ ONLY · ${dateLabel(payload.as_of)}` : 'VENUE STATE UNAVAILABLE';
+  $('prediction-venues-asof').textContent = payload?.as_of
+    ? `${capabilityFreshness.venues === 'stale' ? 'STALE · ' : ''}READ ONLY · ${dateLabel(payload.as_of)}`
+    : 'VENUE STATE UNAVAILABLE';
   root.replaceChildren();
   if (!venues.length) {
     root.append(element('p', 'No venue status is available.', 'quiet'));
@@ -351,6 +378,19 @@ function renderPredictionVenues(payload) {
       : account.status === 'missing_key_id_and_secret_key' ? 'PUBLIC DATA · API KEY MISSING'
         : String(account.status ?? 'ACCOUNT UNKNOWN').toUpperCase().replaceAll('_', ' ');
     const detail = element('p', `${state} · ${market.open_markets_sampled ?? '—'} open markets sampled · ${venue.latency_ms ?? '—'} ms`);
+    const caps = venue.capabilities ?? {};
+    const capLabel = (label, value) => `${label} ${value === true ? 'YES' : value === false ? 'NO' : 'UNKNOWN'}`;
+    detail.append(element('small', [
+      capLabel('CONNECTED', caps.connected), capLabel('AUTHENTICATED', caps.authenticated),
+      capLabel('READABLE', caps.readable), capLabel('FUNDED', caps.funded),
+      capLabel('SIGNER CONFIGURED', caps.signer_configured),
+      capLabel('CREDENTIALS ISOLATED', caps.credentials_isolated),
+      capLabel('RESEARCH ENABLED', caps.research_enabled),
+      capLabel('PAPER ENABLED', caps.paper_enabled),
+      capLabel('MISSION AUTHORITY', caps.mission_authority_present),
+      capLabel('LIVE EXECUTION', caps.live_execution_enabled), capLabel('HALTED', caps.halted),
+      capLabel('COORDINATOR WIRED', caps.coordinator_wired),
+    ].join(' · ')));
     const stats = element('div', undefined, 'prediction-venue-stats');
     stats.append(
       element('span', `Cash ${account.cash_balance_usd == null ? 'unknown' : money(account.cash_balance_usd)}`),
@@ -485,13 +525,18 @@ function renderAllocation() {
 function renderEconomy(measurement) {
   const recordedEntries = Number(measurement?.cash?.entry_count ?? 0);
   $('metric-cash').textContent = recordedEntries > 0 ? money(measurement.cash.net_cash_usd) : 'Unknown';
-  $('metric-revenue').textContent = 'Unknown';
+  const ledger = measurement?.canonical_ledger ?? {};
+  $('metric-revenue').textContent = money(ledger.verified_realized_revenue_usd);
   $('metric-net').textContent = money(measurement?.net_economic_profit_usd);
+  const missionProgress = measurement?.mission_progress ?? {};
+  $('mission-economics-progress').textContent = `SELF-FUNDING ${String(missionProgress.status ?? 'unknown').toUpperCase()} · verified realized revenue ${money(missionProgress.verified_realized_revenue_usd)} · complete attributable costs ${money(missionProgress.complete_attributable_costs_usd)} · reserves ${money(missionProgress.reserve_balance_usd)} · cost-adjusted value ${money(missionProgress.verified_cost_adjusted_value_usd)}`;
   const attempts = Number(measurement?.operating_estimates?.model_attempt_count ?? 0);
   $('metric-model-cost').textContent = attempts > 0 ? money(measurement.operating_estimates.model_reserved_usd) : 'Unknown';
   const settled = Number(measurement?.paper?.settled_markets_this_month ?? 0);
   $('metric-paper').textContent = settled > 0 ? money(measurement.paper.net_after_execution_costs_usd) : 'Unknown';
+  renderPaperPnl(measurement?.paper ?? {}, measurement?.month_utc);
   $('economics-time').textContent = measurement?.as_of ? `Accounting snapshot · ${dateLabel(measurement.as_of)}` : 'Economic measurement unavailable';
+  renderCanonicalEconomy(ledger);
 
   const rows = snapshot?.economic_state?.balances;
   $('treasury-reserve').textContent = rows ? money(rows.reserve_usd) : 'Unknown';
@@ -499,16 +544,290 @@ function renderEconomy(measurement) {
   $('treasury-research').textContent = rows ? money(rows.research_budget_usd) : 'Unknown';
   $('treasury-infrastructure').textContent = rows ? money(rows.infrastructure_budget_usd) : 'Unknown';
 
-  const walletConnection = snapshot?.runtime?.connections?.evm_wallet;
-  const wallet = walletConnection && typeof walletConnection === 'object' ? walletConnection.status : walletConnection;
-  const cashCount = recordedEntries;
-  const walletConfigured = wallet && !['unconfigured', 'disabled', 'unavailable'].includes(wallet);
-  $('wallet-state').textContent = walletConfigured || cashCount ? 'PARTIAL RECORDS' : 'NO BALANCE SERIES';
-  $('account-empty-title').textContent = walletConfigured || cashCount ? 'No reconciled balance curve' : 'No verified series';
-  $('account-empty-detail').textContent = cashCount
-    ? `${cashCount} operator-reported cash entries exist, but no reconciled account balance history is available.`
-    : `No cash entries are recorded; wallet status is ${wallet ?? 'unknown'}.`;
-  $('account-note').textContent = 'Wallet value, transfers and reconciled cash are not yet available as a time series.';
+}
+
+function renderPaperPnl(paper, period) {
+  const host = $('account-chart');
+  const settledCount = Number.isFinite(Number(paper.settled_markets_this_month))
+    ? Number(paper.settled_markets_this_month) : 0;
+  const points = Array.isArray(paper.pnl_series) ? paper.pnl_series.filter((item) =>
+    Number.isFinite(Number(item.cumulative_net_usd)) && Number.isFinite(Number(item.realized_net_usd))
+    && Number.isFinite(Date.parse(item.observed_at))) : [];
+  const chartPoints = points.length > 180
+    ? Array.from({ length: 180 }, (_, index) => points[Math.round(index * (points.length - 1) / 179)])
+    : points;
+  host.replaceChildren();
+  $('wallet-state').textContent = settledCount ? `${formatCount(settledCount)} SETTLED` : 'NO SETTLEMENTS';
+  $('account-note').textContent = `Validated paper outcomes · ${paper.model_version ?? 'model unknown'} · ${period ?? 'period unknown'} UTC. Operating costs and capital opportunity cost are excluded.`;
+  host.setAttribute('aria-label', points.length
+    ? `Cumulative hypothetical paper P and L from ${dateLabel(points[0].observed_at)} through ${dateLabel(points.at(-1).observed_at)}, based on ${formatCount(settledCount)} validated settled positions; showing ${points.length} chart samples`
+    : 'No validated settled paper positions are available for a P and L chart');
+  if (!points.length) {
+    const empty = element('div', undefined, 'account-empty');
+    empty.append(element('span', '∅', 'empty-emblem'));
+    empty.append(element('strong', 'No settled paper series'));
+    empty.append(element('span', 'The chart appears when validated paper positions resolve. This is hypothetical P&L, not revenue.'));
+    host.append(empty);
+    return;
+  }
+
+  const width = 640, height = 210, left = 58, right = 14, top = 22, bottom = 34;
+  const values = chartPoints.map((item) => Number(item.cumulative_net_usd));
+  let lo = Math.min(0, ...values), hi = Math.max(0, ...values);
+  if (lo === hi) { lo -= 0.01; hi += 0.01; }
+  const span = Math.max(0.01, hi - lo);
+  const xAt = (index) => chartPoints.length === 1 ? (left + width - right) / 2
+    : left + (width - left - right) * index / (chartPoints.length - 1);
+  const yAt = (value) => top + (hi - value) / span * (height - top - bottom);
+  const svg = svgNode('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img',
+    'aria-labelledby': 'paper-pnl-title paper-pnl-desc', preserveAspectRatio: 'none' });
+  svg.append(svgNode('title', { id: 'paper-pnl-title' }, 'Cumulative settled paper P and L'));
+  svg.append(svgNode('desc', { id: 'paper-pnl-desc' }, 'Hypothetical cumulative net from validated paper positions as they were observed to settle. Does not represent live trading or include operating costs.'));
+  for (let tick = 0; tick <= 4; tick += 1) {
+    const value = lo + span * tick / 4, y = yAt(value);
+    if (Math.abs(value) > span * .00001) svg.append(svgNode('path', { d: `M${left} ${y}H${width - right}`, class: 'account-gridline' }));
+    svg.append(svgNode('text', { x: left - 8, y: y + 3, 'text-anchor': 'end', class: 'pnl-axis-label' }, money(value.toFixed(2))));
+  }
+  svg.append(svgNode('path', { d: `M${left} ${yAt(0)}H${width - right}`, class: 'pnl-zero' }));
+  svg.append(svgNode('text', { x: left, y: 12, class: 'pnl-axis-caption' }, 'CUMULATIVE PAPER NET · USD'));
+  const plotted = chartPoints.map((item, index) => ({
+    x: xAt(index), y: yAt(Number(item.cumulative_net_usd)), value: Number(item.cumulative_net_usd),
+  }));
+  let segment = { sign: plotted[0].value >= 0 ? 'positive' : 'negative', points: [plotted[0]] };
+  const drawSegment = () => {
+    const d = segment.points.map((point, index) => `${index ? 'L' : 'M'}${point.x} ${point.y}`).join(' ');
+    svg.append(svgNode('path', { d, class: 'paper-pnl-line', 'data-sign': segment.sign }));
+  };
+  for (let index = 1; index < plotted.length; index += 1) {
+    const previous = plotted[index - 1], current = plotted[index];
+    const sign = current.value >= 0 ? 'positive' : 'negative';
+    if (sign !== segment.sign) {
+      const ratio = previous.value / (previous.value - current.value);
+      const crossing = { x: previous.x + (current.x - previous.x) * ratio, y: yAt(0) };
+      segment.points.push(crossing);
+      drawSegment();
+      segment = { sign, points: [crossing, current] };
+    } else segment.points.push(current);
+  }
+  drawSegment();
+  chartPoints.forEach((item, index) => {
+    const value = Number(item.cumulative_net_usd), { x, y } = plotted[index];
+    const dot = svgNode('circle', { cx: x, cy: y, r: chartPoints.length > 30 ? 2 : 3, class: 'paper-pnl-point', 'data-sign': value >= 0 ? 'positive' : 'negative' });
+    dot.append(svgNode('title', {}, `${dateLabel(item.observed_at)} · ${item.venue} · settled net ${money(item.realized_net_usd)} · cumulative paper net ${money(item.cumulative_net_usd)} · ${item.market_id} · ${paper.model_version ?? 'model unknown'}`));
+    svg.append(dot);
+  });
+  const first = element('span', dateLabel(points[0].observed_at, { month: 'short', day: 'numeric' }));
+  const last = element('strong', dateLabel(points.at(-1).observed_at, { month: 'short', day: 'numeric' }));
+  const range = element('div', undefined, 'pnl-date-range');
+  range.append(first, last);
+  host.append(svg, range);
+}
+
+function renderCanonicalEconomy(ledger) {
+  const grid = $('canonical-economy-grid');
+  grid.replaceChildren();
+  const hasEvents = Number(ledger.event_count ?? 0) > 0;
+  const metrics = [
+    ['Verified revenue total', ledger.verified_realized_revenue_usd],
+    ['Verified trading P&L total', ledger.verified_realized_trading_pnl_usd],
+    ['Verified attributable costs total', ledger.verified_attributable_costs_usd],
+    ['Known unreconciled USD', hasEvents ? ledger.unreconciled_amount_usd : null],
+    ['Owner capital total', ledger.owner_funded_amount_usd],
+    ['Reconciled owner capital subtotal', ledger.owner_funded_subtotal_usd],
+    ['Operating reserve', ledger.operating_reserve_usd],
+    ['Net verified contribution', ledger.net_verified_contribution_usd],
+    ['Self-funding ratio', ledger.self_funding_ratio == null ? null : `${(Number(ledger.self_funding_ratio) * 100).toFixed(1)}%`],
+    ['Model budget reserved', hasEvents ? ledger.reserved_amount_usd : null],
+  ];
+  for (const [label, value] of metrics) {
+    const item = element('div', undefined, 'canonical-economy-metric');
+    item.append(element('span', label), element('strong', typeof value === 'string' && label === 'Self-funding ratio' ? value : money(value)));
+    grid.append(item);
+  }
+
+  const closure = $('economic-closure');
+  closure.replaceChildren();
+  const period = ledger.provider_coverage?.[0]?.month_utc ?? 'No period manifest';
+  closure.append(element('p', `${period} · ${ledger.period_closure ?? 'OPEN'} · ${ledger.coverage_status ?? 'UNKNOWN'}`));
+  const reserveBlockers = Array.isArray(ledger.reserve_blockers) ? ledger.reserve_blockers.join('; ') : 'Reserve evidence unavailable.';
+  closure.append(element('p', `Operating reserve · ${ledger.reserve_status ?? 'UNKNOWN'} · ${money(ledger.operating_reserve_usd)} · ${reserveBlockers}`));
+  if (Array.isArray(ledger.provider_coverage) && ledger.provider_coverage.length) {
+    const list = element('ul', undefined, 'canonical-economy-list');
+    for (const provider of ledger.provider_coverage) {
+      const missing = provider.state === 'NOT_APPLICABLE' ? [] : (provider.expected_evidence_classes ?? []).filter(
+        name => !(provider.actual_evidence_classes ?? []).includes(name),
+      );
+      const blockers = [...(provider.unresolved_blockers ?? []), ...missing.map(name => `missing ${name}`)];
+      const details = blockers.length ? ` · ${blockers.join('; ')}` : '';
+      const activity = provider.applicable_activity_detected == null
+        ? 'UNKNOWN' : provider.applicable_activity_detected ? 'YES' : 'NO';
+      const source = provider.provenance?.source ?? provider.provenance?.endpoint ?? 'provenance unavailable';
+      const safeEvidenceKeys = {
+        cloudflare: ['cognitive_sessions', 'runtime_events', 'cognition_packets', 'idle_cognition_attempts', 'billing_api'],
+        kalshi: ['fills_in_period', 'settlements_in_period', 'reported_fees_usd', 'fill_scan_complete', 'settlement_scan_complete'],
+        openai: ['actual_request_count', 'model', 'input_tokens', 'output_tokens', 'configured_price_estimate_usd', 'reservation_count', 'reserved_amount_usd', 'reserved_tokens', 'admin_api_key_present'],
+        operator_expenses: ['september_operator_expense_entries', 'owner_no_expenses_attestation_present'],
+        polymarket_us: ['activity_records_scanned', 'pages', 'eof_reached', 'activity_types', 'september_trades', 'september_position_resolutions', 'september_account_balance_changes', 'trade_fee_field_present'],
+        render: ['provider_invoice_or_statement_present', 'blueprint_monthly_hosting_estimate_usd', 'workspace_subscription_cost', 'no_estimate_promoted_to_expense'],
+        stripe: ['payment_intent_count', 'period_successful_usd_payment_intents', 'missing_read_capabilities', 'snapshot_status'],
+        wallets: ['current_read_only_balance_status', 'confirmed_september_transactions', 'chains_with_period_history_reconciliation', 'native_fee_dispute'],
+      }[provider.provider] ?? [];
+      const evidence = Object.fromEntries(safeEvidenceKeys
+        .filter(key => Object.hasOwn(provider.latest_evidence ?? {}, key))
+        .map(key => [key, provider.latest_evidence[key]]));
+      const evidenceText = Object.keys(evidence).length ? ` · evidence ${JSON.stringify(evidence)}` : '';
+      list.append(element('li', `${provider.provider} · ${provider.state} · activity ${activity} · events ${value(provider.canonical_event_count)} · reconciled ${moneyPrecise(provider.reconciled_amount_usd)} · estimated ${moneyPrecise(provider.estimated_amount_usd)} · last checked ${value(provider.observed_at)} · ${source}${evidenceText}${details}`));
+    }
+    closure.append(list);
+  } else {
+    closure.append(element('p', 'No expected-provider manifest or period attestations exist; silence is not completeness.', 'quiet'));
+  }
+
+  renderEconomicInvestigation(ledger.investigation_decision);
+
+  const renderRows = (id, rows, formatter, empty) => {
+    const host = $(id);
+    host.replaceChildren();
+    if (!Array.isArray(rows) || rows.length === 0) {
+      host.append(element('p', empty, 'quiet'));
+      return;
+    }
+    const list = element('ul', undefined, 'canonical-economy-list');
+    for (const row of rows) list.append(element('li', formatter(row)));
+    host.append(list);
+  };
+  renderRows('economic-lane-contribution', ledger.contribution_by_lane,
+    row => `${row.key} · reconciled event subtotal ${money(row.reconciled_event_contribution_subtotal_usd)} · ${row.unreconciled_event_count} unresolved / ${row.event_count} events`,
+    'No reconciled contribution events; lane coverage is incomplete.');
+  renderRows('economic-cost-drivers', ledger.top_cost_drivers,
+    row => `${row.provider} / ${row.lane} · known ${money(row.known_amount_usd)} · ${row.all_events_reconciled ? 'events reconciled' : 'not fully reconciled'}`,
+    'Cost sources unknown.');
+  renderRows('economic-model-benefit', ledger.model_cost_vs_measured_benefit,
+    row => `${row.activity_id} · cost ${money(row.cost_usd)} · benefit ${money(row.measured_benefit_usd)}`,
+    'No attributed model cost/benefit pair is measured.');
+  renderRows('economic-counterfactuals', ledger.counterfactual_comparisons,
+    row => `${row.mission_id} · ${row.scenario_type} · ${row.outcome_basis} · ${money(row.amount_usd)}`,
+    'No persisted counterfactual comparisons.');
+  renderRows('economic-unknowns', ledger.unknowns,
+    value => value,
+    'Provider-period coverage is not attested.');
+}
+
+function renderEconomicInvestigation(decision) {
+  const host = $('economic-investigation');
+  host.replaceChildren();
+  if (!decision) {
+    host.append(element('p', 'No autonomous decision is persisted; blocker state remains unknown.', 'quiet'));
+    return;
+  }
+  const selected = decision.alternatives_considered?.find(
+    item => item.candidate_id === decision.selected_candidate,
+  );
+  const pct = value => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(0)}%` : 'Unknown';
+  const evidenceAge = selected?.evidence_age_seconds == null
+    ? 'Unknown' : `${Math.floor(Number(selected.evidence_age_seconds) / 3600)}h since provider snapshot`;
+  const fields = [
+    ['CURRENT PRIORITY', `${decision.action ?? 'PASS'} · ${decision.selected_candidate ?? 'none'}`],
+    ['OBJECTIVE', decision.objective ?? 'No objective persisted.'],
+    ['WHY', decision.why ?? 'No rationale persisted.'],
+    ['EXPECTED INFORMATION VALUE', decision.expected_information_value == null
+      ? 'Unknown' : `${(Number(decision.expected_information_value) * 100).toFixed(0)}% · prioritization estimate`],
+    ['POTENTIAL MATERIALITY', selected ? `${pct(selected.estimated_potential_materiality)} relative · ${selected.materiality_basis ?? 'basis unavailable'}` : 'Unknown'],
+    ['RESOLUTION PROBABILITY', selected ? `${pct(selected.resolution_probability)} estimated` : 'Unknown'],
+    ['EXPECTED COST', decision.expected_cost_usd == null
+      ? 'Unknown' : `${moneyPrecise(decision.expected_cost_usd)} API/model/compute estimate`],
+    ['EXPECTED RISK / DOWNSIDE', decision.expected_risk?.downside ?? selected?.risk_downside ?? 'Unknown'],
+    ['UNCERTAINTY', pct(decision.uncertainty ?? selected?.uncertainty)],
+    ['EVIDENCE QUALITY', decision.evidence_quality ?? selected?.evidence_quality ?? 'Unknown'],
+    ['AUTHORITY REQUIRED', (decision.authority_required ?? selected?.authority_required ?? []).join(' · ') || 'None recorded'],
+    ['PRIORITY CHANGE', decision.priority_change_reason || 'No priority-change reason persisted.'],
+    ['ENGINEERING EFFORT', selected ? `${pct(selected.engineering_effort)} relative estimate` : 'Unknown'],
+    ['EVIDENCE AGE', evidenceAge],
+    ['BLOCKER', decision.blocker ?? 'No unresolved blocker selected.'],
+    ['NEXT ELIGIBLE RETRY', decision.next_eligible_retry ?? 'No retry scheduled'],
+    ['OWNER INPUT REQUIRED', decision.owner_input_required ?? 'No'],
+    ['LAST DECISION RESULT', decision.last_decision_result ?? 'Unknown'],
+    ['LIFECYCLE', decision.active_lifecycle_state ?? 'Unknown'],
+    ['AUTHORITY STATE', decision.authority_state ?? 'Decision is separate from execution authority'],
+    ['DECISION-TIME EVIDENCE', `${decision.decision_state_at_time?.provider_coverage?.length ?? 0} provider snapshots · ${(decision.economic_event_ids ?? []).length} selected-provider event references`],
+    ['CHANGE MY MIND IF', (decision.change_my_mind_if ?? []).join(' · ') || 'No condition persisted'],
+  ];
+  const grid = element('div', undefined, 'economic-investigation-fields');
+  for (const [label, value] of fields) {
+    const item = element('div', undefined, 'economic-investigation-field');
+    item.append(element('span', label), element('p', String(value)));
+    grid.append(item);
+  }
+  host.append(grid);
+  const alternatives = Array.isArray(decision.alternatives_considered)
+    ? decision.alternatives_considered : [];
+  const list = element('ul', undefined, 'canonical-economy-list');
+  host.append(element('p', 'Autonomous ranking uses relative planning estimates for materiality, resolution likelihood, information value, urgency, dependency, cost and effort. They are not reconciled accounting values.', 'quiet'));
+  for (const item of alternatives) {
+    const selectedMark = item.candidate_id === decision.selected_candidate ? ' · SELECTED' : '';
+    const info = Number.isFinite(Number(item.expected_information_value))
+      ? `${(Number(item.expected_information_value) * 100).toFixed(0)}% info` : 'info unknown';
+    const cost = item.expected_api_model_compute_cost_usd == null
+      ? 'cost unknown' : `${moneyPrecise(item.expected_api_model_compute_cost_usd)} estimated cost`;
+    const metrics = `materiality ${pct(item.estimated_potential_materiality)} relative · resolve ${pct(item.resolution_probability)} · ${info} · urgency ${pct(item.urgency)} · dependency ${pct(item.dependency_value)} · effort ${pct(item.engineering_effort)} relative · autonomous ${item.autonomous_action_permitted ? 'yes' : 'no'} · ${cost}`;
+    const selectionReason = item.selection_reason ?? (item.candidate_id === decision.selected_candidate
+      ? decision.selected_reason : 'Rejected; no reason persisted');
+    list.append(element('li', `${item.candidate_id} · ${item.action} · priority ${Number(item.priority_score).toFixed(3)} · ${metrics}${selectedMark} — ${selectionReason} ${item.candidate_id === decision.selected_candidate ? `Selected rationale: ${item.rationale}` : ''}`));
+  }
+  const alternativesSection = element('section', undefined, 'economic-investigation-alternatives');
+  alternativesSection.append(element('strong', 'ALTERNATIVES CONSIDERED'), list);
+  if (selected?.materiality_basis) {
+    alternativesSection.append(element('p', `Materiality basis: ${selected.materiality_basis}`, 'quiet'));
+  }
+  if (selected?.autonomous_action_permitted === false) {
+    alternativesSection.append(element('p', 'The selected action requires owner input; no autonomous provider call was made.', 'quiet'));
+  }
+  host.append(alternativesSection);
+
+  const history = Array.isArray(decision.result_history) ? decision.result_history : [];
+  const timeline = element('section', undefined, 'economic-investigation-alternatives');
+  timeline.append(element('strong', 'APPENDED LIFECYCLE / MATURATION RECORDS'));
+  if (!history.length) {
+    timeline.append(element('p', 'No result or maturation record is persisted yet.', 'quiet'));
+  } else {
+    const entries = element('ol', undefined, 'canonical-economy-list');
+    for (const item of [...history].reverse()) {
+      const details = [
+        item.detail,
+        `evidence ${JSON.stringify(item.evidence ?? {})}`,
+        `resources ${JSON.stringify(item.actual_resources ?? {})}`,
+        `outcome ${JSON.stringify(item.actual_outcome ?? {})}`,
+        `measured benefit ${JSON.stringify(item.measured_benefit ?? {})}`,
+        `counterfactual ${JSON.stringify(item.counterfactual ?? {})}`,
+        `calibration ${JSON.stringify(item.calibration ?? {})}`,
+        item.work_ref ? `work ${item.work_ref}` : null,
+        item.mission_id ? `mission ${item.mission_id}` : null,
+        item.trial_id ? `trial ${item.trial_id}` : null,
+        item.research_run_id ? `research run ${item.research_run_id}` : null,
+        item.cognition_session_id ? `cognition session ${item.cognition_session_id}` : null,
+        item.execution_proposal_id ? `execution proposal ${item.execution_proposal_id}` : null,
+      ].filter(Boolean).join(' · ');
+      entries.append(element('li', `${item.recorded_at ?? 'time unknown'} · ${item.lifecycle_state ?? item.state} · ${details}`));
+    }
+    timeline.append(entries);
+  }
+  host.append(timeline);
+  const evidence = decision.decision_state_at_time ?? {};
+  const stateNote = element('p', `Decision snapshot: ${decision.decision_version ?? 'legacy'} · ${decision.decided_at ?? 'time unknown'} · period ${decision.month_utc ?? 'unknown'} ${evidence.period_closure ?? ''}. Snapshot values are preserved at decision time; results above are appended observations.`, 'quiet');
+  host.append(stateNote);
+  const decisionHistory = Array.isArray(decision.decision_history) ? decision.decision_history : [];
+  if (decisionHistory.length > 1) {
+    const priorSection = element('section', undefined, 'economic-investigation-alternatives');
+    priorSection.append(element('strong', 'PRIOR PERSISTED DECISIONS'));
+    const priorList = element('ol', undefined, 'canonical-economy-list');
+    for (const prior of decisionHistory.slice(1)) {
+      const matured = prior.result_history?.map(item => `${item.lifecycle_state}: ${item.detail}`).join(' → ')
+        || 'no appended result yet';
+      priorList.append(element('li', `${prior.decided_at} · ${prior.action} ${prior.selected_candidate ?? ''} · ${prior.active_lifecycle_state} · ${prior.why} · ${matured}`));
+    }
+    priorSection.append(priorList);
+    host.append(priorSection);
+  }
 }
 
 function stripeAmount(item) {
@@ -687,13 +1006,13 @@ function renderWalletState(payload) {
   const host = $('wallet-networks');
   const networks = payload?.networks ?? [];
   host.replaceChildren();
-  $('wallets-asof').textContent = networks.length ? 'READ-ONLY CHAIN STATE' : 'WALLET STATE UNAVAILABLE';
-  if (!networks.length) host.append(element('p', 'No isolated signing credential was found.', 'quiet'));
+  $('wallets-asof').textContent = payload?.control_plane?.status ?? (networks.length ? 'READ-ONLY CHAIN STATE' : 'WALLET STATE UNAVAILABLE');
+  if (!networks.length) host.append(element('p', 'No configured wallet network state is available. Wallet authority and live execution remain disabled.', 'quiet'));
   for (const network of networks) {
     const card = element('article', undefined, 'wallet-network');
     const head = element('div', undefined, 'wallet-network-head');
     head.append(element('span', `${network.chain ?? 'unknown'} · ${network.network ?? 'unknown'}`));
-    head.append(element('span', network.status === 'unavailable' ? 'RPC OFFLINE' : 'RPC ONLINE'));
+    head.append(element('span', network.connected ? 'CONNECTED' : network.connected === false ? 'DISCONNECTED' : 'CONNECTION UNKNOWN'));
     card.append(head);
     const native = network.sol ?? network.native_balance ?? network.btc;
     const symbol = network.chain === 'bitcoin' ? 'BTC' : network.chain === 'solana' ? 'SOL' : 'ETH';
@@ -709,8 +1028,25 @@ function renderWalletState(payload) {
           : 'token list not indexed';
     detail.append(element('span', assetStatus));
     card.append(detail);
-    const signerState = network.signing_enabled && !network.master_halt ? 'LIVE EXECUTION ENABLED' : 'SIGNING PAUSED';
-    card.append(element('div', signerState, 'wallet-network-detail'));
+    const capabilityValue = (value) => value === true ? 'YES' : value === false ? 'NO' : 'UNKNOWN';
+    const capabilityRows = [
+      ['AUTHENTICATED', network.authenticated], ['READABLE', network.readable],
+      ['FUNDED', network.funded], ['SIGNER CONFIGURED', network.signer_configured],
+      ['CREDENTIALS ISOLATED', network.credentials_isolated],
+      ['RESEARCH ENABLED', network.research_enabled], ['PAPER ENABLED', network.paper_enabled],
+      ['MISSION AUTHORITY PRESENT', network.mission_authority_present],
+      ['LIVE EXECUTION ENABLED', network.live_execution_enabled], ['HALTED', network.halted],
+      ['COORDINATOR WIRED', network.coordinator_wired],
+    ];
+    for (const [label, value] of capabilityRows) {
+      card.append(element('div', `${label} · ${capabilityValue(value)}`, 'wallet-network-detail'));
+    }
+    if (network.signer_configured && !network.live_execution_enabled) {
+      card.append(element('strong', 'SIGNER CONFIGURED · LIVE EXECUTION DISABLED', 'wallet-network-detail'));
+    }
+    if (network.funded && !network.mission_authority_present) {
+      card.append(element('strong', 'FUNDED · UNAUTHORIZED', 'wallet-network-detail'));
+    }
     if (network.address) card.append(element('div', network.address, 'wallet-network-address'));
     host.append(card);
   }
@@ -732,6 +1068,33 @@ function renderWalletState(payload) {
     row.append(element('span', fee === undefined || fee === null ? 'Fee unreported' : `Fee ${fee} ${feeUnit}`));
     row.append(element('span', details.transaction_reference ?? 'receipt pending'));
     activity.append(row);
+  }
+}
+
+function renderExecutionGateway(payload) {
+  $('execution-gateway-state').textContent = payload?.status ?? 'GATEWAY STATE UNAVAILABLE';
+  const host = $('execution-gateway-activity');
+  host.replaceChildren();
+  const requests = payload?.recent_requests ?? [];
+  if (!requests.length) {
+    host.append(element('p', 'No execution proposals or policy decisions recorded.', 'quiet'));
+    return;
+  }
+  for (const request of requests) {
+    const row = element('div', undefined, 'gateway-request');
+    const reasonObject = typeof request.result_json === 'string' ? parseObject(request.result_json) : {};
+    const proposal = typeof request.request_json === 'string' ? parseObject(request.request_json) : {};
+    const reasons = Array.isArray(reasonObject.reasons) ? reasonObject.reasons.join(' · ') : '';
+    row.append(
+      element('span', dateLabel(request.created_at, { hour: '2-digit', minute: '2-digit' })),
+      element('span', `${request.route ?? 'route'} · ${request.tier ?? 'tier'}`),
+      element('strong', `${request.status ?? 'unknown'} · ${request.venue ?? 'venue unknown'} · ${proposal.instrument ?? ''} · ${proposal.side ?? proposal.action ?? ''}`),
+      element('span', request.notional_usd == null ? 'notional unknown' : `risk ${money(Number(request.notional_usd))}`),
+      element('span', proposal.expected_edge == null ? 'edge unknown' : `edge ${(Number(proposal.expected_edge) * 100).toFixed(1)}¢/contract`),
+      element('span', request.provider_reference ?? request.proposal_id ?? 'reference unavailable'),
+      element('span', reasons || 'No policy rejection recorded.'),
+    );
+    host.append(row);
   }
 }
 
@@ -761,12 +1124,12 @@ function renderRoster() {
     copy.append(element('p', current ? `Working · ${current.kind}` : 'Idle · no active run', 'specialist-family'));
     copy.append(element('p', latest ? `Latest · ${latest.kind} · ${latest.status} · ${resultSummary(latest)}` : 'No recorded mission contribution', 'specialist-result'));
     const pct = Number(allocation?.attention_fraction);
-    const share = element('div', undefined, 'attention-share');
     if (Number.isFinite(pct) && pct >= 0 && pct <= 1) {
+      const share = element('div', undefined, 'attention-share');
       share.append(element('span', `${(pct * 100).toFixed(0)}% research attention${Number.isFinite(Number(allocation.attention_delta)) ? ` · ${(Number(allocation.attention_delta) * 100).toFixed(1)}pp` : ''}`));
       const meter = document.createElement('meter'); meter.min = 0; meter.max = 1; meter.value = pct; meter.setAttribute('aria-label', `${specialist.name} research attention`); share.append(meter);
-    } else share.append(element('span', 'Research allocation unknown'));
-    copy.append(share);
+      copy.append(share);
+    }
     const resolved = Number(specialist.resolved);
     const reliable = resolved >= 30 && specialist.reliability != null;
     const facts = element('div', undefined, 'specialist-metrics');
@@ -867,7 +1230,8 @@ function renderLineage(mission) {
 
 function renderWorld() {
   if (!snapshot) return;
-  noemaWorld.update(snapshot);
+  noemaWorld.update(snapshot, { providers: providerHealth, venues: predictionVenuesSnapshot, wallets: walletSnapshot,
+    gateway: gatewaySnapshot, freshness: capabilityFreshness });
   const runtime = snapshot.runtime ?? {};
   const cycle = runtime.cycle ?? {};
   const resources = snapshot.resources ?? {};
@@ -974,25 +1338,47 @@ async function refresh() {
   if (refreshing) { refreshQueued = true; return; }
   refreshing = true;
   $('refresh').disabled = true;
-  const [operations, economics, wallets, trench, stripe, knowledge] = await Promise.allSettled([
-    get('/api/operations'), get('/api/economic-measurement'), get('/api/wallet-status'), get('/api/trench'), get('/api/stripe-economy'), get('/api/knowledge'),
+  const checkProviders = Date.now() - providerHealthAt >= 300000;
+  const [operations, economics, wallets, gateway, trench, stripe, knowledge, providers] = await Promise.allSettled([
+    get('/api/operations'), get('/api/economic-measurement'), get('/api/wallet-status'), get('/api/execution-gateway'), get('/api/trench'), get('/api/stripe-economy'), get('/api/knowledge'),
+    checkProviders ? get('/api/provider-health') : Promise.resolve(providerHealth),
   ]);
   const errors = [];
   if (operations.status === 'fulfilled') {
     snapshot = operations.value;
+    capabilityFreshness.operations = 'current';
+    capabilityFreshness.operationsAt = snapshot.as_of ?? new Date().toISOString();
     if (selected) {
       const fresh = section(selected.view).rows.find((row) => keyOf(selected.view, row) === keyOf(selected.view, selected.row));
       if (fresh) selected = { ...selected, row: fresh };
     }
-    renderWorld();
     renderLiveChange();
     if ($('deep-records').open) { renderArchive(); renderDetail(); }
-  } else errors.push('Live operating state unavailable; showing the last successful snapshot.');
+  } else {
+    capabilityFreshness.operations = snapshot ? 'stale' : 'unavailable';
+    errors.push('Live operating state unavailable; showing the last successful snapshot.');
+  }
   if (economics.status === 'fulfilled') economicsSnapshot = economics.value;
   else errors.push('Economic measurement unavailable; showing the last successful snapshot.');
   renderEconomy(economicsSnapshot);
-  if (wallets.status === 'fulfilled') renderWalletState(wallets.value);
-  else $('wallets-asof').textContent = 'WALLET STATE UNAVAILABLE';
+  if (wallets.status === 'fulfilled') {
+    walletSnapshot = wallets.value;
+    capabilityFreshness.wallets = 'current';
+    capabilityFreshness.walletsAt = new Date().toISOString();
+    renderWalletState(walletSnapshot);
+  } else {
+    capabilityFreshness.wallets = walletSnapshot ? 'stale' : 'unavailable';
+    $('wallets-asof').textContent = 'WALLET STATE UNAVAILABLE';
+  }
+  if (gateway.status === 'fulfilled') {
+    gatewaySnapshot = gateway.value;
+    capabilityFreshness.gateway = 'current';
+    capabilityFreshness.gatewayAt = new Date().toISOString();
+    renderExecutionGateway(gatewaySnapshot);
+  } else {
+    capabilityFreshness.gateway = gatewaySnapshot ? 'stale' : 'unavailable';
+    $('execution-gateway-state').textContent = 'GATEWAY STATE UNAVAILABLE';
+  }
   if (trench.status === 'fulfilled') trenchSnapshot = trench.value;
   renderWeb3Evidence(trenchSnapshot);
   if (stripe.status === 'fulfilled') stripeEconomySnapshot = stripe.value;
@@ -1000,16 +1386,28 @@ async function refresh() {
   if (knowledge.status === 'fulfilled') knowledgeSnapshot = knowledge.value;
   renderKnowledge(knowledgeSnapshot);
   if (Date.now() - predictionVenuesAt >= 60000) {
-    predictionVenuesAt = Date.now();
-    try { predictionVenuesSnapshot = await get('/api/prediction-venues'); predictionVenuesAt = Date.now(); }
-    catch { predictionVenuesSnapshot = null; }
+    try {
+      predictionVenuesSnapshot = await get('/api/prediction-venues');
+      predictionVenuesAt = Date.now();
+      capabilityFreshness.venues = 'current';
+      capabilityFreshness.venuesAt = new Date(predictionVenuesAt).toISOString();
+    } catch {
+      capabilityFreshness.venues = predictionVenuesSnapshot ? 'stale' : 'unavailable';
+      predictionVenuesAt = Date.now();
+    }
   }
   renderPredictionVenues(predictionVenuesSnapshot);
-  if (Date.now() - providerHealthAt >= 300000) {
+  if (checkProviders) {
+    if (providers.status === 'fulfilled') {
+      providerHealth = providers.value;
+      capabilityFreshness.providers = 'current';
+      capabilityFreshness.providersAt = new Date().toISOString();
+    } else {
+      capabilityFreshness.providers = providerHealth ? 'stale' : 'unavailable';
+    }
     providerHealthAt = Date.now();
-    try { providerHealth = await get('/api/provider-health'); providerHealthAt = Date.now(); }
-    catch { providerHealth = null; }
   }
+  renderWorld();
   $('error').hidden = errors.length === 0;
   $('error').textContent = errors.join(' ');
   $('refresh').disabled = false;

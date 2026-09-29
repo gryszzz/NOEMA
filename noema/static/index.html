@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'">
-  <meta name="theme-color" content="#0b0f13">
+  <meta name="theme-color" content="#070a12">
   <title>NOEMA · Autonomous economy</title>
   <link rel="stylesheet" href="/static/operations.css">
   <link rel="stylesheet" href="/static/operations-habitat.css">
@@ -35,21 +35,22 @@
     </section>
 
     <section class="world-map" aria-labelledby="world-map-title">
-      <div class="section-title-row world-map-heading"><div><p class="eyebrow">CANONICAL RELATIONSHIPS · PERSISTED STATE</p><h2 id="world-map-title">NOEMA live topology</h2></div><span id="world-map-state">Waiting for operating snapshot</span></div>
+      <div class="section-title-row world-map-heading"><div><p class="eyebrow">LIVE CAPABILITY · OBSERVED RELATIONSHIPS · PERSISTED WORK</p><h2 id="world-map-title">NOEMA live topology</h2><p class="world-map-intro">Agents, providers, wallets and tools appear from current checks and recorded activity. Node fill marks type; outline marks status. Select a node to inspect its abilities, limits and evidence.</p></div><span id="world-map-state">Waiting for operating snapshot</span></div>
       <div class="world-map-frame">
-        <canvas id="world-map-canvas" aria-label="Interactive spatial map of persisted NOEMA missions, agents, experiments and their recorded relationships" tabindex="0"></canvas>
-        <div class="world-map-hud"><span>DRAG · ORBIT</span><span>SHIFT-DRAG · PAN</span><span>SCROLL · DEPTH</span><span>SELECT · ISOLATE</span><button id="world-reset" type="button">RESET VIEW</button></div>
-        <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by persisted runtime records.</p></aside>
+        <canvas id="world-map-canvas" aria-label="Interactive perspective 3D field of NOEMA agents, providers, wallets, tools and persisted work, with links based on observed configuration or recorded events" tabindex="0"></canvas>
+        <div class="world-map-hud"><span>DRAG · ORBIT</span><span>SHIFT + DRAG · PAN</span><span>SCROLL / PINCH · ZOOM</span><span>SELECT · INSPECT</span><button id="world-reset" type="button">RESET VIEW</button></div>
+        <div id="world-type-legend" class="world-type-legend" role="group" aria-label="Topology type and status key"></div>
+        <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by live checks or persisted runtime records.</p><dl id="world-inspector-facts"></dl></aside>
       </div>
       <div class="world-timebar"><div class="world-time-label"><span>KNOWLEDGE REPLAY · persisted event time</span><strong id="world-time-value">Latest known state</strong></div><input id="world-time-range" type="range" min="0" max="0" value="0" aria-label="Replay persisted NOEMA mission events by time"><div class="world-time-actions"><button id="world-time-live" type="button">FOLLOW LIVE</button><span id="world-time-count">No timeline events recorded</span></div></div>
       <div id="world-event-list" class="world-event-list" aria-label="Persisted event timeline"></div>
       <div id="world-entity-list" class="world-entity-list" aria-label="Accessible list of entities in the topology"></div>
-      <p class="truth-note">Spatial positions are for navigation; links require exact persisted mission, session, experiment, or handoff identifiers. Quiet state is shown without simulated activity.</p>
+      <p class="truth-note">Node positions group objects for navigation. Cognition-provider links show configured routes; venue links show live data checks; wallet links show observed network state; sub-agent links show persisted registrations; tool links show recorded invocations. Mission, session, experiment and handoff links require persisted identifiers. Wallet visibility never grants authority. Historical replay hides current-only provider and wallet state.</p>
     </section>
 
     <section class="mission-stage" aria-label="Current operating state and mission">
       <div class="noema-core" id="noema-lead">
-        <div class="core-orbit" aria-hidden="true"><span class="orbit orbit-a"></span><span class="orbit orbit-b"></span><span class="core-glyph">N</span></div>
+        <div class="core-orbit" aria-hidden="true"><span class="core-glyph">N</span></div>
         <div class="core-copy"><span class="micro-label">PRIMARY AGENT · PERSISTENT IDENTITY</span><strong>NOEMA</strong><span id="core-role">Autonomous economic intelligence</span><span id="core-heartbeat" class="core-foot">Heartbeat unavailable</span></div>
       </div>
       <div class="stage-connector" aria-hidden="true"><span></span><i></i><span></span></div>
@@ -75,16 +76,19 @@
       </article>
 
       <article class="panel account-panel" aria-labelledby="account-title">
-        <div class="panel-heading"><div><p class="eyebrow">TREASURY · RECONCILED HISTORY</p><h2 id="account-title">Economic curve</h2><p id="account-note">No verified account balance series is available.</p></div><span id="wallet-state" class="series-state">UNMEASURED</span></div>
-        <div id="account-chart" class="account-chart" aria-label="Treasury balance history unavailable">
-          <svg viewBox="0 0 440 180" role="img" aria-labelledby="account-chart-title account-chart-desc" preserveAspectRatio="none">
-            <title id="account-chart-title">Verified treasury history</title><desc id="account-chart-desc">No reconciled wallet or cash history has been recorded; no curve is drawn.</desc>
-            <path class="account-gridline" d="M42 22H430M42 60H430M42 98H430M42 136H430M42 174H430"/><path class="account-axis" d="M42 14V174H430"/>
-            <text x="42" y="12">USD</text><text x="42" y="179">HISTORY</text>
-          </svg>
-          <div class="account-empty"><span class="empty-emblem" aria-hidden="true">∅</span><strong id="account-empty-title">No verified series</strong><span id="account-empty-detail">Cash ledger has no entries; wallet history is unavailable.</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">SETTLED PAPER RESULTS · HYPOTHETICAL</p><h2 id="account-title">Paper P&amp;L curve</h2><p id="account-note">Cumulative simulated net from validated settled paper positions. Operating costs and capital opportunity cost are excluded.</p></div><span id="wallet-state" class="series-state">NO SETTLEMENTS</span></div>
+        <div id="account-chart" class="account-chart" aria-label="Settled paper P and L chart unavailable"></div>
+        <div class="account-legend"><span>RECORDED CASH <strong id="metric-cash">Unknown</strong></span><span>VERIFIED REVENUE <strong id="metric-revenue">Unknown</strong></span><span>MODEL RESERVED <strong id="metric-model-cost">Unknown</strong></span><span>PAPER NET <strong id="metric-paper">Unknown</strong></span><span>ALL-IN PROFIT <strong id="metric-net">Unknown</strong></span></div>
+        <p id="mission-economics-progress" class="truth-note">Mission progress unavailable · self-funding unproven · unknown is not zero.</p>
+        <div id="canonical-economy-grid" class="canonical-economy-grid" aria-label="Canonical economic ledger"></div>
+        <div class="canonical-economy-detail">
+          <section><h3>Autonomous Decisions · September Evidence</h3><div id="economic-closure">Period coverage unknown; no closure attestation exists.</div><div id="economic-investigation" class="economic-investigation"><p class="quiet">No autonomous decision is persisted.</p></div></section>
+          <section><h3>Contribution by lane</h3><div id="economic-lane-contribution">No reconciled contribution events.</div></section>
+          <section><h3>Top cost drivers</h3><div id="economic-cost-drivers">Cost sources unknown.</div></section>
+          <section><h3>Model cost vs measured benefit</h3><div id="economic-model-benefit">Benefit attribution unknown.</div></section>
+          <section><h3>Mission counterfactuals · not cash or authority</h3><div id="economic-counterfactuals">No persisted counterfactual comparisons.</div></section>
+          <section><h3>Unknowns blocking net result</h3><div id="economic-unknowns">Full economic coverage unknown.</div></section>
         </div>
-        <div class="account-legend"><span>RECORDED CASH <strong id="metric-cash">Unknown</strong></span><span>VERIFIED REVENUE <strong id="metric-revenue">Unknown</strong></span><span>MODEL COST <strong id="metric-model-cost">Unknown</strong></span><span>PAPER NET <strong id="metric-paper">Unknown</strong></span><span>ALL-IN PROFIT <strong id="metric-net">Unknown</strong></span></div>
       </article>
     </section>
 
@@ -112,6 +116,13 @@
       <div id="wallet-networks" class="wallet-network-grid"><p class="quiet">Reading public chain state…</p></div>
       <div class="wallet-ledger-heading"><span>RECONCILED WALLET ACTIVITY</span><span>Fees and transfers are not revenue</span></div>
       <div id="wallet-activity" class="wallet-activity-list"><p class="quiet">No reconciled NOEMA wallet transactions recorded.</p></div>
+    </section>
+
+    <section class="economy-section execution-gateway" aria-labelledby="execution-gateway-title">
+      <div class="section-title-row"><div><p class="eyebrow">DETERMINISTIC POLICY · ALL ACTION RAILS</p><h2 id="execution-gateway-title">Execution gateway</h2></div><span id="execution-gateway-state">Loading gateway state…</span></div>
+      <div id="execution-gateway-capabilities" class="gateway-capabilities"><span>Research · read only</span><span>Proposal · structured</span><span>Execution · disabled by default</span><span>Treasury · separate permission</span></div>
+      <div id="execution-gateway-activity" class="gateway-activity"><p class="quiet">No execution proposals or policy decisions recorded.</p></div>
+      <p class="truth-note">No agent can call a signer or venue order adapter directly. Missing authority, stale evidence, unsupported venue capability, or disabled limits block the action.</p>
     </section>
 
     <section class="economy-section stripe-economy" aria-labelledby="stripe-title">

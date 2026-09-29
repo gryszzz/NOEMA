@@ -276,5 +276,6 @@ def test_provider_health_projection_is_storeless_and_secret_free(monkeypatch):
     assert result["configured_provider"] == "cloudflare_workers_ai"
     assert result["cloudflare"]["status"] == "healthy"
     assert result["openai"]["status"] == "ready"
+    assert result["groq"] == {"status": "not_configured", "credential_present": False}
     assert result["docker_model_runner"]["selected_model_resource_eligible"] is False
     assert "must never" not in serialized and "private" not in serialized

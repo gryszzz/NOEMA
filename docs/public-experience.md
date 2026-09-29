@@ -73,6 +73,18 @@ It never instantiates migration-capable stores. Missing tables, incompatible
 schemas, corrupt databases and absent records are distinguished. Stored runtime
 heartbeats must be nonfuture and no older than 90 seconds to show running.
 
+The live topology joins that operational snapshot with secret-free provider
+health, read-only venue status, wallet status and execution-gateway status.
+Registered specialists, providers, wallets, venues and runtime tools appear as
+selectable nodes with their observed status, type metadata, abilities, limits and
+evidence source. Links come from a configured cognition route, a current
+read-only venue data connection, a wallet status observation, a persisted
+specialist registration, a recorded tool invocation, or an exact persisted
+mission/session/experiment/handoff relationship. A failed refresh marks
+retained nodes stale; historical replay hides current-only provider, venue,
+wallet and gateway state. The public Pages explorer remains explicitly
+disconnected and does not claim to show this live topology.
+
 Queue, specialist, experiment, decision/PASS, review, reservation and recorded
 outcome views support loaded-record filtering, inspection and backtracking.
 Related-record navigation requires matching venue/market, specialist or explicit
