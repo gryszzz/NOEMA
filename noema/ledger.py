@@ -99,6 +99,21 @@ class ForecastLedger:
                 assessment_hash TEXT NOT NULL UNIQUE,
                 evidence_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS economic_comparability_assessments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                observed_at TEXT NOT NULL,
+                canonical_proposition_id TEXT,
+                status TEXT NOT NULL,
+                assessment_hash TEXT NOT NULL UNIQUE,
+                evidence_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS canonical_quote_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                observed_at TEXT NOT NULL,
+                canonical_proposition_id TEXT,
+                observation_hash TEXT NOT NULL UNIQUE,
+                observation_json TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
@@ -246,15 +261,85 @@ class ForecastLedger:
                VALUES (?, ?, ?, ?, ?, ?)""",
             (observed_at, event_id, proposition_id, assessment, assessment_hash, payload),
         )
-        settlement_hash = hashlib.sha256(
-            f"{observed_at}:{proposition_id}:{settlement}:{payload}".encode()
-        ).hexdigest()
+        settlement_evidence = observation.get("settlement_assessment")
+        if isinstance(settlement_evidence, dict):
+            self.append_settlement_assessment(
+                proposition_id, settlement_evidence, observed_at=observed_at, _commit=False,
+            )
+        else:
+            settlement_hash = hashlib.sha256(
+                f"{observed_at}:{proposition_id}:{settlement}:{payload}".encode()
+            ).hexdigest()
+            self.conn.execute(
+                """INSERT OR IGNORE INTO settlement_assessments
+                   (observed_at, canonical_proposition_id, status, assessment_hash, evidence_json)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (observed_at, proposition_id, str(settlement), settlement_hash, payload),
+            )
+        economic_evidence = observation.get("economic_comparability")
+        if isinstance(economic_evidence, dict):
+            self.append_economic_comparability_assessment(
+                proposition_id, economic_evidence, observed_at=observed_at, _commit=False,
+            )
+        quote_json = json.dumps({
+            "observed_at": observed_at,
+            "canonical_proposition_id": proposition_id,
+            "kalshi": observation.get("kalshi"),
+            "polymarket_us": observation.get("polymarket_us"),
+            "path": observation.get("quote_path", "slow_identity_resolution"),
+        }, sort_keys=True, separators=(",", ":"), default=str)
+        quote_hash = hashlib.sha256(quote_json.encode()).hexdigest()
         self.conn.execute(
+            """INSERT OR IGNORE INTO canonical_quote_observations
+               (observed_at, canonical_proposition_id, observation_hash, observation_json)
+               VALUES (?, ?, ?, ?)""",
+            (observed_at, proposition_id, quote_hash, quote_json),
+        )
+
+    def append_settlement_assessment(
+        self, canonical_proposition_id: str | None, evidence: dict[str, Any], *,
+        observed_at: str | None = None, _commit: bool = True,
+    ) -> bool:
+        """Append a new settlement assessment; never overwrite prior rulings."""
+        timestamp = observed_at or str(evidence.get("assessed_at") or datetime.now(UTC).isoformat())
+        status = evidence.get("status")
+        if status not in {"confirmed", "mismatch", "unverified"}:
+            raise ValueError("invalid settlement assessment status")
+        payload = json.dumps(evidence, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(
+            f"{timestamp}:{canonical_proposition_id}:{payload}".encode()
+        ).hexdigest()
+        cursor = self.conn.execute(
             """INSERT OR IGNORE INTO settlement_assessments
                (observed_at, canonical_proposition_id, status, assessment_hash, evidence_json)
                VALUES (?, ?, ?, ?, ?)""",
-            (observed_at, proposition_id, str(settlement), settlement_hash, payload),
+            (timestamp, canonical_proposition_id, status, digest, payload),
         )
+        if _commit:
+            self.conn.commit()
+        return cursor.rowcount == 1
+
+    def append_economic_comparability_assessment(
+        self, canonical_proposition_id: str | None, evidence: dict[str, Any], *,
+        observed_at: str | None = None, _commit: bool = True,
+    ) -> bool:
+        timestamp = observed_at or datetime.now(UTC).isoformat()
+        status = evidence.get("status")
+        if status not in {"comparable", "unavailable"}:
+            raise ValueError("invalid economic comparability status")
+        payload = json.dumps(evidence, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(
+            f"{timestamp}:{canonical_proposition_id}:{payload}".encode()
+        ).hexdigest()
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO economic_comparability_assessments
+               (observed_at, canonical_proposition_id, status, assessment_hash, evidence_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (timestamp, canonical_proposition_id, status, digest, payload),
+        )
+        if _commit:
+            self.conn.commit()
+        return cursor.rowcount == 1
 
     def has_model_forecast(self, venue: str, market_id: str, model_version: str) -> bool:
         return self.conn.execute(
