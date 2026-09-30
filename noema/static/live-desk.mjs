@@ -13,6 +13,7 @@ export function createLiveDesk({ onSelect, onPauseChange }) {
   const $ = (id) => document.getElementById(id);
   let events = null, filter = 'all', paused = false, pending = false;
   let asOf = null, stale = false, transport = 'connecting', lastSignature = null;
+  let recentDelta = null;
   let selectedKey = null;
   let context = null, sourceSnapshot = null, sources = {};
   const host = $('live-feed');
@@ -157,9 +158,26 @@ export function createLiveDesk({ onSelect, onPauseChange }) {
       $('brief-title').textContent = events[0]?.title ?? 'No recorded developments';
       $('brief-detail').textContent = events[0]?.detail ?? 'The current snapshot contains no recorded events.';
       $('brief-time').textContent = events[0] ? `${events[0].actor} · ${date(events[0].at)}` : 'Waiting for recorded work';
-      $('brief-delta').textContent = diff.initial ? 'Initial snapshot' : diff.added ? `+${diff.added} new` : diff.updated ? `${diff.updated} updated` : 'No changes';
-      $('brief-delta-note').textContent = diff.initial ? `${events.length} recorded events loaded.`
-        : `${diff.added} new · ${diff.updated} updated in the loaded window.`;
+      if (diff.initial) {
+        recentDelta = null;
+        $('brief-delta').textContent = 'Initial snapshot';
+        $('brief-delta-note').textContent = `${events.length} recorded events loaded.`;
+      } else if (diff.added || diff.updated) {
+        recentDelta = {
+          text: diff.added ? `+${diff.added} new` : `${diff.updated} updated`,
+          note: `${diff.added} new · ${diff.updated} updated in the loaded window.`,
+          expiresAt: Date.now() + 5000,
+        };
+        $('brief-delta').textContent = recentDelta.text;
+        $('brief-delta-note').textContent = recentDelta.note;
+      } else if (recentDelta && Date.now() < recentDelta.expiresAt) {
+        $('brief-delta').textContent = recentDelta.text;
+        $('brief-delta-note').textContent = recentDelta.note;
+      } else {
+        recentDelta = null;
+        $('brief-delta').textContent = 'No changes';
+        $('brief-delta-note').textContent = '0 new · 0 updated in the loaded window.';
+      }
       render(); histogram(); status();
     },
   };
