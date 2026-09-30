@@ -19,6 +19,7 @@ from .agent_planner import choose_goal, refine_goal_with_cognition
 from .agent_store import AgentStore
 from .autonomous_research import run_research_work
 from .baseline_recording import record_market_baseline
+from .bill_tracker import BillTracker
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .config import kalshi_production_read_only_config
@@ -68,6 +69,17 @@ def _log(event: str, **fields: object) -> None:
         ),
         flush=True,
     )
+
+
+def bootstrap_hosted_bill_budget(db_path: str) -> str | None:
+    """Apply owner-supplied bootstrap values only on Render and only if absent."""
+    if os.getenv("RENDER", "").lower() != "true":
+        return None
+    tracker = BillTracker(db_path)
+    try:
+        return tracker.bootstrap_hosted_budget_from_env()
+    finally:
+        tracker.conn.close()
 
 
 async def _kalshi_state() -> AgentConnectionState:
@@ -689,6 +701,9 @@ async def run_agent(
 ) -> None:
     config = config or AgentConfig.from_env()
     config.validate()
+    bootstrap_state = bootstrap_hosted_bill_budget(config.db_path)
+    if bootstrap_state is not None:
+        _log("hosted_bill_budget_bootstrap", status=bootstrap_state)
     identity = identity or AgentIdentity()
     store = AgentStore(config.db_path)
     process_identity = asdict(capture_process_identity(config.db_path))

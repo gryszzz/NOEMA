@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from decimal import Decimal
 from typing import Any
 
@@ -9,8 +10,8 @@ from .wallet_credentials import (
     evm_signing_credential_present,
     solana_signing_credential_present,
 )
+from .wallet_observer import PublicWalletObserver
 from .wallet_policy import AgentWalletPolicy, dedicated_wallet_policy
-from .wallet_types import Chain
 
 
 def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, Any]:
@@ -26,7 +27,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
                 os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
                 or os.environ.get("NOEMA_SOLANA_MASTER_HALT", "1") != "0"
             ),
-            "signer": "isolated macOS Keychain process",
+            "signer": "isolated signer process",
         },
         {
             "chain": "ethereum",
@@ -39,7 +40,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
                 os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
                 or os.environ.get("NOEMA_EVM_MASTER_HALT", "1") != "0"
             ),
-            "signer": "isolated macOS Keychain process",
+            "signer": "isolated signer process",
         },
         {
             "chain": "base",
@@ -52,7 +53,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
                 os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
                 or os.environ.get("NOEMA_EVM_MASTER_HALT", "1") != "0"
             ),
-            "signer": "isolated macOS Keychain process",
+            "signer": "isolated signer process",
         },
         {
             "chain": "polygon",
@@ -65,7 +66,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
                 os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
                 or os.environ.get("NOEMA_EVM_MASTER_HALT", "1") != "0"
             ),
-            "signer": "isolated macOS Keychain process",
+            "signer": "isolated signer process",
         },
         {
             "chain": "bitcoin",
@@ -77,7 +78,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
                 os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
                 or os.environ.get("NOEMA_BITCOIN_MASTER_HALT", "1") != "0"
             ),
-            "signer": "isolated macOS Keychain process",
+            "signer": "isolated signer process",
         },
     ]
     for row in networks:
@@ -112,7 +113,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
             evm_signing_credential_present(),
             bitcoin_signing_credential_present(),
         )),
-        "credential_store": "macOS Keychain",
+        "credential_store": "macos_keychain" if sys.platform == "darwin" else "unavailable",
         "signing_enabled": False,
         "live_execution_enabled": False,
         "coordinator_wired": False,
@@ -131,66 +132,31 @@ def decimal_or_zero(value: object | None) -> Decimal:
 
 
 async def live_wallet_networks() -> list[dict[str, Any]]:
-    """Read public balances through short-lived signer-boundary child processes."""
-    from .wallet_signer import (
-        LocalBitcoinWalletSigner,
-        LocalEvmWalletSigner,
-        LocalSolanaWalletSigner,
-    )
-
-    rows: list[dict[str, Any]] = []
-    solana_present = solana_signing_credential_present()
-    if solana_present:
-        signer = LocalSolanaWalletSigner()
-        try:
-            balance = await signer.balances()
-            rows.append({"chain": "solana", "network": "mainnet-beta", **balance,
-                         "signer_process_enabled": signer.enabled, "master_halt": signer.master_halt})
-        except Exception:  # noqa: BLE001 - public status must not expose provider errors
-            rows.append({"chain": "solana", "network": "mainnet-beta", "address": signer.expected_address,
-                         "status": "unavailable", "signer_process_enabled": signer.enabled,
-                         "master_halt": signer.master_halt})
-    evm_present = evm_signing_credential_present()
-    if evm_present:
-        signer = LocalEvmWalletSigner()
-        for chain in (Chain.ETHEREUM, Chain.BASE, Chain.POLYGON):
-            try:
-                balance = await signer.balances(chain)
-                rows.append({"chain": chain.value, "network": "mainnet", **balance,
-                             "signer_process_enabled": signer.enabled, "master_halt": signer.master_halt})
-            except Exception:  # noqa: BLE001 - public status must not expose RPC details
-                chain_id, _url, _name = signer.chain_config(chain)
-                rows.append({"chain": chain.value, "network": "mainnet", "chain_id": chain_id,
-                             "address": signer.expected_address, "status": "unavailable",
-                             "signer_process_enabled": signer.enabled, "master_halt": signer.master_halt})
-    bitcoin_present = bitcoin_signing_credential_present()
-    if bitcoin_present:
-        try:
-            signer = LocalBitcoinWalletSigner()
-            balance = await signer.balance()
-            rows.append({"chain": "bitcoin", "network": "mainnet", **balance,
-                         "signer_process_enabled": signer.enabled, "master_halt": signer.master_halt})
-        except Exception:  # noqa: BLE001 - public status must not expose provider errors
-            rows.append({"chain": "bitcoin", "network": "mainnet", "status": "unavailable",
-                         "signer_process_enabled": False, "master_halt": True})
+    """Read public addresses even when no signing credential exists."""
+    async with PublicWalletObserver() as observer:
+        rows = await observer.read_all()
     credentials = {
-        "solana": solana_present,
-        "ethereum": evm_present,
-        "base": evm_present,
-        "polygon": evm_present,
-        "bitcoin": bitcoin_present,
+        "solana": solana_signing_credential_present(),
+        "ethereum": evm_signing_credential_present(),
+        "base": evm_signing_credential_present(),
+        "polygon": evm_signing_credential_present(),
+        "bitcoin": bitcoin_signing_credential_present(),
     }
     for row in rows:
         chain = str(row.get("chain", ""))
         readable = str(row.get("status", "")).startswith("read_only")
-        funded = _wallet_row_funded(row)
+        signer_configured = credentials.get(chain, False)
+        row["credential_provider"] = "macos_keychain" if signer_configured else "unavailable"
         row.update(project_wallet_capabilities(
-            connected=readable, authenticated=False, readable=readable, funded=funded,
-            signer_configured=credentials.get(chain, False),
-            credentials_isolated=credentials.get(chain, False),
-            halted=bool(row.get("master_halt", True)), research_enabled=readable,
+            connected=readable, authenticated=False, readable=readable,
+            funded=_wallet_row_funded(row), signer_configured=signer_configured,
+            credentials_isolated=signer_configured,
+            halted=True, research_enabled=readable,
         ))
+        row["signer_process_enabled"] = False
+        row["master_halt"] = True
         row["signing_enabled"] = False
+        row["authority"] = "absent"
     return rows
 
 

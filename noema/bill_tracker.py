@@ -5,10 +5,12 @@ Paper forecasts, internal economic snapshots and wallet balances never enter thi
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import ClassVar
 
 from .economic_ledger import EconomicEvent, ensure_economic_event_schema, record_event_on_connection
 
@@ -20,6 +22,13 @@ def _money(value: Decimal) -> Decimal:
 
 
 class BillTracker:
+    HOSTED_BOOTSTRAP_ENV: ClassVar[dict[str, str]] = {
+        "hosting_usd": "NOEMA_HOSTED_BILL_BUDGET_HOSTING_USD",
+        "other_usd": "NOEMA_HOSTED_BILL_BUDGET_OTHER_USD",
+        "model_budget_usd": "NOEMA_HOSTED_BILL_BUDGET_MODEL_USD",
+        "owner_limit_usd": "NOEMA_HOSTED_BILL_BUDGET_OWNER_LIMIT_USD",
+    }
+
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +82,47 @@ class BillTracker:
             (*map(str, amounts), datetime.now(UTC).isoformat()),
         )
         self.conn.commit()
+
+    def bootstrap_hosted_budget_from_env(self) -> str:
+        """Initialize only an absent budget from a complete owner-supplied config.
+
+        The transaction lock and ``INSERT OR IGNORE`` make concurrent startup
+        safe. Persisted operator edits always win; environment changes never
+        update an existing budget row.
+        """
+        raw = {field: os.getenv(variable) for field, variable in self.HOSTED_BOOTSTRAP_ENV.items()}
+        if any(value is None or not value.strip() for value in raw.values()):
+            return "not_configured"
+        try:
+            amounts = {field: _money(Decimal(str(value))) for field, value in raw.items()}
+        except (InvalidOperation, TypeError, ValueError):
+            return "invalid_configuration"
+        if amounts["model_budget_usd"] > amounts["other_usd"]:
+            return "invalid_configuration"
+
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self.conn.execute(
+                "SELECT 1 FROM bill_budget WHERE id=1"
+            ).fetchone()
+            if existing:
+                self.conn.commit()
+                return "persisted_budget_retained"
+            prior_changes = self.conn.total_changes
+            self.conn.execute(
+                "INSERT OR IGNORE INTO bill_budget "
+                "(id,hosting_usd,other_usd,model_budget_usd,owner_limit_usd,updated_at) "
+                "VALUES (1,?,?,?,?,?)",
+                (str(amounts["hosting_usd"]), str(amounts["other_usd"]),
+                 str(amounts["model_budget_usd"]), str(amounts["owner_limit_usd"]),
+                 datetime.now(UTC).isoformat()),
+            )
+            self.conn.commit()
+            return ("initialized" if self.conn.total_changes > prior_changes
+                    else "persisted_budget_retained")
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def record(
         self, *, kind: str, amount_usd: Decimal, source: str,

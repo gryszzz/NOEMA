@@ -227,6 +227,7 @@ def build_cognition_overview(
     finally:
         bill.conn.close()
     monthly_model_budget = bill_overview.get("model_budget_usd")
+    calls_last_hour = store.calls_last_hour()
     return {
         "enabled": config.enabled,
         "configured": config.ready,
@@ -238,7 +239,11 @@ def build_cognition_overview(
             if isinstance(config, CloudflareConfig) else bool(config.api_key)
         ),
         "reasoning_effort": getattr(config, "reasoning_effort", None),
-        "calls_last_hour": store.calls_last_hour(),
+        "calls_last_hour": calls_last_hour,
+        "call_activity_status": (
+            "calls_observed_last_hour" if calls_last_hour else "no_calls_observed_last_hour"
+        ),
+        "live_execution_enabled": False,
         "tokens_last_hour": store.tokens_last_hour(),
         "latest": store.latest(),
         "pending_research_count": queue.pending_count(),

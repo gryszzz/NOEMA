@@ -53,7 +53,10 @@ from .prediction_account_history import (
 from .venues.kalshi import KalshiVenue
 from .venues.polymarket_us import PolymarketUSVenue
 from .wallet_credentials import (
+    KALSHI_KEY_ID_KEYCHAIN_SERVICE,
+    credential_source,
     load_polymarket_us_credentials_in_api_boundary,
+    polymarket_us_credential_sources,
     polymarket_us_credentials_present,
 )
 
@@ -658,9 +661,24 @@ async def _kalshi_status() -> dict[str, Any]:
 
     keychain_present = config.key_id is not None
     pem = Path(config.private_key_path) if config.private_key_path else None
-    protected_key_present = bool(pem and pem.is_file() and (pem.stat().st_mode & 0o077) == 0)
+    protected_key_present = bool(
+        config.private_key_pem is not None
+        or config.private_key_pem_b64 is not None
+        or (pem and pem.is_file() and (pem.stat().st_mode & 0o077) == 0)
+    )
     account: dict[str, Any] = {
         "status": "unconfigured",
+        "credential_presence": {
+            "api_key_id": keychain_present,
+            "private_key": (
+                config.private_key_pem is not None or config.private_key_pem_b64 is not None
+                or pem is not None
+            ),
+            "api_key_id_provider": credential_source(
+                "KALSHI_API_KEY_ID", keychain_service=KALSHI_KEY_ID_KEYCHAIN_SERVICE,
+            ),
+            "private_key_provider": config.private_key_source,
+        },
         "balance_available": False,
         "positions": None,
         "open_orders": None,
@@ -670,10 +688,14 @@ async def _kalshi_status() -> dict[str, Any]:
         account_config = KalshiConfig(
             environment="production", key_id=config.key_id,
             private_key_path=config.private_key_path,
+            private_key_pem=config.private_key_pem,
+            private_key_pem_b64=config.private_key_pem_b64,
+            private_key_source=config.private_key_source,
             allow_live_orders=False, master_halt=True,
         )
-        client = KalshiAccount(account_config)
+        client: KalshiAccount | None = None
         try:
+            client = KalshiAccount(account_config)
             full_audit, min_ts, history, sync_state = _account_history_plan(
                 "kalshi", ("fill", "settlement", "deposit", "withdrawal", "transfer"),
                 required_streams=("activity", "settlement", "deposit", "withdrawal", "transfer"),
@@ -883,7 +905,8 @@ async def _kalshi_status() -> dict[str, Any]:
             account["status"] = "authentication_failed"
             account["account_read"] = {"complete": False, "reason": "An authenticated Kalshi account endpoint failed; account totals were not projected."}
         finally:
-            await client.close()
+            if client is not None:
+                await client.close()
     elif not keychain_present:
         account["status"] = "missing_key_id"
     elif not protected_key_present:
@@ -912,7 +935,15 @@ async def _polymarket_us_status() -> dict[str, Any]:
             except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError):
                 pass
         key_id_present, secret_present = polymarket_us_credentials_present()
-        account: dict[str, Any] = {"status": "unconfigured"}
+        account: dict[str, Any] = {
+            "status": "unconfigured",
+            "credential_presence": {
+                "key_id": key_id_present,
+                "secret_key": secret_present,
+                "providers": polymarket_us_credential_sources(),
+            },
+            "private_stream": polymarket_stream_health(),
+        }
         if key_id_present and secret_present:
             account_status = "authenticated_read_only"
             authenticated_client = None
@@ -1068,6 +1099,12 @@ async def _polymarket_us_status() -> dict[str, Any]:
         else:
             account_status = "missing_key_id_and_secret_key"
             account = {"status": account_status}
+        account["credential_presence"] = {
+            "key_id": key_id_present,
+            "secret_key": secret_present,
+            "providers": polymarket_us_credential_sources(),
+        }
+        account["private_stream"] = polymarket_stream_health()
         return {
             "venue": "Polymarket US",
             "environment": "production_read_only_public_data",

@@ -1,9 +1,12 @@
-"""Presence-only access to NOEMA's dedicated macOS Keychain credential slot."""
+"""Credential boundary for hosted environment secrets and local macOS Keychain."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 
 SOLANA_SIGNER_KEYCHAIN_SERVICE = "com.noema.solana.owner-wallet"
 SOLANA_SIGNER_KEYCHAIN_ACCOUNT = "noema-owner"
@@ -16,6 +19,67 @@ KALSHI_KEY_ID_KEYCHAIN_ACCOUNT = "noema-owner"
 POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE = "com.noema.polymarket-us.key-id"
 POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE = "com.noema.polymarket-us.secret-key"
 POLYMARKET_US_KEYCHAIN_ACCOUNT = "noema-owner"
+
+
+@dataclass(frozen=True)
+class ResolvedCredential:
+    """A secret and its safe provider label; repr intentionally omits the value."""
+
+    value: str | bytes = field(repr=False)
+    provider: str
+
+
+def _environment_credential(name: str) -> ResolvedCredential | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return ResolvedCredential(value=value.strip(), provider="environment")
+
+
+def _resolve_secret(
+    env_name: str, *, keychain_service: str | None = None,
+    keychain_account: str = "noema-owner", label: str,
+) -> ResolvedCredential | None:
+    """Resolve environment first, then the explicitly supported local Keychain."""
+    configured = _environment_credential(env_name)
+    if configured is not None:
+        return configured
+    if keychain_service is None or sys.platform != "darwin":
+        return None
+    if not _credential_present(keychain_service, keychain_account):
+        return None
+    try:
+        value = _load_keychain_item(keychain_service, keychain_account, label=label)
+    except RuntimeError:
+        return None
+    return ResolvedCredential(value=value, provider="macos_keychain")
+
+
+def credential_source(env_name: str, *, keychain_service: str | None = None,
+                      keychain_account: str = "noema-owner") -> str:
+    """Return a safe provider label without returning secret material."""
+    if _environment_credential(env_name) is not None:
+        return "environment"
+    if (keychain_service and sys.platform == "darwin"
+            and _credential_present(keychain_service, keychain_account)):
+        return "macos_keychain"
+    return "unavailable"
+
+
+def resolve_kalshi_private_key() -> tuple[str | None, str | bytes | None, str]:
+    """Resolve private-key material while leaving hosted PEM decoding to the signer."""
+    encoded = _environment_credential("KALSHI_PRIVATE_KEY_PEM_B64")
+    if encoded is not None:
+        return None, str(encoded.value), "environment"
+
+    configured_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
+    default_path = Path.home() / ".config/noema/credentials/kalshi.pem"
+    path = Path(configured_path) if configured_path else default_path
+    if not path.is_file():
+        return None, None, "unavailable"
+    # Keep local private-key bytes out of config and diagnostics. The signer
+    # boundary reads the configured file only when it must construct a signer.
+    return str(path), None, "local_file"
 
 
 def solana_signing_credential_present() -> bool:
@@ -52,18 +116,38 @@ def bitcoin_signing_credential_present() -> bool:
 
 
 def kalshi_key_id_present() -> bool:
-    return _credential_present(KALSHI_KEY_ID_KEYCHAIN_SERVICE, KALSHI_KEY_ID_KEYCHAIN_ACCOUNT)
+    return credential_source(
+        "KALSHI_API_KEY_ID", keychain_service=KALSHI_KEY_ID_KEYCHAIN_SERVICE,
+        keychain_account=KALSHI_KEY_ID_KEYCHAIN_ACCOUNT,
+    ) != "unavailable"
 
 
 def polymarket_us_credentials_present() -> tuple[bool, bool]:
-    """Return Key ID and secret-key presence without retrieving either value."""
+    """Return credential presence without reading Keychain secret material."""
     return (
-        _credential_present(POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE, POLYMARKET_US_KEYCHAIN_ACCOUNT),
-        _credential_present(
-            POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
-            POLYMARKET_US_KEYCHAIN_ACCOUNT,
-        ),
+        credential_source(
+            "POLYMARKET_US_KEY_ID", keychain_service=POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
+            keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
+        ) != "unavailable",
+        credential_source(
+            "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
+            keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
+        ) != "unavailable",
     )
+
+
+def polymarket_us_credential_sources() -> dict[str, str]:
+    """Safe provider labels for each authenticated account credential."""
+    return {
+        "key_id": credential_source(
+            "POLYMARKET_US_KEY_ID", keychain_service=POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
+            keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
+        ),
+        "secret_key": credential_source(
+            "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
+            keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
+        ),
+    }
 
 
 def _load_keychain_item(service: str, account: str, *, label: str) -> str:
@@ -90,27 +174,28 @@ def _load_keychain_item(service: str, account: str, *, label: str) -> str:
 
 
 def load_kalshi_key_id_in_api_boundary() -> str:
-    return _load_keychain_item(
-        KALSHI_KEY_ID_KEYCHAIN_SERVICE,
-        KALSHI_KEY_ID_KEYCHAIN_ACCOUNT,
-        label="Kalshi API",
+    credential = _resolve_secret(
+        "KALSHI_API_KEY_ID", keychain_service=KALSHI_KEY_ID_KEYCHAIN_SERVICE,
+        keychain_account=KALSHI_KEY_ID_KEYCHAIN_ACCOUNT, label="Kalshi API",
     )
+    if credential is None:
+        raise RuntimeError("Kalshi API key ID is unavailable")
+    return str(credential.value)
 
 
 def load_polymarket_us_credentials_in_api_boundary() -> tuple[str, str]:
     """Load credentials only for authenticated Polymarket US requests."""
-    return (
-        _load_keychain_item(
-            POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
-            POLYMARKET_US_KEYCHAIN_ACCOUNT,
-            label="Polymarket US API",
-        ),
-        _load_keychain_item(
-            POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
-            POLYMARKET_US_KEYCHAIN_ACCOUNT,
-            label="Polymarket US API",
-        ),
+    key_id = _resolve_secret(
+        "POLYMARKET_US_KEY_ID", keychain_service=POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
+        keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT, label="Polymarket US API",
     )
+    secret = _resolve_secret(
+        "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
+        keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT, label="Polymarket US API",
+    )
+    if key_id is None or secret is None:
+        raise RuntimeError("Polymarket US account credentials are unavailable")
+    return str(key_id.value), str(secret.value)
 
 
 def _credential_present(service: str, account: str) -> bool:

@@ -1,7 +1,8 @@
+import base64
 from decimal import Decimal
 
 from noema.config import KalshiConfig
-from noema.venues.kalshi import KalshiVenue
+from noema.venues.kalshi import KalshiSigner, KalshiVenue
 
 
 def test_demo_is_default_environment() -> None:
@@ -29,6 +30,71 @@ def test_environment_uses_keychain_id_and_standard_owner_only_pem(monkeypatch, t
     target.write_text("fixture")
     assert config_module.KalshiConfig.from_env().key_id == "fixture-id"
     assert config_module.KalshiConfig.from_env().private_key_path == str(target)
+
+
+def test_unreadable_keychain_keeps_public_config_available(monkeypatch):
+    import noema.config as config_module
+
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.setattr(config_module, "kalshi_key_id_present", lambda: True)
+
+    def locked_keychain():
+        raise RuntimeError("credential unavailable")
+
+    monkeypatch.setattr(config_module, "load_kalshi_key_id_in_api_boundary", locked_keychain)
+    config = KalshiConfig.from_env()
+    assert config.key_id is None
+    assert config.environment == "demo"
+
+
+def test_hosted_kalshi_pem_secret_is_loaded_in_memory_and_redacted(monkeypatch, tmp_path) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    encoded = base64.b64encode(pem).decode("ascii")
+    monkeypatch.setenv("KALSHI_API_KEY_ID", "hosted-fixture-id")
+    monkeypatch.setenv("KALSHI_PRIVATE_KEY_PEM_B64", encoded)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    config = KalshiConfig.from_env()
+    assert config.private_key_path is None
+    assert config.private_key_pem is None
+    assert config.private_key_pem_b64 == encoded
+    assert config.private_key_source == "environment"
+    assert "hosted-fixture-id" not in repr(config)
+    assert encoded not in repr(config)
+    assert pem.decode("ascii") not in repr(config)
+    headers = KalshiSigner(
+        config.key_id, config.private_key_path,
+        private_key_pem_b64=config.private_key_pem_b64,
+    ).headers("GET", "/trade-api/v2/portfolio/balance")
+    assert headers["KALSHI-ACCESS-KEY"] == "hosted-fixture-id"
+    assert headers["KALSHI-ACCESS-SIGNATURE"]
+
+
+def test_malformed_hosted_kalshi_pem_has_secret_safe_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("KALSHI_API_KEY_ID", "fixture-id")
+    monkeypatch.setenv("KALSHI_PRIVATE_KEY_PEM_B64", base64.b64encode(
+        b"-----BEGIN PRIVATE KEY-----secret-value-----END PRIVATE KEY-----",
+    ).decode("ascii"))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    try:
+        config = KalshiConfig.from_env()
+        KalshiSigner(config.key_id, private_key_pem_b64=config.private_key_pem_b64)
+    except RuntimeError as error:
+        assert "secret-value" not in str(error)
+        assert "PRIVATE KEY" not in str(error)
+    else:
+        raise AssertionError("malformed PEM must fail closed")
 
 
 def test_market_mapping_uses_fixed_point_dollars() -> None:

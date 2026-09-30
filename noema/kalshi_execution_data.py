@@ -32,9 +32,16 @@ class KalshiExecutionData:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.config = config or KalshiConfig.from_env()
-        if not self.config.key_id or not self.config.private_key_path:
+        if not self.config.key_id or not (
+            self.config.private_key_path or self.config.private_key_pem
+            or self.config.private_key_pem_b64
+        ):
             raise RuntimeError("Kalshi execution telemetry requires API credentials")
-        self.signer = KalshiSigner(self.config.key_id, self.config.private_key_path)
+        self.signer = KalshiSigner(
+            self.config.key_id, self.config.private_key_path,
+            private_key_pem=self.config.private_key_pem,
+            private_key_pem_b64=self.config.private_key_pem_b64,
+        )
         self.client = client or httpx.AsyncClient(
             base_url=self.config.base_url,
             timeout=httpx.Timeout(15.0),
