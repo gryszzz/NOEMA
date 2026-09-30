@@ -256,7 +256,13 @@ def register_challengers(
                 feature_set_version=proposal.feature_set_version,
                 status=status,
             )
-            registered.append(RegisteredExperiment(trial_id, proposal, status))
+            # Existing trial IDs survive identical registrations. Reconcile only
+            # admission states so terminal (or otherwise advanced) state is kept.
+            store.reconcile_admission_status(trial_id, status)
+            persisted = store.get(trial_id)
+            if persisted is None:
+                raise RuntimeError("registered research trial was not persisted")
+            registered.append(RegisteredExperiment(trial_id, proposal, persisted.status))
     finally:
         store.conn.close()
     return tuple(registered)
