@@ -211,6 +211,18 @@ def _copy_console_research_history(
         if not columns:
             continue
         rows = source.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        if table == "research_trials" and {"trial_id", "status"} <= set(source_columns):
+            for row in rows:
+                trial_id = row[columns.index("trial_id")]
+                status = row[columns.index("status")]
+                existing = target.execute(
+                    "SELECT status FROM research_trials WHERE trial_id=?", (trial_id,),
+                ).fetchone()
+                if (existing is not None and existing[0] in {"registered", "running"}
+                        and status in {"rejected", "promoted", "retired"}):
+                    target.execute(
+                        "UPDATE research_trials SET status=? WHERE trial_id=?", (status, trial_id),
+                    )
         if table == "autonomous_research_runs" and {
             "trial_id", "evidence_hash", "worker_version", "status", "completed_at",
         } <= set(source_columns):

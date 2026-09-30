@@ -176,19 +176,54 @@ def build_economic_measurement(
                                 invalid += 1
                         add_activity_cost(activity_id, "model_cost_estimate", model_cost)
                         add_activity_cost(activity_id, "compute_cost", compute_cost)
-            if "autonomous_research_runs" in tables:
-                columns = {row[1] for row in conn.execute("PRAGMA table_info(autonomous_research_runs)")}
-                if {"trial_id", "created_at", "compute_cost_usd"} <= columns:
-                    for activity_id, timestamp, compute_cost in conn.execute(
-                        "SELECT trial_id,created_at,compute_cost_usd FROM autonomous_research_runs"
+            research_runs: dict[tuple[str, str, str, str], dict[str, object]] = {}
+
+            def collect_research_runs(run_conn: sqlite3.Connection) -> None:
+                run_tables = {row[0] for row in run_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if "autonomous_research_runs" not in run_tables:
+                    return
+                run_columns = {row[1] for row in run_conn.execute(
+                    "PRAGMA table_info(autonomous_research_runs)")}
+                if not {"trial_id", "created_at", "compute_cost_usd"} <= run_columns:
+                    return
+                selected = [name for name in (
+                    "trial_id", "evidence_hash", "worker_version", "status", "created_at",
+                    "completed_at", "compute_cost_usd",
+                ) if name in run_columns]
+                for row in run_conn.execute(
+                    f"SELECT {','.join(selected)} FROM autonomous_research_runs"):
+                    item = dict(zip(selected, row, strict=True))
+                    key = (str(item["trial_id"]), str(item.get("evidence_hash") or ""),
+                           str(item.get("worker_version") or ""),
+                           str(item["created_at"]) if "evidence_hash" not in item else "")
+                    current = research_runs.get(key)
+                    if current is None or item.get("completed_at") and (
+                        not current.get("completed_at")
+                        or str(item["completed_at"]) > str(current["completed_at"])
                     ):
-                        try:
-                            if not start <= parse_aware_time(timestamp) <= now:
-                                continue
-                        except (ValueError, TypeError):
-                            invalid += 1
-                            continue
-                        add_activity_cost(str(activity_id), "compute_cost", compute_cost)
+                        research_runs[key] = item
+
+            collect_research_runs(conn)
+            for additional_path in additional_paths:
+                additional_db = Path(additional_path)
+                if not additional_db.is_file() or additional_db.resolve() == Path(path).resolve():
+                    continue
+                try:
+                    with sqlite3.connect(
+                        additional_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2,
+                    ) as additional:
+                        collect_research_runs(additional)
+                except sqlite3.Error:
+                    continue
+            for item in research_runs.values():
+                try:
+                    if not start <= parse_aware_time(item["created_at"]) <= now:
+                        continue
+                except (ValueError, TypeError):
+                    invalid += 1
+                    continue
+                add_activity_cost(str(item["trial_id"]), "compute_cost", item["compute_cost_usd"])
         finally:
             conn.close()
 

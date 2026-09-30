@@ -349,6 +349,21 @@ def test_console_research_migration_updates_a_previously_incomplete_run(tmp_path
     assert row == ("completed", "2026-09-30T12:05:00Z", '{"observations":3}')
 
 
+def test_console_research_migration_advances_mutable_trial_status(tmp_path):
+    from noema.dashboard_app import _merge_account_history_into_console_state
+
+    source, state = tmp_path / "worker.db", tmp_path / "console-state.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE research_trials(trial_id TEXT PRIMARY KEY,status TEXT NOT NULL)")
+        conn.execute("INSERT INTO research_trials VALUES('trial-a','registered')")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE research_trials SET status='promoted' WHERE trial_id='trial-a'")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "promoted"
+
+
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "console-replica.db"))
     monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
