@@ -56,3 +56,25 @@ def test_dashboard_projects_console_sidecar_events_without_writing_worker_snapsh
     assert overview["snapshot"]["current_equity_usd"] == "600"
     assert overview["canonical_ledger"]["event_count"] == 1
     assert worker_path.read_bytes() == before
+
+
+def test_dashboard_reads_canonical_sidecar_review_without_worker_replica(tmp_path):
+    sidecar_path = tmp_path / "console-state.db"
+    sidecar = EconomicLedger(str(sidecar_path))
+    sidecar.record_event(EconomicEvent(
+        provider="noema", event_type="economic_review",
+        occurred_at=datetime(2026, 9, 30, tzinfo=UTC), currency="USD",
+        amount=Decimal(0), amount_usd=Decimal(0),
+        reconciliation_state="OBSERVED", value_state="realized",
+        capital_class="none", confidence_state="provider_confirmed",
+        completeness_state="complete", external_reference_id="review-sidecar",
+        evidence={"state": "sidecar-review"},
+    ))
+    sidecar.conn.close()
+
+    overview = build_economic_overview(
+        str(tmp_path / "missing-worker.db"), additional_paths=(str(sidecar_path),),
+    )
+
+    assert overview["latest_review"]["state"] == "sidecar-review"
+    assert overview["canonical_ledger"]["event_count"] == 1

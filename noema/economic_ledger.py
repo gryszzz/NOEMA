@@ -520,7 +520,15 @@ class EconomicLedger:
         """Read canonical events only. Incomplete coverage keeps net and ratio unknown."""
         db = Path(path)
         if not db.exists():
-            return _empty_event_projection("canonical ledger unavailable")
+            fallback = next((Path(source) for source in additional_paths
+                             if Path(source).is_file()), None)
+            if fallback is None:
+                return _empty_event_projection("canonical ledger unavailable")
+            db = fallback
+            additional_paths = tuple(
+                source for source in additional_paths
+                if Path(source).resolve() != db.resolve()
+            )
         conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
         conn.row_factory = sqlite3.Row
         try:

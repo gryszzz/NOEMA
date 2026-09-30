@@ -21,7 +21,7 @@ def build_economic_overview(
         return {
             "snapshot": None,
             "profit_plan": None,
-            "latest_review": None,
+            "latest_review": _latest_review(additional_paths),
             "canonical_ledger": EconomicLedger.read_projection(
                 path, additional_paths=additional_paths,
             ),
