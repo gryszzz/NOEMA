@@ -225,8 +225,8 @@ try {
   document.querySelector(`#live-feed [data-event-key="${key}"]`)));
  assert.equal(await streamPage.locator('#refresh').isDisabled(),true,'optional provider still pending while activity is usable');
  const fixtureSnapshot = await (await fetch(`${url}/api/operations`)).json();
- const fixtureMissionId = Math.max(0,...fixtureSnapshot.sections.mission_events.rows.map(row=>Number(row.id)||0))+1;
- fixtureSnapshot.sections.mission_events.rows.push({id:fixtureMissionId,mission_id:'mission-fixture',actor:'qa-fixture',event_type:'fixture_update',status:'completed',detail:'<img src=x onerror=alert(1)> Full recorded update',created_at:'2026-09-29T12:00:00Z'});
+ const fixtureMissionId = Date.now();
+ fixtureSnapshot.sections.mission_events.rows.push({id:fixtureMissionId,mission_id:'mission-fixture',actor:'qa-fixture',event_type:'fixture_update',status:'completed',detail:'<img src=x onerror=alert(1)> Full recorded update',created_at:new Date().toISOString()});
  let releaseOperating, operatingStarted;
  const operatingWait = new Promise(resolve=>{releaseOperating=resolve;});
  const requestStarted = new Promise(resolve=>{operatingStarted=resolve;});
@@ -244,6 +244,7 @@ try {
  delayOperating=false;
  await streamPage.locator('#pause-updates').click();
  await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).waitFor();
+ await streamPage.waitForFunction(()=>document.getElementById('brief-delta').textContent==='+1 new',{timeout:5000});
  assert.equal(await streamPage.locator('#brief-delta').innerText(),'+1 new');
  await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).click();
  assert.equal(await streamPage.locator('#selection-reader-text').innerText(),'<img src=x onerror=alert(1)> Full recorded update');
