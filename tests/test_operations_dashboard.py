@@ -99,6 +99,9 @@ def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path)
             "trial-a", "prediction", "test", "v1", "registered", NOW.isoformat(), None,
             json.dumps({"strategy_id":"strategy-a"}),
         ))
+        conn.execute("CREATE TABLE autonomous_research_runs(id,trial_id,specialist,kind,evidence_hash,"
+                     "worker_version,status,created_at,completed_at,elapsed_seconds,compute_cost_usd,"
+                     "result_json,evidence_path,mission_id)")
         conn.execute("CREATE TABLE forecast_ledger(id,created_at,venue,market_id,forecast_json,action_json)")
         conn.execute("INSERT INTO forecast_ledger VALUES(?,?,?,?,?,?)", (
             1, NOW.isoformat(), "kalshi", "MKT-A",

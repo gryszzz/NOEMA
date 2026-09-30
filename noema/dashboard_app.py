@@ -218,8 +218,13 @@ def _copy_console_research_history(
                 existing = target.execute(
                     "SELECT status FROM research_trials WHERE trial_id=?", (trial_id,),
                 ).fetchone()
-                if (existing is not None and existing[0] in {"registered", "running"}
-                        and status in {"rejected", "promoted", "retired"}):
+                transition_allowed = (
+                    existing is not None
+                    and status in {"rejected", "promoted", "retired"}
+                    and (existing[0] in {"registered", "running"}
+                         or (existing[0] in {"rejected", "promoted"} and status == "retired"))
+                )
+                if transition_allowed:
                     target.execute(
                         "UPDATE research_trials SET status=? WHERE trial_id=?", (status, trial_id),
                     )
