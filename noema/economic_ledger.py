@@ -518,9 +518,52 @@ class EconomicLedger:
         additional_paths: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         """Read canonical events only. Incomplete coverage keeps net and ratio unknown."""
-        db = Path(path)
-        if not db.exists():
+        requested_paths = (path, *additional_paths)
+        distinct_paths: list[Path] = []
+        seen_paths: set[Path] = set()
+        for candidate in requested_paths:
+            candidate_path = Path(candidate)
+            try:
+                resolved = candidate_path.resolve()
+            except OSError:
+                continue
+            if resolved not in seen_paths:
+                seen_paths.add(resolved)
+                distinct_paths.append(resolved)
+
+        # The worker database is a replaceable replica. During startup or a
+        # snapshot gap it may be absent while the console sidecar still owns
+        # durable canonical evidence, so select the first readable canonical
+        # ledger from either location instead of making the primary path a gate.
+        required = {"provider", "currency", "amount", "reconciliation_state",
+                    "value_state", "capital_class", "confidence_state",
+                    "completeness_state"}
+        db: Path | None = None
+        for candidate in distinct_paths:
+            if not candidate.is_file():
+                continue
+            try:
+                with closing(sqlite3.connect(
+                    candidate.as_uri() + "?mode=ro", uri=True, timeout=2,
+                )) as probe:
+                    tables = {row[0] for row in probe.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )}
+                    if "economic_events" not in tables:
+                        continue
+                    columns = {row[1] for row in probe.execute(
+                        "PRAGMA table_info(economic_events)"
+                    )}
+                    if required <= columns:
+                        db = candidate
+                        break
+            except sqlite3.Error:
+                continue
+        if db is None:
             return _empty_event_projection("canonical ledger unavailable")
+        additional_paths = tuple(
+            str(candidate) for candidate in distinct_paths if candidate != db
+        )
         conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
         conn.row_factory = sqlite3.Row
         try:
@@ -530,9 +573,6 @@ class EconomicLedger:
             if "economic_events" not in tables:
                 return _empty_event_projection("canonical ledger unavailable")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}
-            required = {"provider", "currency", "amount", "reconciliation_state",
-                        "value_state", "capital_class", "confidence_state",
-                        "completeness_state"}
             if not required <= columns:
                 return _empty_event_projection("canonical schema not initialized")
             params: tuple[Any, ...] = ()

@@ -56,3 +56,34 @@ def test_dashboard_projects_console_sidecar_events_without_writing_worker_snapsh
     assert overview["snapshot"]["current_equity_usd"] == "600"
     assert overview["canonical_ledger"]["event_count"] == 1
     assert worker_path.read_bytes() == before
+
+
+def test_dashboard_uses_durable_sidecar_when_worker_replica_is_missing(tmp_path) -> None:
+    worker_path = tmp_path / "missing-worker.db"
+    sidecar_path = tmp_path / "console-state.db"
+    sidecar = EconomicLedger(str(sidecar_path))
+    sidecar.record_event(EconomicEvent(
+        provider="kalshi", event_type="fill", occurred_at=datetime(2026, 9, 30, tzinfo=UTC),
+        currency="USD", amount=Decimal(1), amount_usd=Decimal(1),
+        reconciliation_state="RECONCILED", value_state="realized", capital_class="trading_pnl",
+        confidence_state="provider_confirmed", completeness_state="complete",
+        external_reference_id="durable-sidecar-event",
+    ))
+    sidecar.conn.execute(
+        "INSERT INTO economic_events (created_at,event_type,amount_usd,payload_json) "
+        "VALUES (?,?,?,?)",
+        ("2026-09-30T12:00:00+00:00", "economic_review", None, '{"status":"reviewed"}'),
+    )
+    sidecar.conn.commit()
+    sidecar.conn.close()
+
+    overview = build_economic_overview(
+        str(worker_path), additional_paths=(str(sidecar_path),),
+    )
+
+    assert overview["snapshot"] is None
+    assert overview["canonical_ledger"]["event_count"] == 1
+    assert overview["latest_review"] == {
+        "status": "reviewed", "created_at": "2026-09-30T12:00:00+00:00",
+    }
+    assert not worker_path.exists()
