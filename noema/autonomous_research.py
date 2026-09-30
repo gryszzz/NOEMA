@@ -22,6 +22,7 @@ from mcp.shared.exceptions import McpError
 from .agent_identity import AgentIdentity
 from .ecosystem import EcosystemPlan
 from .ecosystem_controller import record_mission_allocation_review
+from .experiment_factory import handler_for_contract
 from .knowledge import KnowledgeStore
 from .mission_critic import CRITIC_ID, evaluate_result
 from .mission_store import MissionStore
@@ -212,45 +213,8 @@ class ResearchWorkStore:
 
 def handler_for(trial: ResearchTrial) -> tuple[str, str] | None:
     params = json.loads(trial.params_json)
-    if (
-        trial.family == "agent_services_opportunity_qualification"
-        and trial.feature_set_version == "commercial-qualification-v1"
-        and params == {"experiment": "commercial_opportunity_scan", "version": "v1"}
-    ):
-        return "NOEMA", "commercial_opportunity_scan"
-    if (
-        trial.family == "prediction_markets_data_quality"
-        and trial.feature_set_version == "market-data-v1"
-        and params == {"experiment": "market_data_quality", "version": "v1"}
-    ):
-        return "kalshi-history", "market_data_quality"
-    # Exact contracts: untrusted free text, paths and extra parameters are never executed.
-    if (
-        trial.family == "prediction_markets_execution"
-        and params
-        == {
-            "experiment": "cost_threshold_sweep",
-            "search": "predeclared_grid",
-            "objective": "after_cost_return",
-            "must_record_all_variants": True,
-        }
-        and trial.feature_set_version == "execution-v1"
-    ):
-        return "kalshi-history", "cost_threshold_sweep"
-    if (
-        trial.family == "trench_survival"
-        and params
-        == {
-            "model": "logistic_baseline",
-            "target": "survival_1h",
-            "feature_set": "trench-v1",
-            "validation": "purged_expanding_walk_forward",
-            "calibration": "none",
-        }
-        and trial.feature_set_version == "trench-v1"
-    ):
-        return "trench-1", "trench_survival_logistic"
-    return None
+    # Exact contract matching: untrusted free text, paths and extra parameters are never run.
+    return handler_for_contract(trial.family, trial.feature_set_version, params)
 
 
 def register_trench_trial_if_ready(
