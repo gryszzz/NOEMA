@@ -21,7 +21,7 @@ _TRIAL_STATUS_RANK = {
     "expired": 2,
 }
 _TERMINAL_RUN_STATUSES = {
-    "completed", "failed", "rejected", "interrupted", "expired", "cancelled",
+    "completed", "failed", "rejected", "interrupted", "expired", "cancelled", "timed_out",
 }
 
 

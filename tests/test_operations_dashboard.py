@@ -78,7 +78,7 @@ def test_sidecar_terminal_run_wins_over_incomplete_worker_copy(tmp_path):
     with sqlite3.connect(sidecar) as conn:
         conn.execute(schema)
         conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-            8, "trial-a", "critic", "quality", "hash-a", "v1", "completed",
+            8, "trial-a", "critic", "quality", "hash-a", "v1", "timed_out",
             NOW.isoformat(), (NOW + timedelta(seconds=4)).isoformat(), 4.0, None,
             '{"observations":7}', None, None,
         ))
@@ -86,7 +86,7 @@ def test_sidecar_terminal_run_wins_over_incomplete_worker_copy(tmp_path):
     runs = build_operations(str(worker), now=NOW, additional_paths=(str(sidecar),))["sections"]["research_runs"]["rows"]
     assert len(runs) == 1
     assert runs[0]["id"] == 1
-    assert runs[0]["status"] == "completed"
+    assert runs[0]["status"] == "timed_out"
     assert runs[0]["observations"] == 7
 
 
@@ -102,6 +102,12 @@ def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path)
         conn.execute("CREATE TABLE autonomous_research_runs(id,trial_id,specialist,kind,evidence_hash,"
                      "worker_version,status,created_at,completed_at,elapsed_seconds,compute_cost_usd,"
                      "result_json,evidence_path,mission_id)")
+        conn.executemany("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            (1, "trial-a", "critic", "cross_venue_paper_experiment", "obs-a", "v1", "completed",
+             NOW.isoformat(), NOW.isoformat(), 1.0, None, '{"observations":2}', None, None),
+            (2, "trial-a", "critic", "cross_venue_paper_experiment", "obs-b", "v1", "completed",
+             NOW.isoformat(), NOW.isoformat(), 1.0, None, '{"observations":2}', None, None),
+        ])
         conn.execute("CREATE TABLE forecast_ledger(id,created_at,venue,market_id,forecast_json,action_json)")
         conn.execute("INSERT INTO forecast_ledger VALUES(?,?,?,?,?,?)", (
             1, NOW.isoformat(), "kalshi", "MKT-A",
@@ -139,8 +145,8 @@ def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path)
     assert experiment["status"] == "promoted"
     assert experiment["market_id"] == "MKT-A"
     assert experiment["market_ids"] == ["MKT-A"]
-    assert experiment["run_count"] == 1
-    assert experiment["evidence_count"] == 1
+    assert experiment["run_count"] == 2
+    assert experiment["evidence_count"] == 2
     assert experiment["decision_count"] == 1
     assert experiment["strategy_decision_count"] == 1
 

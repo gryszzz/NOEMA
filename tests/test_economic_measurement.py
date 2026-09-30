@@ -36,8 +36,6 @@ def test_missing_database_stays_missing_and_profit_unknown(tmp_path, monkeypatch
 
 def test_measurement_includes_sidecar_only_research_run_cost(tmp_path):
     worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
-    with sqlite3.connect(worker) as conn:
-        conn.execute("CREATE TABLE marker(value TEXT)")
     with sqlite3.connect(sidecar) as conn:
         conn.execute("""CREATE TABLE autonomous_research_runs(
             id INTEGER PRIMARY KEY,trial_id TEXT NOT NULL,specialist TEXT NOT NULL,
