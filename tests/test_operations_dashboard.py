@@ -63,6 +63,41 @@ def test_experiment_projection_links_persisted_runs_evidence_decisions_and_criti
     assert json.loads(run["result"])["critic_review"]["result_accepted"] is True
 
 
+def test_console_sidecar_records_are_included_in_existing_operation_sections(tmp_path):
+    primary = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    with sqlite3.connect(primary) as conn:
+        conn.execute("CREATE TABLE runtime_events(id,created_at,stage,status)")
+    with sqlite3.connect(sidecar) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(
+                trial_id,family,hypothesis,feature_set_version,status,created_at,parent_trial_id
+            );
+            CREATE TABLE autonomous_research_runs(
+                id,trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,
+                completed_at,elapsed_seconds,compute_cost_usd,result_json,evidence_path,mission_id
+            );
+            CREATE TABLE economic_events(
+                id INTEGER PRIMARY KEY,created_at TEXT,event_type TEXT,amount_usd TEXT,payload_json TEXT
+            );
+        """)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?)", (
+            "sidecar-trial", "prediction", "Test hypothesis", "v1", "active", NOW.isoformat(), None,
+        ))
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "sidecar-trial", "critic", "validation", "evidence-1", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, json.dumps({"observations": 4}), None, None,
+        ))
+        conn.execute("INSERT INTO economic_events VALUES(1,?,?,?,?)", (
+            NOW.isoformat(), "wallet_transaction_confirmed", "12.50", "{}",
+        ))
+
+    sections = build_operations(str(primary), additional_paths=(str(sidecar),), now=NOW)["sections"]
+    assert sections["experiments"]["rows"][0]["trial_id"] == "sidecar-trial"
+    assert sections["research_runs"]["rows"][0]["observations"] == 4
+    assert sections["wallet_transactions"]["rows"][0]["event_type"] == "wallet_transaction_confirmed"
+
+
 def test_bounded_read_only_records_and_private_json_excluded(tmp_path):
     path = tmp_path / "work.db"
     with sqlite3.connect(path) as conn:

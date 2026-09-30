@@ -23,7 +23,8 @@ def _amount(value: object) -> Decimal:
 
 
 def build_economic_measurement(
-    path: str = "data/noema.db", *, now: datetime | None = None,
+    path: str = "data/noema.db", *, additional_paths: tuple[str, ...] = (),
+    now: datetime | None = None,
 ) -> dict[str, object]:
     """Current UTC month through `now`; does not create or migrate a database.
 
@@ -206,7 +207,9 @@ def build_economic_measurement(
                 "realized_net_usd": str(item.net_pnl_usd),
                 "cumulative_net_usd": str(paper_pnl),
             })
-    canonical = EconomicLedger.read_projection(path, month_utc=start.strftime("%Y-%m"))
+    canonical = EconomicLedger.read_projection(
+        path, month_utc=start.strftime("%Y-%m"), additional_paths=additional_paths,
+    )
     canonical["investigation_decision"] = latest_current_period_investigation(path, now=now)
     net_cash = receipts - expenses
     return {

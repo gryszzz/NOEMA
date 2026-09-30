@@ -513,7 +513,9 @@ def _object(value: str) -> dict:
     return parsed
 
 
-def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any]:
+def build_operations(
+    path: str, *, additional_paths: tuple[str, ...] = (), now: datetime | None = None,
+) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ValueError("timezone required")
@@ -866,5 +868,158 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
     finally:
         if conn is not None:
             conn.close()
+    _append_additional_console_records(result, path, additional_paths)
     result["openclaw_worker"] = openclaw_runtime_status(path)
     return result
+
+
+def _append_additional_console_records(
+    result: dict[str, Any], primary_path: str, additional_paths: tuple[str, ...],
+) -> None:
+    """Project console-sidecar records into the existing operational sections."""
+    seen_trials = {
+        (str(row.get("trial_id")), str(row.get("evidence_hash")), str(row.get("worker_version")))
+        for row in result["sections"]["research_runs"]["rows"]
+    }
+    seen_experiments = {str(row.get("trial_id")) for row in result["sections"]["experiments"]["rows"]}
+    seen_wallet = {
+        (row.get("created_at"), row.get("event_type"), row.get("amount_usd"),
+         json.dumps(row.get("payload"), sort_keys=True, default=str))
+        for row in result["sections"]["wallet_transactions"]["rows"]
+    }
+    seen_economic = {
+        tuple(row.get(key) for key in (
+            "created_at", "occurred_at", "provider", "event_type", "amount_usd",
+            "reconciliation_state", "capital_class", "mission_id", "strategy_id", "lane",
+        ))
+        for row in result["sections"]["economic_events"]["rows"]
+    }
+    for source_index, path in enumerate(additional_paths):
+        database = Path(path)
+        if not database.is_file() or database.resolve() == Path(primary_path).resolve():
+            continue
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(
+                database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1,
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "autonomous_research_runs" in tables:
+                columns = {row[1] for row in conn.execute(
+                    "PRAGMA table_info(autonomous_research_runs)"
+                )}
+                required = {"trial_id", "specialist", "kind", "evidence_hash", "worker_version",
+                            "status", "created_at", "result_json"}
+                if required <= columns:
+                    run_fields = (
+                        "trial_id", "specialist", "kind", "evidence_hash", "worker_version",
+                        "status", "created_at", "completed_at", "elapsed_seconds",
+                        "compute_cost_usd", "result_json", "evidence_path", "mission_id",
+                    )
+                    selected_run_fields = [field for field in run_fields if field in columns]
+                    for row in conn.execute(
+                        f"SELECT {','.join(selected_run_fields)} FROM autonomous_research_runs "
+                        "ORDER BY created_at DESC LIMIT 100"
+                    ):
+                        identity = (str(row["trial_id"]), str(row["evidence_hash"]),
+                                    str(row["worker_version"]))
+                        if identity in seen_trials:
+                            continue
+                        seen_trials.add(identity)
+                        record = {
+                            key: _scalar(row[key]) for key in selected_run_fields
+                            if key != "result_json"
+                        }
+                        try:
+                            payload = _object(row["result_json"])
+                            for key in ("observations", "observation_count"):
+                                count = payload.get(key)
+                                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                                    record["observations"] = count
+                                    break
+                            review = payload.get("critic_review")
+                            if isinstance(review, dict):
+                                record["critic_review"] = review
+                            record["result"] = json.dumps(payload, sort_keys=True)[:4000]
+                        except (ValueError, TypeError):
+                            record["record_status"] = "invalid"
+                        result["sections"]["research_runs"]["rows"].append(record)
+            if "research_trials" in tables:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(research_trials)")}
+                if "trial_id" in columns:
+                    trial_fields = [field for field in (
+                        "trial_id", "family", "hypothesis", "feature_set_version", "status",
+                        "created_at", "parent_trial_id",
+                    ) if field in columns]
+                    for row in conn.execute(
+                        f"SELECT {','.join(trial_fields)} FROM research_trials "
+                        + ("ORDER BY created_at DESC " if "created_at" in columns else "")
+                        + "LIMIT 100"
+                    ):
+                        trial_id = str(row["trial_id"])
+                        if trial_id in seen_experiments:
+                            continue
+                        seen_experiments.add(trial_id)
+                        result["sections"]["experiments"]["rows"].append(
+                            {key: _scalar(value) for key, value in dict(row).items()}
+                        )
+            if "economic_events" in tables:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}
+                wallet_columns = {"id", "created_at", "event_type", "amount_usd", "payload_json"}
+                if wallet_columns <= columns:
+                    for row in conn.execute(
+                        "SELECT id,created_at,event_type,amount_usd,payload_json FROM economic_events "
+                        "WHERE event_type LIKE 'wallet_transaction_%' ORDER BY created_at DESC LIMIT 100"
+                    ):
+                        try:
+                            payload = _object(row["payload_json"])
+                        except (ValueError, TypeError):
+                            payload = {}
+                        identity = (row["created_at"], row["event_type"], row["amount_usd"],
+                                    json.dumps(payload, sort_keys=True, default=str))
+                        if identity in seen_wallet:
+                            continue
+                        seen_wallet.add(identity)
+                        result["sections"]["wallet_transactions"]["rows"].append({
+                            "id": f"console-state-{source_index}-{row['id']}",
+                            "created_at": _scalar(row["created_at"]),
+                            "event_type": _scalar(row["event_type"]),
+                            "amount_usd": _scalar(row["amount_usd"]), "payload": payload,
+                        })
+                event_fields = (
+                    "id", "created_at", "occurred_at", "provider", "event_type", "amount_usd",
+                    "reconciliation_state", "capital_class", "mission_id", "strategy_id", "lane",
+                )
+                available = [field for field in event_fields if field in columns]
+                required = {"id", "created_at", "event_type"}
+                if required <= set(available):
+                    selected = ",".join(available)
+                    for row in conn.execute(
+                        f"SELECT {selected} FROM economic_events ORDER BY created_at DESC LIMIT 100"
+                    ):
+                        identity = tuple(row[field] if field in available else None
+                                         for field in event_fields[1:])
+                        if identity in seen_economic:
+                            continue
+                        seen_economic.add(identity)
+                        record = {field: _scalar(row[field]) for field in available if field != "id"}
+                        record["id"] = f"console-state-{source_index}-{row['id']}"
+                        result["sections"]["economic_events"]["rows"].append(record)
+        except sqlite3.Error:
+            continue
+        finally:
+            if conn is not None:
+                conn.close()
+    for name in ("research_runs", "experiments", "wallet_transactions", "economic_events"):
+        section = result["sections"][name]
+        section["rows"].sort(
+            key=lambda row: str(row.get("created_at") or ""), reverse=True,
+        )
+        section["has_more"] = section["has_more"] or len(section["rows"]) > 50
+        section["rows"] = section["rows"][:50]
+        if section["rows"]:
+            section["status"] = "recorded"

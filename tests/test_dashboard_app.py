@@ -202,6 +202,36 @@ def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
     with sqlite3.connect(source) as conn:
         conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
         conn.execute("INSERT INTO worker_observation VALUES ('fresh-worker-record')")
+        conn.execute("""CREATE TABLE canonical_pair_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, observed_at TEXT NOT NULL,
+            canonical_event_id TEXT NOT NULL, canonical_proposition_id TEXT NOT NULL,
+            semantic_status TEXT NOT NULL, settlement_equivalence TEXT NOT NULL,
+            observation_hash TEXT NOT NULL UNIQUE, observation_json TEXT NOT NULL)""")
+        conn.execute("INSERT INTO canonical_pair_observations VALUES (1,?,?,?,?,?,?,?)", (
+            "2026-09-30T12:01:00Z", "event-1", "proposition-1", "confirmed", "unverified",
+            "pair-hash-1", '{"experiment_evaluation":{"verdict":"PASS"}}',
+        ))
+        conn.execute("""CREATE TABLE autonomous_research_runs (
+            id INTEGER PRIMARY KEY, trial_id TEXT NOT NULL, specialist TEXT NOT NULL,
+            kind TEXT NOT NULL, evidence_hash TEXT NOT NULL, worker_version TEXT NOT NULL,
+            status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT,
+            deadline_at TEXT NOT NULL, elapsed_seconds REAL, compute_cost_usd TEXT,
+            result_json TEXT, evidence_path TEXT, mission_id TEXT,
+            UNIQUE(trial_id,evidence_hash,worker_version))""")
+        conn.execute("INSERT INTO autonomous_research_runs VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            "trial-1", "specialist-1", "cross_venue_paper_experiment", "pair-hash-1",
+            "version-1", "completed", "2026-09-30T12:01:00Z", "2026-09-30T12:01:01Z",
+            "2026-09-30T12:02:00Z", None, None, '{"critic_review":{"verdict":"PASS"}}',
+            None, None,
+        ))
+        conn.execute("""CREATE TABLE economic_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
+            event_type TEXT NOT NULL, amount_usd TEXT, payload_json TEXT NOT NULL)""")
+        conn.execute(
+            "INSERT INTO economic_events VALUES (1,?,?,?,?)",
+            ("2026-09-30T12:01:01Z", "paper_cross_venue_settlement", None,
+             '{"evidence_hash":"pair-hash-1","status":"settled"}'),
+        )
     persist_prediction_account_records(str(source), source_records,
                                        observed_at="2026-09-30T12:01:01Z")
     monkeypatch.setenv("NOEMA_DB_PATH", str(replica))
@@ -255,6 +285,22 @@ def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
             "WHERE venue='kalshi' AND stream='activity'"
         ).fetchone() == ("2026-09-30T12:03:00Z", "cursor-console-newer")
         assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert conn.execute(
+            "SELECT observation_hash FROM canonical_pair_observations"
+        ).fetchone()[0] == "pair-hash-1"
+        assert conn.execute(
+            "SELECT evidence_hash FROM autonomous_research_runs"
+        ).fetchone()[0] == "pair-hash-1"
+        assert conn.execute(
+            "SELECT count(*) FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
+        ).fetchone()[0] == 1
+    _merge_account_history_into_console_state(str(source), state_path)
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute("SELECT count(*) FROM canonical_pair_observations").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM autonomous_research_runs").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT count(*) FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
+        ).fetchone()[0] == 1
     # Repeated polling of the same provider event remains idempotent.
     persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
         "fill_id": "concurrent-fill", "ticker": "KXCONCURRENT",
@@ -264,6 +310,43 @@ def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
         assert conn.execute(
             "SELECT count(*) FROM prediction_account_records WHERE external_id='concurrent-fill'"
         ).fetchone()[0] == 1
+
+
+def test_console_research_migration_updates_a_previously_incomplete_run(tmp_path):
+    import sqlite3
+
+    from noema.dashboard_app import _merge_account_history_into_console_state
+
+    source = tmp_path / "worker.db"
+    state = tmp_path / "console-state.db"
+    schema = """CREATE TABLE autonomous_research_runs(
+        id INTEGER PRIMARY KEY,trial_id TEXT NOT NULL,specialist TEXT NOT NULL,kind TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,worker_version TEXT NOT NULL,status TEXT NOT NULL,
+        created_at TEXT NOT NULL,completed_at TEXT,deadline_at TEXT NOT NULL,
+        elapsed_seconds REAL,compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,mission_id TEXT,
+        UNIQUE(trial_id,evidence_hash,worker_version))"""
+    values = ("trial-a", "specialist-a", "validation", "evidence-a", "v1", "completed",
+              "2026-09-30T12:00:00Z", "2026-09-30T12:05:00Z", "2026-09-30T12:10:00Z",
+              5.0, "0.10", '{"observations":3}', None, None)
+    with sqlite3.connect(source) as conn:
+        conn.execute(schema)
+        conn.execute(
+            "INSERT INTO autonomous_research_runs VALUES(1," + ",".join("?" for _ in values) + ")",
+            values,
+        )
+    with sqlite3.connect(state) as conn:
+        conn.execute(schema)
+        conn.execute(
+            "INSERT INTO autonomous_research_runs VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (*values[:5], "running", values[6], None, *values[8:]),
+        )
+
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        row = conn.execute(
+            "SELECT status,completed_at,result_json FROM autonomous_research_runs"
+        ).fetchone()
+    assert row == ("completed", "2026-09-30T12:05:00Z", '{"observations":3}')
 
 
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:

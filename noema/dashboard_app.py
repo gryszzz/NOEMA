@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
+import json
 import logging
 import os
 import secrets
@@ -80,12 +82,15 @@ def _merge_account_history_into_console_state(source_path: str, state_path: str)
         retained_tables = {
             "prediction_account_records", "prediction_account_sync_state",
             "prediction_account_baselines", "live_balance_observations",
+            "canonical_pair_observations", "autonomous_research_runs", "research_trials",
+            "economic_events",
         }
         if not source_tables.intersection(retained_tables):
             return
         state.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(state, timeout=5) as target:
             _copy_account_history_tables(source, target, source_tables)
+            _copy_console_research_history(source, target, source_tables)
 
 
 def _copy_account_history_tables(
@@ -175,6 +180,134 @@ def _copy_account_history_tables(
                 (fingerprint,observed_at,amount_usd,scope,sources_json) VALUES (?,?,?,?,?)""",
             source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
                            "FROM live_balance_observations").fetchall())
+    target.commit()
+
+
+def _copy_console_research_history(
+    source: sqlite3.Connection, target: sqlite3.Connection, source_tables: set[str],
+) -> None:
+    """Merge durable pair evidence and its run/settlement history idempotently."""
+    for table in (
+        "canonical_pair_observations", "autonomous_research_runs", "research_trials",
+    ):
+        if table not in source_tables:
+            continue
+        definition = source.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,),
+        ).fetchone()
+        if not definition or not definition[0]:
+            continue
+        target.execute(definition[0].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
+        source_columns = [row[1] for row in source.execute(f"PRAGMA table_info({table})")]
+        target_columns = {row[1] for row in target.execute(f"PRAGMA table_info({table})")}
+        missing_columns = [row for row in source.execute(f"PRAGMA table_info({table})")
+                           if row[1] not in target_columns]
+        for _, name, data_type, _, default, _ in missing_columns:
+            declaration = f"ALTER TABLE {table} ADD COLUMN {name} {data_type or 'TEXT'}"
+            if default is not None:
+                declaration += f" DEFAULT {default}"
+            target.execute(declaration)
+        columns = [name for name in source_columns if name != "id"]
+        if not columns:
+            continue
+        rows = source.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        if table == "autonomous_research_runs" and {
+            "trial_id", "evidence_hash", "worker_version", "status", "completed_at",
+        } <= set(source_columns):
+            update_columns = [name for name in columns if name not in {
+                "trial_id", "evidence_hash", "worker_version",
+            }]
+            for row in rows:
+                existing = target.execute(
+                    "SELECT completed_at FROM autonomous_research_runs "
+                    "WHERE trial_id=? AND evidence_hash=? AND worker_version=?",
+                    (row[columns.index("trial_id")], row[columns.index("evidence_hash")],
+                     row[columns.index("worker_version")]),
+                ).fetchone()
+                incoming_completed = row[columns.index("completed_at")]
+                if existing is not None and incoming_completed is not None and (
+                    existing[0] is None or str(incoming_completed) >= str(existing[0])
+                ):
+                    target.execute(
+                        f"UPDATE autonomous_research_runs SET "
+                        f"{','.join(f'{name}=?' for name in update_columns)} "
+                        "WHERE trial_id=? AND evidence_hash=? AND worker_version=?",
+                        tuple(row[columns.index(name)] for name in update_columns) + (
+                            row[columns.index("trial_id")], row[columns.index("evidence_hash")],
+                            row[columns.index("worker_version")],
+                        ),
+                    )
+        target.executemany(
+            f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})", rows,
+        )
+
+    if "economic_events" not in source_tables:
+        target.commit()
+        return
+    definition = source.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='economic_events'",
+    ).fetchone()
+    if definition and definition[0]:
+        target.execute(definition[0].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
+    source_columns = [row[1] for row in source.execute("PRAGMA table_info(economic_events)")]
+    target_columns = {row[1] for row in target.execute("PRAGMA table_info(economic_events)")}
+    for _, name, data_type, _, default, _ in source.execute("PRAGMA table_info(economic_events)"):
+        if name in target_columns:
+            continue
+        declaration = f"ALTER TABLE economic_events ADD COLUMN {name} {data_type or 'TEXT'}"
+        if default is not None:
+            declaration += f" DEFAULT {default}"
+        target.execute(declaration)
+        target_columns.add(name)
+    for name, declaration in {
+        "provider": "TEXT", "external_reference_id": "TEXT", "occurred_at": "TEXT",
+        "currency": "TEXT", "amount": "TEXT", "mission_id": "TEXT", "strategy_id": "TEXT",
+        "activity_id": "TEXT", "lane": "TEXT", "evidence_json": "TEXT",
+        "reconciliation_state": "TEXT", "value_state": "TEXT", "capital_class": "TEXT",
+        "confidence_state": "TEXT", "completeness_state": "TEXT", "related_event_id": "INTEGER",
+        "owned_account_id": "TEXT", "counterparty_account_id": "TEXT",
+    }.items():
+        if name not in target_columns:
+            target.execute(f"ALTER TABLE economic_events ADD COLUMN {name} {declaration}")
+            target_columns.add(name)
+    columns = [name for name in source_columns if name in target_columns and name != "id"]
+    required = {"created_at", "event_type", "payload_json"}
+    if not required <= set(columns):
+        target.commit()
+        return
+    target.execute("""CREATE TABLE IF NOT EXISTS console_imported_research_events (
+        event_hash TEXT PRIMARY KEY)""")
+    selected = ",".join(columns)
+    existing_events = target.execute(
+        "SELECT " + selected + " FROM economic_events WHERE "
+        "event_type='canonical_market_observation' OR event_type LIKE 'paper_cross_venue_%' "
+        "OR event_type IN ('paper_settlement','paper_result')"
+    ).fetchall()
+    for row in existing_events:
+        digest = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+        target.execute(
+            "INSERT OR IGNORE INTO console_imported_research_events VALUES (?)", (digest,),
+        )
+    rows = source.execute(
+        "SELECT " + selected + " FROM economic_events WHERE "
+        "event_type='canonical_market_observation' OR event_type LIKE 'paper_cross_venue_%' "
+        "OR event_type IN ('paper_settlement','paper_result')"
+    ).fetchall()
+    placeholders = ",".join("?" for _ in columns)
+    for row in rows:
+        digest = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+        exists = target.execute(
+            "SELECT 1 FROM console_imported_research_events WHERE event_hash=?", (digest,),
+        ).fetchone()
+        if exists:
+            continue
+        target.execute(
+            f"INSERT OR IGNORE INTO economic_events ({selected}) VALUES ({placeholders})", row,
+        )
+        target.execute(
+            "INSERT OR IGNORE INTO console_imported_research_events VALUES (?)", (digest,),
+        )
     target.commit()
 
 
@@ -539,7 +672,7 @@ async def detailed() -> str:
 
 @app.get("/api/operations")
 def operations() -> dict[str, Any]:
-    return build_operations(_db_path())
+    return build_operations(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/knowledge")
@@ -611,7 +744,7 @@ async def overview() -> dict[str, Any]:
 
 @app.get("/api/economy")
 async def economy() -> dict[str, Any]:
-    return build_economic_overview(_db_path())
+    return build_economic_overview(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/stripe-economy")
@@ -627,7 +760,7 @@ async def ecosystem() -> dict[str, Any]:
 
 @app.get("/api/economic-measurement")
 async def economic_measurement() -> dict[str, Any]:
-    return build_economic_measurement(_db_path())
+    return build_economic_measurement(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/bill")
