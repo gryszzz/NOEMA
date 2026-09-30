@@ -1,7 +1,9 @@
 import asyncio
 import gzip
+import os
 import sqlite3
 import stat
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -87,31 +89,48 @@ def test_stripe_projection_endpoint_is_read_only_and_safe_without_database(monke
     assert not path.exists()
 
 
-def test_runtime_stream_notifies_after_another_connection_commits(monkeypatch, tmp_path) -> None:
+def test_runtime_stream_tracks_snapshot_replacement_and_console_state(monkeypatch, tmp_path) -> None:
+    from noema.console_state import console_state_db_path
+    from noema.prediction_account_history import persist_prediction_account_records
+
     path = tmp_path / "stream.db"
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE marker(value TEXT)")
     conn.commit()
     conn.close()
     monkeypatch.setenv("NOEMA_DB_PATH", str(path))
+    state_path = console_state_db_path(path)
+
     class ConnectedRequest:
         async def is_disconnected(self):
             return False
 
-    async def observe_commit():
+    async def observe_updates():
         stream = _runtime_change_stream(ConnectedRequest())
         ready = await anext(stream)
-        writer = sqlite3.connect(path)
-        writer.execute("INSERT INTO marker VALUES ('commit')")
-        writer.commit()
-        writer.close()
-        changed = await anext(stream)
+        replacement = tmp_path / "replacement.db"
+        with sqlite3.connect(replacement) as writer:
+            writer.execute("CREATE TABLE marker(value TEXT)")
+            writer.execute("INSERT INTO marker VALUES ('new snapshot')")
+        os.replace(replacement, path)
+        replaced = await anext(stream)
+        persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+            "fill_id": "stream-fill", "created_time": "2026-09-30T12:00:00Z",
+        }]}], observed_at="2026-09-30T12:00:01Z")
+        account_changed = await anext(stream)
         await stream.aclose()
-        return ready, changed
+        return ready, replaced, account_changed
 
-    ready, changed = asyncio.run(observe_commit())
+    ready, replaced, account_changed = asyncio.run(observe_updates())
     assert ready == "event: ready\ndata: {}\n\n"
-    assert changed == "event: change\ndata: {}\n\n"
+    assert replaced == "event: change\ndata: {}\n\n"
+    assert account_changed == "event: change\ndata: {}\n\n"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "new snapshot"
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute(
+            "SELECT external_id FROM prediction_account_records WHERE record_type='fill'"
+        ).fetchone()[0] == "stream-fill"
 
 
 def test_console_auth_covers_html_static_and_api(monkeypatch) -> None:
@@ -155,34 +174,67 @@ def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tm
         assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "real-market-record"
 
 
-def test_worker_snapshot_preserves_console_account_records(monkeypatch, tmp_path) -> None:
-    from noema.prediction_account_history import _ensure_schema
+def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
+    monkeypatch, tmp_path,
+) -> None:
+    from noema.console_state import console_state_db_path
+    from noema.dashboard_app import _merge_account_history_into_console_state
+    from noema.prediction_account_history import persist_prediction_account_records
 
     replica = tmp_path / "console-replica.db"
-    with sqlite3.connect(replica) as conn:
-        _ensure_schema(conn)
-        conn.execute(
-            "INSERT INTO prediction_account_records VALUES (?,?,?,?,?,?,?,?,?,?)",
-            ("kalshi", "fill", "fill-1", "KXTEST", None, None,
-             "2026-09-30T12:00:00+00:00", "2026-09-30T12:00:00+00:00",
-             "observed", "{}"),
-        )
+    old_console_record = [{"venue": "kalshi", "fills": [{
+        "fill_id": "existing-fill", "ticker": "KXTEST", "created_time": "2026-09-30T12:00:00Z",
+    }]}]
+    persist_prediction_account_records(str(replica), old_console_record,
+                                       observed_at="2026-09-30T12:00:01Z")
     source = tmp_path / "worker-source.db"
     with sqlite3.connect(source) as conn:
         conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
         conn.execute("INSERT INTO worker_observation VALUES ('fresh-worker-record')")
+    persist_prediction_account_records(str(source), [{"venue": "kalshi", "fills": [{
+        "fill_id": "worker-fill", "ticker": "KXWORKER", "created_time": "2026-09-30T12:01:00Z",
+    }]}], observed_at="2026-09-30T12:01:01Z")
     monkeypatch.setenv("NOEMA_DB_PATH", str(replica))
     monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+    state_path = console_state_db_path(replica)
+    _merge_account_history_into_console_state(str(replica), state_path)
+    real_replace = os.replace
+    interleaved: list[str] = []
+
+    def write_during_atomic_replacement(src, dst):
+        if Path(dst) == replica.resolve():
+            persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+                "fill_id": "concurrent-fill", "ticker": "KXCONCURRENT",
+                "created_time": "2026-09-30T12:02:00Z",
+            }]}], observed_at="2026-09-30T12:02:01Z")
+            interleaved.append("persisted-before-replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("noema.dashboard_app.os.replace", write_during_atomic_replacement)
     response = TestClient(app).post(
         "/internal/snapshot", content=gzip.compress(source.read_bytes()),
         headers={"Authorization": "Bearer snapshot-test-token"},
     )
     assert response.status_code == 200
+    assert interleaved == ["persisted-before-replace"]
     with sqlite3.connect(replica) as conn:
-        assert conn.execute(
-            "SELECT external_id FROM prediction_account_records WHERE venue='kalshi'"
-        ).fetchone()[0] == "fill-1"
         assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "fresh-worker-record"
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    with sqlite3.connect(state_path) as conn:
+        stored = {row[0] for row in conn.execute(
+            "SELECT external_id FROM prediction_account_records WHERE venue='kalshi' AND record_type='fill'"
+        )}
+        assert stored == {"existing-fill", "worker-fill", "concurrent-fill"}
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    # Repeated polling of the same provider event remains idempotent.
+    persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+        "fill_id": "concurrent-fill", "ticker": "KXCONCURRENT",
+        "created_time": "2026-09-30T12:02:00Z",
+    }]}], observed_at="2026-09-30T12:03:00Z")
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM prediction_account_records WHERE external_id='concurrent-fill'"
+        ).fetchone()[0] == 1
 
 
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:

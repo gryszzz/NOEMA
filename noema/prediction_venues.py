@@ -34,6 +34,7 @@ from .canonical_market_identity import (
     registered_resolvers,
 )
 from .config import KalshiConfig, kalshi_production_read_only_config
+from .console_state import console_state_db_path
 from .cross_venue_experiment import (
     evaluate_candidate,
     extract_clause_evidence,
@@ -68,7 +69,7 @@ def _account_history_plan(
     venue: str, record_types: tuple[str, ...], *, required_streams: tuple[str, ...] = ("activity", "settlement"),
 ) -> tuple[bool, int | None, dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     """Choose a durable incremental cursor and scheduled full-coverage audit."""
-    path = os.getenv("NOEMA_DB_PATH", "data/noema.db")
+    path = console_state_db_path()
     state = prediction_account_sync_state(path, venue)
     now = datetime.now(UTC)
     full_audit = True
@@ -758,7 +759,7 @@ async def _kalshi_status() -> dict[str, Any]:
             )
             balance_updated_at = _kalshi_balance_updated_at(snapshot.balance.get("updated_ts"))
             baseline = get_or_create_prediction_account_baseline(
-                os.getenv("NOEMA_DB_PATH", "data/noema.db"), "kalshi",
+                console_state_db_path(), "kalshi",
                 observed_at=balance_updated_at or "",
                 cash_usd=kalshi_cash_usd(snapshot.balance),
                 portfolio_value_usd=(
@@ -2250,7 +2251,7 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
             try:
                 persistence = await asyncio.to_thread(
                     persist_prediction_account_records,
-                    os.getenv("NOEMA_DB_PATH", "data/noema.db"),
+                    console_state_db_path(),
                     history_records,
                 )
                 for venue in (kalshi, polymarket):

@@ -26,6 +26,7 @@ from .console_replication import (
     load_worker_metadata,
     persist_worker_metadata,
 )
+from .console_state import console_state_db_path
 from .dashboard_data import build_overview
 from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
@@ -65,15 +66,14 @@ _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 _MAX_DATABASE_BYTES = 512 * 1024 * 1024
 
 
-def _preserve_console_account_history(incoming_path: str, current_path: str) -> None:
-    """Keep console-collected account evidence across worker snapshot replacement."""
-    incoming = Path(incoming_path)
-    current = Path(current_path)
-    if not current.is_file():
+def _merge_account_history_into_console_state(source_path: str, state_path: str) -> None:
+    """Import snapshot account evidence into the non-replaceable console database."""
+    source_path = str(Path(source_path).resolve())
+    state = Path(state_path)
+    if not Path(source_path).is_file() or Path(source_path) == state.resolve():
         return
-    source_uri = current.resolve().as_uri() + "?mode=ro"
-    with sqlite3.connect(source_uri, uri=True, timeout=2) as source, \
-            sqlite3.connect(incoming, timeout=2) as target:
+    source_uri = Path(source_path).as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=5) as source:
         source_tables = {row[0] for row in source.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
@@ -83,35 +83,50 @@ def _preserve_console_account_history(incoming_path: str, current_path: str) -> 
         }
         if not source_tables.intersection(retained_tables):
             return
-        ensure_prediction_account_schema(target)
-        for table, columns in (
-            ("prediction_account_records", "venue,record_type,external_id,market_id,related_order_id,occurred_at,first_observed_at,last_observed_at,state,payload_json"),
-            ("prediction_account_sync_state", "venue,stream,last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type"),
-        ):
-            if table not in source_tables:
-                continue
-            rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
-            placeholders = ",".join("?" for _ in columns.split(","))
-            target.executemany(
-                f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})", rows,
-            )
-        if "prediction_account_baselines" in source_tables:
-            target.execute("""CREATE TABLE IF NOT EXISTS prediction_account_baselines (
+        state.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(state, timeout=5) as target:
+            _copy_account_history_tables(source, target, source_tables)
+
+
+def _copy_account_history_tables(
+    source: sqlite3.Connection, target: sqlite3.Connection, source_tables: set[str],
+) -> None:
+    """Merge immutable/idempotent account rows; never replace the writer database."""
+    retained_tables = {
+        "prediction_account_records", "prediction_account_sync_state",
+        "prediction_account_baselines", "live_balance_observations",
+    }
+    if not source_tables.intersection(retained_tables):
+        return
+    ensure_prediction_account_schema(target)
+    for table, columns in (
+        ("prediction_account_records", "venue,record_type,external_id,market_id,related_order_id,occurred_at,first_observed_at,last_observed_at,state,payload_json"),
+        ("prediction_account_sync_state", "venue,stream,last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type"),
+    ):
+        if table not in source_tables:
+            continue
+        rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
+        placeholders = ",".join("?" for _ in columns.split(","))
+        target.executemany(
+            f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})", rows,
+        )
+    if "prediction_account_baselines" in source_tables:
+        target.execute("""CREATE TABLE IF NOT EXISTS prediction_account_baselines (
                 venue TEXT PRIMARY KEY, observed_at TEXT NOT NULL, cash_usd TEXT NOT NULL,
                 portfolio_value_usd TEXT NOT NULL, source TEXT NOT NULL)""")
-            target.executemany("""INSERT OR IGNORE INTO prediction_account_baselines
+        target.executemany("""INSERT OR IGNORE INTO prediction_account_baselines
                 (venue,observed_at,cash_usd,portfolio_value_usd,source) VALUES (?,?,?,?,?)""",
-                source.execute("SELECT venue,observed_at,cash_usd,portfolio_value_usd,source "
-                               "FROM prediction_account_baselines").fetchall())
-        if "live_balance_observations" in source_tables:
-            target.execute("""CREATE TABLE IF NOT EXISTS live_balance_observations (
+            source.execute("SELECT venue,observed_at,cash_usd,portfolio_value_usd,source "
+                           "FROM prediction_account_baselines").fetchall())
+    if "live_balance_observations" in source_tables:
+        target.execute("""CREATE TABLE IF NOT EXISTS live_balance_observations (
                 fingerprint TEXT PRIMARY KEY, observed_at TEXT NOT NULL, amount_usd TEXT NOT NULL,
                 scope TEXT NOT NULL, sources_json TEXT NOT NULL)""")
-            target.executemany("""INSERT OR IGNORE INTO live_balance_observations
+        target.executemany("""INSERT OR IGNORE INTO live_balance_observations
                 (fingerprint,observed_at,amount_usd,scope,sources_json) VALUES (?,?,?,?,?)""",
-                source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
-                               "FROM live_balance_observations").fetchall())
-        target.commit()
+            source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
+                           "FROM live_balance_observations").fetchall())
+    target.commit()
 
 
 def _constant_time_equal(left: str, right: str) -> bool:
@@ -189,7 +204,7 @@ async def _sample_capital_history() -> None:
             wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
             stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
             await asyncio.to_thread(
-                balance_history, _db_path(), venues,
+                balance_history, _console_state_db_path(), venues,
                 {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
                 window="24H", stripe=stripe,
             )
@@ -203,10 +218,14 @@ async def _sample_capital_history() -> None:
 @app.on_event("startup")
 async def start_capital_sampler() -> None:
     global _capital_sampler_task, _polymarket_stream_task
+    # Import console-owned rows written by the previous colocated-database
+    # version before enabling the sidecar writers. SQLite uniqueness makes
+    # concurrent web-process startup migrations idempotent.
+    _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
     if os.getenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
         _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
     _polymarket_stream_task = asyncio.create_task(
-        run_polymarket_account_stream(_db_path, apply_polymarket_stream_projection),
+        run_polymarket_account_stream(_console_state_db_path, apply_polymarket_stream_projection),
         name="noema-polymarket-account-stream",
     )
 
@@ -227,6 +246,10 @@ async def stop_capital_sampler() -> None:
 
 def _db_path() -> str:
     return os.getenv("NOEMA_DB_PATH", "data/noema.db")
+
+
+def _console_state_db_path() -> str:
+    return console_state_db_path(_db_path())
 
 
 def _worker_provider_health() -> dict[str, Any]:
@@ -304,7 +327,7 @@ def runtime_info() -> dict[str, Any]:
 
 @app.post("/internal/snapshot")
 async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
-    """Atomically replace the console's worker snapshot and retain its own live evidence."""
+    """Atomically replace the worker snapshot without replacing console-owned state."""
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -346,14 +369,10 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         else:
             if check is None or check[0] != "ok":
                 raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
-        _preserve_console_account_history(temporary_path, str(destination))
-        uri = Path(temporary_path).resolve().as_uri() + "?mode=ro"
-        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
-            check = conn.execute("PRAGMA quick_check").fetchone()
-        if check is None or check[0] != "ok":
-            raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
-        # Account polling, live balance history, and metadata persist between
-        # worker snapshot commits on the console's durable disk.
+        # Account rows included in worker snapshots are imported into the
+        # console-owned sidecar. Live console writers target that same file,
+        # which this atomic worker replacement never touches.
+        _merge_account_history_into_console_state(temporary_path, _console_state_db_path())
         os.chmod(temporary_path, 0o600)
         os.replace(temporary_path, destination)
         temporary_path = None
@@ -380,24 +399,29 @@ async def index() -> str:
 
 
 async def _runtime_change_stream(request: Request):
-    """Push invalidations when a verified worker snapshot is atomically replaced."""
-    path = Path(_db_path()).resolve()
-    if not path.is_file():
+    """Push invalidations for worker snapshots and console-owned account commits."""
+    paths = (Path(_db_path()).resolve(), Path(_console_state_db_path()).resolve())
+    if not paths[0].is_file():
         yield "event: unavailable\ndata: {}\n\n"
         return
+
+    def versions() -> tuple[tuple[int, int, int, int] | None, ...]:
+        values = []
+        for watched_path in paths:
+            try:
+                stat = watched_path.stat()
+                values.append((stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size))
+            except FileNotFoundError:
+                values.append(None)
+        return tuple(values)
+
     try:
-        stat = path.stat()
-        version = (stat.st_mtime_ns, stat.st_size)
+        version = versions()
         yield "event: ready\ndata: {}\n\n"
         last_keepalive = time.monotonic()
         while not await request.is_disconnected():
             await asyncio.sleep(1)
-            try:
-                current_stat = path.stat()
-                current = (current_stat.st_mtime_ns, current_stat.st_size)
-            except FileNotFoundError:
-                yield "event: unavailable\ndata: {}\n\n"
-                return
+            current = versions()
             if current != version:
                 version = current
                 yield "event: change\ndata: {}\n\n"
@@ -588,7 +612,7 @@ async def wallet_status(*, force: bool = False) -> dict[str, Any]:
 async def capital_history(window: Literal["1H", "24H", "7D", "30D", "ALL"] = "24H") -> dict:
     wallets = {"networks": _wallet_status_cache["networks"],
                "observed_at": _wallet_status_cache.get("observed_at")}
-    return await asyncio.to_thread(balance_history, _db_path(), cached_prediction_venue_status(),
+    return await asyncio.to_thread(balance_history, _console_state_db_path(), cached_prediction_venue_status(),
                                    wallets, window=window, stripe=stripe_economy_overview(_db_path()))
 
 
