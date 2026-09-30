@@ -170,6 +170,85 @@ def test_console_sidecar_records_are_included_in_existing_operation_sections(tmp
     assert sections["wallet_transactions"]["rows"][0]["event_type"] == "wallet_transaction_confirmed"
 
 
+def test_sidecar_terminal_run_wins_over_stale_incomplete_worker_record(tmp_path):
+    primary = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    run_schema = """CREATE TABLE autonomous_research_runs(
+        id INTEGER PRIMARY KEY,trial_id TEXT,specialist TEXT,kind TEXT,evidence_hash TEXT,
+        worker_version TEXT,status TEXT,created_at TEXT,completed_at TEXT,elapsed_seconds REAL,
+        compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,mission_id TEXT)"""
+    with sqlite3.connect(primary) as conn:
+        conn.execute("CREATE TABLE runtime_events(id,created_at,stage,status)")
+        conn.execute(run_schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "trial", "critic", "validation", "hash", "v1", "running", NOW.isoformat(),
+            None, None, None, json.dumps({"observations": 1}), None, None,
+        ))
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute(run_schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            7, "trial", "critic", "validation", "hash", "v1", "completed", NOW.isoformat(),
+            (NOW + timedelta(minutes=1)).isoformat(), 2.0, "0.3",
+            json.dumps({"observations": 7, "critic_review": {"verdict": "PASS"}}), None, None,
+        ))
+
+    runs = build_operations(
+        str(primary), additional_paths=(str(sidecar),), now=NOW,
+    )["sections"]["research_runs"]["rows"]
+    assert len(runs) == 1
+    assert runs[0]["status"] == "completed"
+    assert runs[0]["observations"] == 7
+    assert runs[0]["compute_cost_usd"] == "0.3"
+
+
+def test_sidecar_only_experiment_uses_canonical_projection_relationships(tmp_path):
+    primary = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    with sqlite3.connect(primary) as conn:
+        conn.execute("CREATE TABLE runtime_events(id,created_at,stage,status)")
+        conn.execute("CREATE TABLE forecast_ledger(id,forecast_json)")
+        conn.execute("INSERT INTO forecast_ledger VALUES(1,?)", (
+            json.dumps({"trial_id": "sidecar-trial", "strategy_id": "strategy-a"}),
+        ))
+    with sqlite3.connect(sidecar) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(
+                trial_id TEXT,family TEXT,hypothesis TEXT,feature_set_version TEXT,status TEXT,
+                created_at TEXT,parent_trial_id TEXT,params_json TEXT,status_updated_at TEXT
+            );
+            CREATE TABLE autonomous_research_runs(
+                id,trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,
+                completed_at,elapsed_seconds,compute_cost_usd,result_json,evidence_path,mission_id
+            );
+            CREATE TABLE canonical_pair_observations(observation_hash TEXT,observation_json TEXT);
+        """)
+        params = {"strategy_id": "strategy-a", "market_id": "MARKET-A",
+                  "candidate_observation_hash": "observation-a"}
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?)", (
+            "sidecar-trial", "prediction", "Hypothesis", "v1", "running", NOW.isoformat(),
+            None, json.dumps(params), NOW.isoformat(),
+        ))
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "sidecar-trial", "critic", "validation", "evidence-a", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, "{}", "evidence/path", None,
+        ))
+        conn.execute("INSERT INTO canonical_pair_observations VALUES(?,?)", (
+            "observation-a", json.dumps({"native_contracts": [{"market_id": "MARKET-A"}]}),
+        ))
+
+    experiments = build_operations(
+        str(primary), additional_paths=(str(sidecar),), now=NOW,
+    )["sections"]["experiments"]["rows"]
+    row = next(item for item in experiments if item["trial_id"] == "sidecar-trial")
+    assert row["params"] == params
+    assert row["strategy_id"] == "strategy-a"
+    assert row["market_id"] == "MARKET-A"
+    assert row["market_ids"] == ["MARKET-A"]
+    assert row["run_count"] == 1
+    assert row["evidence_count"] == 1
+    assert row["decision_count"] == 1
+
+
 def test_bounded_read_only_records_and_private_json_excluded(tmp_path):
     path = tmp_path / "work.db"
     with sqlite3.connect(path) as conn:

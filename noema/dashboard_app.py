@@ -50,6 +50,7 @@ from .prediction_venues import (
     build_prediction_venue_status,
     cached_prediction_venue_status,
 )
+from .research_state import research_trial_update_is_newer
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
@@ -207,22 +208,35 @@ def _copy_console_research_history(
             if default is not None:
                 declaration += f" DEFAULT {default}"
             target.execute(declaration)
+        target_columns = {row[1] for row in target.execute(f"PRAGMA table_info({table})")}
+        if table == "research_trials" and "status_updated_at" not in target_columns:
+            target.execute("ALTER TABLE research_trials ADD COLUMN status_updated_at TEXT")
         columns = [name for name in source_columns if name != "id"]
         if not columns:
             continue
         rows = source.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
         if table == "research_trials" and {"trial_id", "status"} <= set(source_columns):
+            status_time_column = next((name for name in ("status_updated_at", "updated_at")
+                                       if name in columns), None)
+            pending = []
             for row in rows:
-                trial_id = row[columns.index("trial_id")]
-                status = row[columns.index("status")]
+                values = dict(zip(columns, row, strict=True))
+                trial_id = values["trial_id"]
+                status = values["status"]
                 existing = target.execute(
-                    "SELECT status FROM research_trials WHERE trial_id=?", (trial_id,),
+                    "SELECT status,status_updated_at FROM research_trials WHERE trial_id=?", (trial_id,),
                 ).fetchone()
-                if (existing is not None and existing[0] in {"registered", "running"}
-                        and status in {"rejected", "promoted", "retired"}):
+                if existing is None:
+                    pending.append(row)
+                elif research_trial_update_is_newer(
+                    status, values.get(status_time_column) if status_time_column else None,
+                    existing[0], existing[1],
+                ):
                     target.execute(
-                        "UPDATE research_trials SET status=? WHERE trial_id=?", (status, trial_id),
+                        "UPDATE research_trials SET status=?,status_updated_at=? WHERE trial_id=?",
+                        (status, values.get(status_time_column) if status_time_column else None, trial_id),
                     )
+            rows = pending
         if table == "autonomous_research_runs" and {
             "trial_id", "evidence_hash", "worker_version", "status", "completed_at",
         } <= set(source_columns):

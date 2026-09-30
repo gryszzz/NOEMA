@@ -38,10 +38,14 @@ class ResearchTrialStore:
                 feature_set_version TEXT NOT NULL,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                parent_trial_id TEXT
+                parent_trial_id TEXT,
+                status_updated_at TEXT
             )
             """
         )
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(research_trials)")}
+        if "status_updated_at" not in columns:
+            self.conn.execute("ALTER TABLE research_trials ADD COLUMN status_updated_at TEXT")
         self.conn.commit()
 
     @staticmethod
@@ -83,6 +87,7 @@ class ResearchTrialStore:
             raise ValueError("family, hypothesis, and feature_set_version are required")
 
         params_json = self.canonical_params(params)
+        registered_at = datetime.now(UTC).isoformat()
         trial_id = self.make_trial_id(
             family=family,
             hypothesis=hypothesis,
@@ -93,8 +98,8 @@ class ResearchTrialStore:
             """
             INSERT OR IGNORE INTO research_trials (
                 trial_id, family, hypothesis, params_json, feature_set_version,
-                status, created_at, parent_trial_id
-            ) VALUES (?, ?, ?, ?, ?, 'registered', ?, ?)
+                status, created_at, parent_trial_id, status_updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'registered', ?, ?, ?)
             """,
             (
                 trial_id,
@@ -102,8 +107,9 @@ class ResearchTrialStore:
                 hypothesis,
                 params_json,
                 feature_set_version,
-                datetime.now(UTC).isoformat(),
+                registered_at,
                 parent_trial_id,
+                registered_at,
             ),
         )
         self.conn.commit()
@@ -114,8 +120,8 @@ class ResearchTrialStore:
         if clean not in {"registered", "running", "rejected", "promoted", "retired"}:
             raise ValueError("invalid research trial status")
         cursor = self.conn.execute(
-            "UPDATE research_trials SET status = ? WHERE trial_id = ?",
-            (clean, trial_id),
+            "UPDATE research_trials SET status = ?, status_updated_at = ? WHERE trial_id = ?",
+            (clean, datetime.now(UTC).isoformat(), trial_id),
         )
         if cursor.rowcount != 1:
             raise KeyError(trial_id)

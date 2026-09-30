@@ -11,6 +11,11 @@ from typing import Any
 
 from .openclaw_worker import runtime_status as openclaw_runtime_status
 from .paper_execution import parse_aware_time
+from .research_state import (
+    merge_research_run_records,
+    research_run_identity,
+    research_trial_update_is_newer,
+)
 from .resource_control import resource_status
 from .runtime_diagnostics import diagnose_runtime
 
@@ -144,6 +149,63 @@ def _experiment_relationship_counts(
         except sqlite3.Error:
             pass
     return counts
+
+
+def _project_experiment_record(
+    row: sqlite3.Row, conn: sqlite3.Connection, tables: set[str], *,
+    decision_conn: sqlite3.Connection | None = None, decision_tables: set[str] | None = None,
+) -> dict[str, Any]:
+    """Canonical trial projection shared by worker and console-sidecar records."""
+    values = dict(row)
+    record = {key: _scalar(value) for key, value in values.items()
+              if not key.endswith("_json")}
+    params: dict[str, Any] = {}
+    raw_params = values.get("params_json")
+    if raw_params:
+        try:
+            parsed = _object(raw_params)
+            params = parsed if isinstance(parsed, dict) else {}
+            record["params"] = params
+        except (ValueError, TypeError):
+            record["record_status"] = "invalid_params"
+    raw_metadata = values.get("metadata_json")
+    if raw_metadata:
+        try:
+            metadata = _object(raw_metadata)
+            record["experiment_metadata"] = metadata
+            params = {**metadata, **params}
+        except (ValueError, TypeError):
+            record["record_status"] = "invalid_metadata"
+    for key in ("strategy_id", "market_id", "venue", "asset", "ticker"):
+        value = record.get(key) or params.get(key)
+        if value is None and isinstance(params.get("market"), dict):
+            value = params["market"].get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            record[key] = str(value)
+    evidence_hash = params.get("candidate_observation_hash")
+    if isinstance(evidence_hash, str) and "canonical_pair_observations" in tables:
+        try:
+            evidence = conn.execute(
+                "SELECT observation_json FROM canonical_pair_observations "
+                "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
+            ).fetchone()
+            if evidence:
+                observation = _object(evidence[0])
+                contracts = observation.get("native_contracts")
+                market_ids = list(dict.fromkeys(
+                    item.get("market_id") for item in contracts
+                    if isinstance(item, dict) and isinstance(item.get("market_id"), str)
+                )) if isinstance(contracts, list) else []
+                if market_ids:
+                    record["market_ids"] = market_ids
+                    record.setdefault("market_id", market_ids[0])
+        except (sqlite3.Error, ValueError, TypeError):
+            pass
+    record.update(_experiment_relationship_counts(
+        conn, tables, record, params, decision_conn=decision_conn,
+        decision_tables=decision_tables,
+    ))
+    return record
 
 
 def _economic_lane_projection(conn: sqlite3.Connection, tables: set[str]) -> dict[str, Any]:
@@ -648,9 +710,13 @@ def build_operations(
                     columns_present = {row[1] for row in conn.execute(
                         "PRAGMA table_info(research_trials)"
                     )}
-                    select = columns + (",params_json" if "params_json" in columns_present else "")
+                    selected = columns.split(",")
+                    selected.extend(field for field in (
+                        "params_json", "metadata_json", "strategy_id", "market_id", "venue",
+                        "asset", "ticker", "status_updated_at",
+                    ) if field in columns_present and field not in selected)
                     rows = conn.execute(
-                        f"SELECT {select} FROM {table} ORDER BY {order} DESC LIMIT 51"
+                        f"SELECT {','.join(selected)} FROM {table} ORDER BY {order} DESC LIMIT 51"
                     ).fetchall()
                 else:
                     rows = conn.execute(
@@ -709,42 +775,7 @@ def build_operations(
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
                     elif name == "experiments":
-                        params_text = row["params_json"] if "params_json" in row.keys() else None  # noqa: SIM118 - sqlite3.Row has no dict.get
-                        params: dict[str, Any] = {}
-                        if params_text:
-                            try:
-                                decoded = _object(params_text)
-                                params = decoded if isinstance(decoded, dict) else {}
-                            except (ValueError, TypeError):
-                                record["record_status"] = "invalid_params"
-                        for key in ("strategy_id", "market_id", "venue", "asset", "ticker"):
-                            value = params.get(key)
-                            if value is None and isinstance(params.get("market"), dict):
-                                value = params["market"].get(key)
-                            if isinstance(value, (str, int)) and not isinstance(value, bool):
-                                record[key] = str(value)
-                        evidence_hash = params.get("candidate_observation_hash")
-                        if (isinstance(evidence_hash, str)
-                                and "canonical_pair_observations" in tables):
-                            try:
-                                evidence = conn.execute(
-                                    "SELECT observation_json FROM canonical_pair_observations "
-                                    "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
-                                ).fetchone()
-                                if evidence:
-                                    observation = _object(evidence[0])
-                                    contracts = observation.get("native_contracts")
-                                    market_ids = list(dict.fromkeys(
-                                        item.get("market_id") for item in contracts
-                                        if isinstance(item, dict)
-                                        and isinstance(item.get("market_id"), str)
-                                    )) if isinstance(contracts, list) else []
-                                    if market_ids:
-                                        record["market_ids"] = market_ids
-                                        record.setdefault("market_id", market_ids[0])
-                            except (sqlite3.Error, ValueError, TypeError):
-                                pass
-                        record.update(_experiment_relationship_counts(conn, tables, record, params))
+                        record = _project_experiment_record(row, conn, tables)
                     elif name == "missions":
                         for source, target in (("capability_grants_json", "capability_grants"),
                                                ("resource_grant_json", "resource_grant"),
@@ -876,34 +907,18 @@ def build_operations(
     return result
 
 
-def _prefers_terminal_research_run(incoming: dict[str, Any], current: dict[str, Any]) -> bool:
-    terminal = {"completed", "failed", "rejected", "interrupted", "expired", "cancelled"}
-    incoming_terminal = str(incoming.get("status") or "").casefold() in terminal
-    current_terminal = str(current.get("status") or "").casefold() in terminal
-    if incoming_terminal != current_terminal:
-        return incoming_terminal
-    if not incoming_terminal:
-        return False
-    try:
-        incoming_at = parse_aware_time(str(incoming.get("completed_at") or ""))
-    except (ValueError, TypeError):
-        incoming_at = None
-    try:
-        current_at = parse_aware_time(str(current.get("completed_at") or ""))
-    except (ValueError, TypeError):
-        current_at = None
-    return incoming_at is not None and (current_at is None or incoming_at > current_at)
-
-
 def _append_additional_console_records(
     result: dict[str, Any], primary_path: str, additional_paths: tuple[str, ...],
 ) -> None:
     """Project console-sidecar records into the existing operational sections."""
     seen_trials = {
-        (str(row.get("trial_id")), str(row.get("evidence_hash")), str(row.get("worker_version"))): index
+        research_run_identity(row): index
         for index, row in enumerate(result["sections"]["research_runs"]["rows"])
     }
-    seen_experiments = {str(row.get("trial_id")) for row in result["sections"]["experiments"]["rows"]}
+    seen_experiments = {
+        str(row.get("trial_id")): index
+        for index, row in enumerate(result["sections"]["experiments"]["rows"])
+    }
     seen_wallet = {
         (row.get("created_at"), row.get("event_type"), row.get("amount_usd"),
          json.dumps(row.get("payload"), sort_keys=True, default=str))
@@ -958,8 +973,6 @@ def _append_additional_console_records(
                         f"SELECT {','.join(selected_run_fields)} FROM autonomous_research_runs "
                         "ORDER BY created_at DESC LIMIT 100"
                     ):
-                        identity = (str(row["trial_id"]), str(row["evidence_hash"]),
-                                    str(row["worker_version"]))
                         record = {
                             key: _scalar(row[key]) for key in selected_run_fields
                             if key != "result_json"
@@ -977,21 +990,24 @@ def _append_additional_console_records(
                             record["result"] = json.dumps(payload, sort_keys=True)[:4000]
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
+                        identity = research_run_identity(record)
                         existing_index = seen_trials.get(identity)
                         if existing_index is None:
                             seen_trials[identity] = len(result["sections"]["research_runs"]["rows"])
                             result["sections"]["research_runs"]["rows"].append(record)
                         else:
                             existing_record = result["sections"]["research_runs"]["rows"][existing_index]
-                            if _prefers_terminal_research_run(record, existing_record):
-                                record["id"] = existing_record.get("id")
-                                result["sections"]["research_runs"]["rows"][existing_index] = record
+                            merged = merge_research_run_records(existing_record, record)
+                            merged["id"] = existing_record.get("id", record.get("id"))
+                            result["sections"]["research_runs"]["rows"][existing_index] = merged
             if "research_trials" in tables:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(research_trials)")}
                 if "trial_id" in columns:
                     trial_fields = [field for field in (
                         "trial_id", "family", "hypothesis", "feature_set_version", "status",
-                        "created_at", "parent_trial_id", "params_json",
+                        "created_at", "parent_trial_id", "params_json", "metadata_json",
+                        "strategy_id", "market_id", "venue", "asset", "ticker",
+                        "status_updated_at",
                     ) if field in columns]
                     for row in conn.execute(
                         f"SELECT {','.join(trial_fields)} FROM research_trials "
@@ -999,50 +1015,27 @@ def _append_additional_console_records(
                         + "LIMIT 100"
                     ):
                         trial_id = str(row["trial_id"])
-                        if trial_id in seen_experiments:
-                            continue
-                        seen_experiments.add(trial_id)
-                        record = {key: _scalar(value) for key, value in dict(row).items()
-                                  if key != "params_json"}
-                        params: dict[str, Any] = {}
-                        params_text = row["params_json"] if "params_json" in row.keys() else None  # noqa: SIM118 - sqlite3.Row has no dict.get
-                        if params_text:
-                            try:
-                                decoded = _object(params_text)
-                                params = decoded if isinstance(decoded, dict) else {}
-                            except (ValueError, TypeError):
-                                record["record_status"] = "invalid_params"
-                        for key in ("strategy_id", "market_id", "venue", "asset", "ticker"):
-                            value = params.get(key)
-                            if value is None and isinstance(params.get("market"), dict):
-                                value = params["market"].get(key)
-                            if isinstance(value, (str, int)) and not isinstance(value, bool):
-                                record[key] = str(value)
-                        evidence_hash = params.get("candidate_observation_hash")
-                        if isinstance(evidence_hash, str) and "canonical_pair_observations" in tables:
-                            try:
-                                evidence = conn.execute(
-                                    "SELECT observation_json FROM canonical_pair_observations "
-                                    "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
-                                ).fetchone()
-                                if evidence:
-                                    observation = _object(evidence[0])
-                                    contracts = observation.get("native_contracts")
-                                    market_ids = list(dict.fromkeys(
-                                        item.get("market_id") for item in contracts
-                                        if isinstance(item, dict)
-                                        and isinstance(item.get("market_id"), str)
-                                    )) if isinstance(contracts, list) else []
-                                    if market_ids:
-                                        record["market_ids"] = market_ids
-                                        record.setdefault("market_id", market_ids[0])
-                            except (sqlite3.Error, ValueError, TypeError):
-                                pass
-                        record.update(_experiment_relationship_counts(
-                            conn, tables | decision_tables, record, params,
-                            decision_conn=decision_conn, decision_tables=decision_tables,
-                        ))
-                        result["sections"]["experiments"]["rows"].append(record)
+                        record = _project_experiment_record(
+                            row, conn, tables, decision_conn=decision_conn,
+                            decision_tables=decision_tables,
+                        )
+                        existing_index = seen_experiments.get(trial_id)
+                        if existing_index is None:
+                            seen_experiments[trial_id] = len(result["sections"]["experiments"]["rows"])
+                            result["sections"]["experiments"]["rows"].append(record)
+                        else:
+                            existing_record = result["sections"]["experiments"]["rows"][existing_index]
+                            if research_trial_update_is_newer(
+                                record.get("status"), record.get("status_updated_at"),
+                                existing_record.get("status"), existing_record.get("status_updated_at"),
+                            ):
+                                result["sections"]["experiments"]["rows"][existing_index] = {
+                                    **existing_record, **record,
+                                }
+                            else:
+                                for key, value in record.items():
+                                    if existing_record.get(key) is None and value is not None:
+                                        existing_record[key] = value
             if "economic_events" in tables:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}
                 wallet_columns = {"id", "created_at", "event_type", "amount_usd", "payload_json"}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -13,6 +14,7 @@ from .economic_ledger import EconomicLedger
 from .history_forecaster import MODEL_VERSION
 from .paper_execution import parse_aware_time
 from .paper_settlements import load_paper_settlements
+from .research_state import merge_research_run_records, research_run_identity
 
 
 def _amount(value: object) -> Decimal:
@@ -43,8 +45,9 @@ def build_economic_measurement(
     activity_costs: dict[str, dict[str, Decimal | int]] = {}
     estimate: Decimal | None = None
     present = Path(path).exists()
-    if present:
-        conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    if present or any(Path(source).is_file() for source in additional_paths):
+        conn = (sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+                if present else sqlite3.connect(":memory:"))
         try:
             conn.execute("BEGIN")
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
@@ -189,20 +192,18 @@ def build_economic_measurement(
                     return
                 selected = [name for name in (
                     "trial_id", "evidence_hash", "worker_version", "status", "created_at",
-                    "completed_at", "compute_cost_usd",
+                    "completed_at", "updated_at", "compute_cost_usd", "elapsed_seconds",
+                    "result_json", "evidence_path",
                 ) if name in run_columns]
                 for row in run_conn.execute(
                     f"SELECT {','.join(selected)} FROM autonomous_research_runs"):
                     item = dict(zip(selected, row, strict=True))
-                    key = (str(item["trial_id"]), str(item.get("evidence_hash") or ""),
-                           str(item.get("worker_version") or ""),
-                           str(item["created_at"]) if "evidence_hash" not in item else "")
+                    key = research_run_identity(item)
                     current = research_runs.get(key)
-                    if current is None or item.get("completed_at") and (
-                        not current.get("completed_at")
-                        or str(item["completed_at"]) > str(current["completed_at"])
-                    ):
+                    if current is None:
                         research_runs[key] = item
+                    else:
+                        research_runs[key] = merge_research_run_records(current, item)
 
             collect_research_runs(conn)
             for additional_path in additional_paths:
@@ -210,9 +211,9 @@ def build_economic_measurement(
                 if not additional_db.is_file() or additional_db.resolve() == Path(path).resolve():
                     continue
                 try:
-                    with sqlite3.connect(
+                    with closing(sqlite3.connect(
                         additional_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2,
-                    ) as additional:
+                    )) as additional:
                         collect_research_runs(additional)
                 except sqlite3.Error:
                     continue

@@ -349,6 +349,61 @@ def test_console_research_migration_updates_a_previously_incomplete_run(tmp_path
     assert row == ("completed", "2026-09-30T12:05:00Z", '{"observations":3}')
 
 
+def test_research_trial_migration_tracks_recency_without_replacing_identity(tmp_path):
+    import sqlite3
+
+    from noema.dashboard_app import _merge_account_history_into_console_state
+
+    source = tmp_path / "worker.db"
+    state = tmp_path / "console-state.db"
+    schema = """CREATE TABLE research_trials(
+        trial_id TEXT PRIMARY KEY,family TEXT NOT NULL,hypothesis TEXT NOT NULL,
+        params_json TEXT NOT NULL,feature_set_version TEXT NOT NULL,status TEXT NOT NULL,
+        created_at TEXT NOT NULL,parent_trial_id TEXT,status_updated_at TEXT)"""
+    with sqlite3.connect(source) as conn:
+        conn.execute(schema)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?)", (
+            "trial-id", "worker-copy", "worker hypothesis", '{"market_id":"new"}', "v1",
+            "rejected", "2026-09-30T12:00:00Z", None, "2026-09-30T12:05:00Z",
+        ))
+    with sqlite3.connect(state) as conn:
+        conn.execute(schema)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?)", (
+            "trial-id", "sidecar-canonical", "canonical hypothesis", '{"market_id":"old"}', "v1",
+            "running", "2026-09-30T12:00:00Z", None, "2026-09-30T12:02:00Z",
+        ))
+
+    _merge_account_history_into_console_state(str(source), str(state))
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute(
+            "SELECT status,status_updated_at,family,hypothesis,params_json FROM research_trials"
+        ).fetchone() == (
+            "rejected", "2026-09-30T12:05:00Z", "sidecar-canonical", "canonical hypothesis",
+            '{"market_id":"old"}',
+        )
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE research_trials SET status='promoted',status_updated_at='2026-09-30T12:08:00Z' "
+            "WHERE trial_id='trial-id'"
+        )
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute(
+            "SELECT status,status_updated_at FROM research_trials WHERE trial_id='trial-id'"
+        ).fetchone() == ("promoted", "2026-09-30T12:08:00Z")
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE research_trials SET status='retired',status_updated_at='2026-09-30T12:07:00Z' "
+            "WHERE trial_id='trial-id'"
+        )
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute(
+            "SELECT status,status_updated_at FROM research_trials WHERE trial_id='trial-id'"
+        ).fetchone() == ("promoted", "2026-09-30T12:08:00Z")
+
+
 def test_console_research_migration_advances_mutable_trial_status(tmp_path):
     from noema.dashboard_app import _merge_account_history_into_console_state
 
