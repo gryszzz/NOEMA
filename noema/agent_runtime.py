@@ -648,15 +648,22 @@ async def run_cycle(
             for item in (evolution.kalshi, evolution.trench)
         )
         challenger_count = sum(
-            len(item.experiments)
+            sum(experiment.status == "registered" for experiment in item.experiments)
             for item in (evolution.kalshi, evolution.trench)
         )
+        deferred_challenger_count = sum(
+            sum(experiment.status == "deferred" for experiment in item.experiments)
+            for item in (evolution.kalshi, evolution.trench)
+        )
+        admitted_challenger_count = len(evolution.admitted_trial_ids)
     except (sqlite3.Error, ValueError, OSError, KeyError) as exc:
         ecosystem_plan = None
         ecosystem_state = "degraded"
         ecosystem_focus = None
         evolution_reviews = 0
         challenger_count = 0
+        deferred_challenger_count = 0
+        admitted_challenger_count = 0
         _log("agent_ecosystem_error", error=type(exc).__name__)
     finish_stage(stage_name)
     stage_name = "cognition_and_goal_selection"
@@ -758,6 +765,8 @@ async def run_cycle(
                 f"ecosystem_idle={0.0 if ecosystem_plan is None else ecosystem_plan.idle_fraction:.3f}; "
                 f"evolution_reviews={evolution_reviews}; "
                 f"challengers_registered={challenger_count}; "
+                f"challengers_deferred={deferred_challenger_count}; "
+                f"challengers_admitted={admitted_challenger_count}; "
                 f"trench={trench.status}; "
                 f"polymarket_us={polymarket_connection.status}; "
                 f"stripe_economy={stripe_economy.get('status')}; "

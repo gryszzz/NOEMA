@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,7 @@ class ExperimentProposal:
 class RegisteredExperiment:
     trial_id: str
     proposal: ExperimentProposal
+    status: str = "registered"
 
 
 def _bounded_priority(value: float) -> float:
@@ -239,18 +241,47 @@ def register_challengers(
 ) -> tuple[RegisteredExperiment, ...]:
     store = ResearchTrialStore(db_path)
     registered: list[RegisteredExperiment] = []
-    for proposal in propose_challengers(profile, evidence, decision):
-        # A hypothesis without an exact isolated worker is not a runnable trial.
-        # Keep it out of the registered queue until its evidence path exists.
-        if handler_for_contract(
-            proposal.family, proposal.feature_set_version, proposal.params,
-        ) is None:
-            continue
-        trial_id = store.register(
-            family=proposal.family,
-            hypothesis=proposal.hypothesis,
-            params=proposal.params,
-            feature_set_version=proposal.feature_set_version,
-        )
-        registered.append(RegisteredExperiment(trial_id, proposal))
+    try:
+        for proposal in propose_challengers(profile, evidence, decision):
+            # Preserve the measured hypothesis durably, but keep unsupported contracts
+            # out of the runnable queue until their exact worker exists.
+            supported = handler_for_contract(
+                proposal.family, proposal.feature_set_version, proposal.params,
+            ) is not None
+            status = "registered" if supported else "deferred"
+            trial_id = store.register(
+                family=proposal.family,
+                hypothesis=proposal.hypothesis,
+                params=proposal.params,
+                feature_set_version=proposal.feature_set_version,
+                status=status,
+            )
+            registered.append(RegisteredExperiment(trial_id, proposal, status))
+    finally:
+        store.conn.close()
     return tuple(registered)
+
+
+def admit_deferred_challengers(db_path: str) -> tuple[str, ...]:
+    """Promote deferred hypotheses once their exact allowlisted workers exist.
+
+    Called from the normal evolution cycle, independently of whether new evidence
+    was reviewed, so implementation support arriving later does not require another
+    evidence change or owner-triggered registration.
+    """
+
+    store = ResearchTrialStore(db_path)
+    admitted: list[str] = []
+    try:
+        for trial in store.deferred():
+            try:
+                params = json.loads(trial.params_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if handler_for_contract(trial.family, trial.feature_set_version, params) is None:
+                continue
+            store.set_status(trial.trial_id, "registered")
+            admitted.append(trial.trial_id)
+    finally:
+        store.conn.close()
+    return tuple(admitted)

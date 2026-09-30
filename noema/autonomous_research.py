@@ -19,10 +19,10 @@ from pathlib import Path
 import httpx
 from mcp.shared.exceptions import McpError
 
+from . import experiment_factory
 from .agent_identity import AgentIdentity
 from .ecosystem import EcosystemPlan
 from .ecosystem_controller import record_mission_allocation_review
-from .experiment_factory import handler_for_contract
 from .knowledge import KnowledgeStore
 from .mission_critic import CRITIC_ID, evaluate_result
 from .mission_store import MissionStore
@@ -214,7 +214,9 @@ class ResearchWorkStore:
 def handler_for(trial: ResearchTrial) -> tuple[str, str] | None:
     params = json.loads(trial.params_json)
     # Exact contract matching: untrusted free text, paths and extra parameters are never run.
-    return handler_for_contract(trial.family, trial.feature_set_version, params)
+    return experiment_factory.handler_for_contract(
+        trial.family, trial.feature_set_version, params,
+    )
 
 
 def register_trench_trial_if_ready(
