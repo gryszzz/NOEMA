@@ -327,6 +327,8 @@ def _kalshi_account_metrics(
     fills_complete = fills.get("pagination", {}).get("complete") is True
     settlements_complete = settlements.get("pagination", {}).get("complete") is True
     positions_complete = positions.get("pagination", {}).get("complete") is True
+    open_position_count = _kalshi_open_position_count(positions.get("market_positions"))
+    positions_flat = positions_complete and open_position_count == 0
     cashflows: list[Decimal | None] = []
     volume_values: list[Decimal | None] = []
     for row in fill_rows:
@@ -452,7 +454,7 @@ def _kalshi_account_metrics(
     if (cash is not None and portfolio is not None and baseline_equity is not None
             and deposit_complete and withdrawal_complete and transfers_complete
             and deposits_net is not None and withdrawals_net is not None and window_realized is not None
-            and fills_complete and settlements_complete and positions_complete and not position_rows
+            and fills_complete and settlements_complete and positions_flat
             and not transfer_scope_conflict):
         end_equity = cash + portfolio
         external_net = deposits_net + withdrawals_net
@@ -516,6 +518,16 @@ def _kalshi_account_metrics(
             None if fees is not None else ("Fill or settlement pagination is incomplete." if not fills_complete or not settlements_complete else "At least one fill or settlement is missing fee_cost."),
             source_ids=fill_ids + settlement_ids, components={"basis": "fill fee_cost + settlement fee_cost"}),
     }
+
+
+def _kalshi_open_position_count(rows: Any) -> int | None:
+    """Count only nonzero authenticated positions; unknown quantity is not flat."""
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return None
+    quantities = [_decimal(row.get("position_fp")) for row in rows]
+    if any(quantity is None for quantity in quantities):
+        return None
+    return sum(quantity != 0 for quantity in quantities)
 
 
 def _polymarket_activity_keys(row: Any) -> set[str]:
@@ -740,6 +752,10 @@ async def _kalshi_status() -> dict[str, Any]:
                 "pagination": {**snapshot.transfers.get("pagination", {}),
                                "complete": transfers_complete},
             }
+            open_position_count = (
+                _kalshi_open_position_count(snapshot.positions.get("market_positions"))
+                if positions_complete else None
+            )
             balance_updated_at = _kalshi_balance_updated_at(snapshot.balance.get("updated_ts"))
             baseline = get_or_create_prediction_account_baseline(
                 os.getenv("NOEMA_DB_PATH", "data/noema.db"), "kalshi",
@@ -752,8 +768,7 @@ async def _kalshi_status() -> dict[str, Any]:
                      format((_decimal(snapshot.balance.get("portfolio_value")) / 100).normalize(), "f"))
                 ),
                 positions_complete=positions_complete,
-                open_positions=(len(snapshot.positions.get("market_positions", []))
-                                if positions_complete else None),
+                open_positions=open_position_count,
             )
             account_metrics = _kalshi_account_metrics(
                 snapshot.balance, snapshot.positions, metric_fills, metric_settlements,
@@ -783,7 +798,7 @@ async def _kalshi_status() -> dict[str, Any]:
                 "observed_at": datetime.now(UTC).isoformat(),
                 "capital": capital,
                 "account_metrics": account_metrics,
-                "positions": len(snapshot.positions.get("market_positions", [])),
+                "positions": open_position_count,
                 "open_orders": sum(
                     str(order.get("status", "")).lower() in {"resting", "open", "pending"}
                     for order in snapshot.orders.get("orders", [])

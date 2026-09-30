@@ -41,6 +41,7 @@ from .operations_dashboard import build_operations
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
 from .polymarket_account_stream import run_polymarket_account_stream
+from .prediction_account_history import _ensure_schema as ensure_prediction_account_schema
 from .prediction_venues import (
     apply_polymarket_stream_projection,
     build_prediction_venue_status,
@@ -62,6 +63,55 @@ _log = logging.getLogger(__name__)
 
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 _MAX_DATABASE_BYTES = 512 * 1024 * 1024
+
+
+def _preserve_console_account_history(incoming_path: str, current_path: str) -> None:
+    """Keep console-collected account evidence across worker snapshot replacement."""
+    incoming = Path(incoming_path)
+    current = Path(current_path)
+    if not current.is_file():
+        return
+    source_uri = current.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=2) as source, \
+            sqlite3.connect(incoming, timeout=2) as target:
+        source_tables = {row[0] for row in source.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        retained_tables = {
+            "prediction_account_records", "prediction_account_sync_state",
+            "prediction_account_baselines", "live_balance_observations",
+        }
+        if not source_tables.intersection(retained_tables):
+            return
+        ensure_prediction_account_schema(target)
+        for table, columns in (
+            ("prediction_account_records", "venue,record_type,external_id,market_id,related_order_id,occurred_at,first_observed_at,last_observed_at,state,payload_json"),
+            ("prediction_account_sync_state", "venue,stream,last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type"),
+        ):
+            if table not in source_tables:
+                continue
+            rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
+            placeholders = ",".join("?" for _ in columns.split(","))
+            target.executemany(
+                f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})", rows,
+            )
+        if "prediction_account_baselines" in source_tables:
+            target.execute("""CREATE TABLE IF NOT EXISTS prediction_account_baselines (
+                venue TEXT PRIMARY KEY, observed_at TEXT NOT NULL, cash_usd TEXT NOT NULL,
+                portfolio_value_usd TEXT NOT NULL, source TEXT NOT NULL)""")
+            target.executemany("""INSERT OR IGNORE INTO prediction_account_baselines
+                (venue,observed_at,cash_usd,portfolio_value_usd,source) VALUES (?,?,?,?,?)""",
+                source.execute("SELECT venue,observed_at,cash_usd,portfolio_value_usd,source "
+                               "FROM prediction_account_baselines").fetchall())
+        if "live_balance_observations" in source_tables:
+            target.execute("""CREATE TABLE IF NOT EXISTS live_balance_observations (
+                fingerprint TEXT PRIMARY KEY, observed_at TEXT NOT NULL, amount_usd TEXT NOT NULL,
+                scope TEXT NOT NULL, sources_json TEXT NOT NULL)""")
+            target.executemany("""INSERT OR IGNORE INTO live_balance_observations
+                (fingerprint,observed_at,amount_usd,scope,sources_json) VALUES (?,?,?,?,?)""",
+                source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
+                               "FROM live_balance_observations").fetchall())
+        target.commit()
 
 
 def _constant_time_equal(left: str, right: str) -> bool:
@@ -254,7 +304,7 @@ def runtime_info() -> dict[str, Any]:
 
 @app.post("/internal/snapshot")
 async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
-    """Atomically replace the console's read-only replica with a verified SQLite image."""
+    """Atomically replace the console's worker snapshot and retain its own live evidence."""
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -296,7 +346,15 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         else:
             if check is None or check[0] != "ok":
                 raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
-        os.chmod(temporary_path, 0o444)
+        _preserve_console_account_history(temporary_path, str(destination))
+        uri = Path(temporary_path).resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+            check = conn.execute("PRAGMA quick_check").fetchone()
+        if check is None or check[0] != "ok":
+            raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
+        # Account polling, live balance history, and metadata persist between
+        # worker snapshot commits on the console's durable disk.
+        os.chmod(temporary_path, 0o600)
         os.replace(temporary_path, destination)
         temporary_path = None
         if worker_metadata is not None:

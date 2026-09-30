@@ -61,6 +61,23 @@ def test_prediction_venues_endpoint_returns_read_only_status(monkeypatch) -> Non
     assert response.json()["execution_enabled"] is False
 
 
+def test_wallet_refresh_applies_native_asset_valuation_before_projection(monkeypatch) -> None:
+    async def raw_wallets():
+        return [{"chain": "solana", "address": "wallet", "readable": True, "sol": "2"}]
+
+    async def value_wallets(networks):
+        return [{**networks[0], "native_value_usd": "300.00",
+                 "native_valuation": {"source": "test spot quote", "price_usd": "150"}}]
+
+    monkeypatch.setattr("noema.dashboard_app.live_wallet_networks", raw_wallets)
+    monkeypatch.setattr("noema.dashboard_app.value_native_wallets", value_wallets)
+    response = TestClient(app).get("/api/wallet-status?force=true")
+    assert response.status_code == 200
+    network = response.json()["networks"][0]
+    assert network["native_value_usd"] == "300.00"
+    assert network["native_valuation"]["source"] == "test spot quote"
+
+
 def test_stripe_projection_endpoint_is_read_only_and_safe_without_database(monkeypatch, tmp_path) -> None:
     path = tmp_path / "missing-stripe.db"
     monkeypatch.setenv("NOEMA_DB_PATH", str(path))
@@ -133,9 +150,39 @@ def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tm
     )
     assert accepted.status_code == 200
     replica = tmp_path / "console-replica.db"
-    assert stat.S_IMODE(replica.stat().st_mode) == 0o444
+    assert stat.S_IMODE(replica.stat().st_mode) == 0o600
     with sqlite3.connect(replica) as conn:
         assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "real-market-record"
+
+
+def test_worker_snapshot_preserves_console_account_records(monkeypatch, tmp_path) -> None:
+    from noema.prediction_account_history import _ensure_schema
+
+    replica = tmp_path / "console-replica.db"
+    with sqlite3.connect(replica) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO prediction_account_records VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("kalshi", "fill", "fill-1", "KXTEST", None, None,
+             "2026-09-30T12:00:00+00:00", "2026-09-30T12:00:00+00:00",
+             "observed", "{}"),
+        )
+    source = tmp_path / "worker-source.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO worker_observation VALUES ('fresh-worker-record')")
+    monkeypatch.setenv("NOEMA_DB_PATH", str(replica))
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+    response = TestClient(app).post(
+        "/internal/snapshot", content=gzip.compress(source.read_bytes()),
+        headers={"Authorization": "Bearer snapshot-test-token"},
+    )
+    assert response.status_code == 200
+    with sqlite3.connect(replica) as conn:
+        assert conn.execute(
+            "SELECT external_id FROM prediction_account_records WHERE venue='kalshi'"
+        ).fetchone()[0] == "fill-1"
+        assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "fresh-worker-record"
 
 
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:
