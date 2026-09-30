@@ -1,4 +1,9 @@
-from noema.experiment_factory import propose_challengers, register_challengers
+from noema.experiment_factory import (
+    admit_deferred_challengers,
+    propose_challengers,
+    register_challengers,
+)
+from noema.research_trials import ResearchTrialStore
 from noema.specialist_evolution import SpecialistEvidence
 from noema.specialists import SpecialistProfile, SpecialistState
 
@@ -52,7 +57,9 @@ def test_trench_trial_waits_for_full_walk_forward_evidence_floor() -> None:
     assert proposals[0].params["model"] == "logistic_baseline"
 
 
-def test_register_challengers_only_registers_allowlisted_worker_contracts(tmp_path) -> None:
+def test_unsupported_challengers_are_deferred_then_admitted_when_worker_exists(
+    tmp_path, monkeypatch,
+) -> None:
     profile = SpecialistProfile(
         name="kalshi-history",
         family="prediction_markets",
@@ -73,12 +80,43 @@ def test_register_challengers_only_registers_allowlisted_worker_contracts(tmp_pa
         research_credible=None,
     )
 
-    registered = register_challengers(
-        str(tmp_path / "trials.db"), profile=profile, evidence=evidence, decision=None,
+    db_path = str(tmp_path / "trials.db")
+    proposals = register_challengers(
+        db_path, profile=profile, evidence=evidence, decision=None,
     )
 
-    assert len(registered) == 1
-    assert registered[0].proposal.family == "prediction_markets_execution"
+    assert {proposal.status for proposal in proposals} == {"registered", "deferred"}
+    trial_store = ResearchTrialStore(db_path)
+    deferred = next(
+        proposal for proposal in proposals
+        if proposal.status == "deferred"
+        and proposal.proposal.family == "prediction_markets_calibration"
+    )
+    deferred_trial = trial_store.get(deferred.trial_id)
+    assert deferred_trial is not None
+    assert deferred_trial.status == "deferred"
+    assert deferred_trial.hypothesis == deferred.proposal.hypothesis
+    assert deferred_trial.params_json
+
+    assert admit_deferred_challengers(db_path) == ()
+    assert trial_store.get(deferred_trial.trial_id).status == "deferred"
+
+    def add_calibration_worker(family, feature_set_version, params):
+        if (
+            family == "prediction_markets_calibration"
+            and feature_set_version == "calibration-v1"
+            and params.get("experiment") == "calibration_challenger"
+        ):
+            return "kalshi-history", "calibration_challenger"
+        return None
+
+    monkeypatch.setattr(
+        "noema.experiment_factory.handler_for_contract", add_calibration_worker,
+    )
+    admitted = admit_deferred_challengers(db_path)
+
+    assert admitted == (deferred_trial.trial_id,)
+    assert trial_store.get(deferred_trial.trial_id).status == "registered"
 
 
 def test_experiment_factory_reacts_to_calibration_and_cost_failure() -> None:
