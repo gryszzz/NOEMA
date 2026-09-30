@@ -903,7 +903,10 @@ def _append_additional_console_records(
         (str(row.get("trial_id")), str(row.get("evidence_hash")), str(row.get("worker_version"))): index
         for index, row in enumerate(result["sections"]["research_runs"]["rows"])
     }
-    seen_experiments = {str(row.get("trial_id")) for row in result["sections"]["experiments"]["rows"]}
+    seen_experiments = {
+        str(row.get("trial_id")): index
+        for index, row in enumerate(result["sections"]["experiments"]["rows"])
+    }
     seen_wallet = {
         (row.get("created_at"), row.get("event_type"), row.get("amount_usd"),
          json.dumps(row.get("payload"), sort_keys=True, default=str))
@@ -999,9 +1002,6 @@ def _append_additional_console_records(
                         + "LIMIT 100"
                     ):
                         trial_id = str(row["trial_id"])
-                        if trial_id in seen_experiments:
-                            continue
-                        seen_experiments.add(trial_id)
                         record = {key: _scalar(value) for key, value in dict(row).items()
                                   if key != "params_json"}
                         params: dict[str, Any] = {}
@@ -1042,7 +1042,22 @@ def _append_additional_console_records(
                             conn, tables | decision_tables, record, params,
                             decision_conn=decision_conn, decision_tables=decision_tables,
                         ))
-                        result["sections"]["experiments"]["rows"].append(record)
+                        existing_index = seen_experiments.get(trial_id)
+                        if existing_index is None:
+                            seen_experiments[trial_id] = len(
+                                result["sections"]["experiments"]["rows"])
+                            result["sections"]["experiments"]["rows"].append(record)
+                        else:
+                            existing_record = result["sections"]["experiments"]["rows"][existing_index]
+                            terminal = {"rejected", "promoted", "retired", "completed", "passed", "failed"}
+                            if (str(record.get("status") or "").casefold() in terminal
+                                    and str(existing_record.get("status") or "").casefold()
+                                    not in terminal):
+                                result["sections"]["experiments"]["rows"][existing_index] = record
+                            else:
+                                for key, value in record.items():
+                                    if existing_record.get(key) is None and value is not None:
+                                        existing_record[key] = value
             if "economic_events" in tables:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}
                 wallet_columns = {"id", "created_at", "event_type", "amount_usd", "payload_json"}

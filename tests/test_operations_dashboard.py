@@ -93,6 +93,12 @@ def test_sidecar_terminal_run_wins_over_incomplete_worker_copy(tmp_path):
 def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path):
     worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
     with sqlite3.connect(worker) as conn:
+        conn.execute("CREATE TABLE research_trials(trial_id TEXT,family TEXT,hypothesis TEXT,"
+                     "feature_set_version TEXT,status TEXT,created_at TEXT,parent_trial_id TEXT,params_json TEXT)")
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?)", (
+            "trial-a", "prediction", "test", "v1", "registered", NOW.isoformat(), None,
+            json.dumps({"strategy_id":"strategy-a"}),
+        ))
         conn.execute("CREATE TABLE forecast_ledger(id,created_at,venue,market_id,forecast_json,action_json)")
         conn.execute("INSERT INTO forecast_ledger VALUES(?,?,?,?,?,?)", (
             1, NOW.isoformat(), "kalshi", "MKT-A",
@@ -111,7 +117,7 @@ def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path)
                 observation_hash,observation_json);
         """)
         conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?)", (
-            "trial-a", "prediction", "test", "v1", "registered", NOW.isoformat(), None,
+            "trial-a", "prediction", "test", "v1", "promoted", NOW.isoformat(), None,
             json.dumps({"strategy_id":"strategy-a", "candidate_observation_hash":"obs-a"}),
         ))
         conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
@@ -127,6 +133,7 @@ def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path)
         str(worker), now=NOW, additional_paths=(str(sidecar),),
     )["sections"]["experiments"]["rows"][0]
     assert experiment["strategy_id"] == "strategy-a"
+    assert experiment["status"] == "promoted"
     assert experiment["market_id"] == "MKT-A"
     assert experiment["market_ids"] == ["MKT-A"]
     assert experiment["run_count"] == 1
