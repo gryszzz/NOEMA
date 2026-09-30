@@ -74,6 +74,18 @@ def _authority():
     )
 
 
+def test_execution_proposal_persists_attribution_identifiers() -> None:
+    proposal, _, _, _ = _proposal()
+    attributed = replace(
+        proposal, decision_id="decision-live-1", strategy_id="strategy-live-1",
+        experiment_id="experiment-live-1",
+    )
+    payload = ExecutionGateway._proposal_payload(attributed)
+    assert payload["decision_id"] == "decision-live-1"
+    assert payload["strategy_id"] == "strategy-live-1"
+    assert payload["experiment_id"] == "experiment-live-1"
+
+
 @pytest.mark.asyncio
 async def test_prediction_action_fails_closed_and_is_audited_by_default(tmp_path, monkeypatch):
     monkeypatch.delenv("NOEMA_EXECUTION_GATEWAY_ENABLED", raising=False)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import logging
 import os
 import secrets
 import sqlite3
@@ -33,10 +34,13 @@ from .execution_gateway import ExecutionGateway
 from .kalshi_telemetry import KalshiTelemetry
 from .knowledge import build_knowledge_overview
 from .ladder import build_ladder_report
+from .live_balance import balance_history
 from .operations_dashboard import build_operations
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
-from .prediction_venues import build_prediction_venue_status
+from .polymarket_account_stream import run_polymarket_account_stream
+from .prediction_account_history import _ensure_schema as ensure_prediction_account_schema
+from .prediction_venues import apply_polymarket_stream_projection, build_prediction_venue_status
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
@@ -46,8 +50,57 @@ app = FastAPI(title="NOEMA Ops Console", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 _wallet_status_cache: dict[str, Any] = {"fetched_at": 0.0, "networks": []}
 _wallet_status_lock = asyncio.Lock()
+_capital_sampler_task: asyncio.Task | None = None
+_polymarket_stream_task: asyncio.Task | None = None
+_log = logging.getLogger(__name__)
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 _MAX_DATABASE_BYTES = 512 * 1024 * 1024
+
+
+def _preserve_console_account_history(incoming_path: str, current_path: str) -> None:
+    """Carry console-owned live observations across verified worker snapshot swaps."""
+    incoming = Path(incoming_path)
+    current = Path(current_path)
+    if not current.is_file():
+        return
+    source_uri = current.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=2) as source, \
+            sqlite3.connect(incoming, timeout=2) as target:
+        source_tables = {row[0] for row in source.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if not source_tables.intersection({"prediction_account_records", "prediction_account_sync_state",
+                                    "prediction_account_baselines", "live_balance_observations"}):
+            return
+        ensure_prediction_account_schema(target)
+        for table, columns in (
+            ("prediction_account_records", "venue,record_type,external_id,market_id,related_order_id,occurred_at,first_observed_at,last_observed_at,state,payload_json"),
+            ("prediction_account_sync_state", "venue,stream,last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type"),
+        ):
+            if table in source_tables:
+                column_names = columns.split(",")
+                rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
+                placeholders = ",".join("?" for _ in column_names)
+                target.executemany(
+                    f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})", rows,
+                )
+        if "prediction_account_baselines" in source_tables:
+            target.execute("""CREATE TABLE IF NOT EXISTS prediction_account_baselines (
+                venue TEXT PRIMARY KEY, observed_at TEXT NOT NULL, cash_usd TEXT NOT NULL,
+                portfolio_value_usd TEXT NOT NULL, source TEXT NOT NULL)""")
+            target.executemany("""INSERT OR IGNORE INTO prediction_account_baselines
+                (venue,observed_at,cash_usd,portfolio_value_usd,source) VALUES (?,?,?,?,?)""",
+                source.execute("SELECT venue,observed_at,cash_usd,portfolio_value_usd,source "
+                               "FROM prediction_account_baselines").fetchall())
+        if "live_balance_observations" in source_tables:
+            target.execute("""CREATE TABLE IF NOT EXISTS live_balance_observations (
+                fingerprint TEXT PRIMARY KEY, observed_at TEXT NOT NULL, amount_usd TEXT NOT NULL,
+                scope TEXT NOT NULL, sources_json TEXT NOT NULL)""")
+            target.executemany("""INSERT OR IGNORE INTO live_balance_observations
+                (fingerprint,observed_at,amount_usd,scope,sources_json) VALUES (?,?,?,?,?)""",
+                source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
+                               "FROM live_balance_observations").fetchall())
+        target.commit()
 
 
 def _constant_time_equal(left: str, right: str) -> bool:
@@ -97,6 +150,69 @@ async def protect_console(request: Request, call_next):
 
 def _db_path() -> str:
     return os.getenv("NOEMA_DB_PATH", "data/noema.db")
+
+
+def _capital_sample_interval() -> int:
+    try:
+        return max(15, min(300, int(os.getenv("NOEMA_CAPITAL_SAMPLE_INTERVAL_SECONDS", "15"))))
+    except ValueError:
+        return 15
+
+
+def _capital_sample_sleep_seconds(interval: int, cycle_started: float,
+                                  now: float | None = None) -> float:
+    """Schedule by collection start time, not completion time plus a full interval."""
+    elapsed = max(0.0, (time.monotonic() if now is None else now) - cycle_started)
+    return max(0.0, interval - elapsed)
+
+
+async def _sample_capital_history() -> None:
+    """Persist fresh source observations independently of connected browser clients."""
+    while True:
+        cycle_started = time.monotonic()
+        if not Path(_db_path()).is_file():
+            await asyncio.sleep(5)
+            continue
+        try:
+            wallets, venues = await asyncio.gather(
+                wallet_status(force=True), prediction_venues(force=True),
+            )
+            stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
+            await asyncio.to_thread(
+                balance_history, _db_path(), venues,
+                {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
+                window="24H", stripe=stripe,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error, TimeoutError):
+            _log.warning("Capital history sampler could not complete an observation")
+        await asyncio.sleep(_capital_sample_sleep_seconds(
+            _capital_sample_interval(), cycle_started,
+        ))
+
+
+@app.on_event("startup")
+async def start_live_account_updates() -> None:
+    global _capital_sampler_task, _polymarket_stream_task
+    if os.getenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+        _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
+    _polymarket_stream_task = asyncio.create_task(
+        run_polymarket_account_stream(_db_path, apply_polymarket_stream_projection),
+        name="noema-polymarket-account-stream",
+    )
+
+
+@app.on_event("shutdown")
+async def stop_live_account_updates() -> None:
+    global _capital_sampler_task, _polymarket_stream_task
+    for task in (_capital_sampler_task, _polymarket_stream_task):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    _capital_sampler_task = None
+    _polymarket_stream_task = None
 
 
 def _worker_provider_health() -> dict[str, Any]:
@@ -216,7 +332,15 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         else:
             if check is None or check[0] != "ok":
                 raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
-        os.chmod(temporary_path, 0o444)
+        _preserve_console_account_history(temporary_path, str(destination))
+        uri = Path(temporary_path).resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+            check = conn.execute("PRAGMA quick_check").fetchone()
+        if check is None or check[0] != "ok":
+            raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
+        # The console writes account history and worker metadata into this
+        # durable replica between snapshot swaps.
+        os.chmod(temporary_path, 0o600)
         os.replace(temporary_path, destination)
         temporary_path = None
         if worker_metadata is not None:
@@ -398,12 +522,12 @@ async def execution_gateway_status() -> dict[str, Any]:
 
 
 @app.get("/api/wallet-status")
-async def wallet_status() -> dict[str, Any]:
+async def wallet_status(*, force: bool = False) -> dict[str, Any]:
     now = time.monotonic()
-    if now - float(_wallet_status_cache["fetched_at"]) > 60:
+    if force or now - float(_wallet_status_cache["fetched_at"]) > 15:
         async with _wallet_status_lock:
             now = time.monotonic()
-            if now - float(_wallet_status_cache["fetched_at"]) > 60:
+            if force or now - float(_wallet_status_cache["fetched_at"]) > 15:
                 _wallet_status_cache["networks"] = await live_wallet_networks()
                 _wallet_status_cache["fetched_at"] = time.monotonic()
     policy = public_wallet_policy()
@@ -423,6 +547,8 @@ async def wallet_status() -> dict[str, Any]:
         row["signing_enabled"] = False
         networks.append(row)
     return {
+        "observed_at": datetime.now(UTC).isoformat(),
+        "refresh_interval_seconds": 15,
         "as_of_monotonic": _wallet_status_cache["fetched_at"],
         "control_plane": {
             "live_execution_enabled": False,
@@ -461,6 +587,19 @@ async def live_account() -> dict[str, Any]:
 
 
 @app.get("/api/prediction-venues")
-async def prediction_venues() -> dict[str, Any]:
+async def prediction_venues(*, force: bool = False) -> dict[str, Any]:
     """Current official read-only status for supported prediction venues."""
-    return await build_prediction_venue_status()
+    return await build_prediction_venue_status(force=force)
+
+
+@app.get("/api/balance-history")
+async def live_balance_history(window: str = "24H") -> dict[str, Any]:
+    if window not in {"1H", "24H", "7D", "30D", "ALL"}:
+        raise HTTPException(status_code=400, detail="unsupported balance history window")
+    wallets, venues = await asyncio.gather(wallet_status(), prediction_venues())
+    stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
+    return await asyncio.to_thread(
+        balance_history, _db_path(), venues,
+        {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
+        window=window, stripe=stripe,
+    )

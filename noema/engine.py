@@ -48,6 +48,7 @@ class NoemaEngine:
 
     async def scan_once(
         self, bankroll_usd: float, *, mission_id: str | None = None,
+        strategy_id: str | None = None, experiment_id: str | None = None,
     ) -> list[str]:
         results: list[str] = []
 
@@ -98,6 +99,9 @@ class NoemaEngine:
                     opportunity=opportunity,
                     action=action,
                     evidence_refs=forecast.evidence_ids,
+                    decision_id=f"{mission_id}:{market.venue}:{market.market_id}:{forecast.created_at.isoformat()}",
+                    strategy_id=strategy_id,
+                    experiment_id=experiment_id,
                     expires_at=datetime.now(UTC) + timedelta(
                         seconds=max(1, int(self.risk.policy.max_market_data_age_seconds)),
                     ),

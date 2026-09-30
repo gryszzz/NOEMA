@@ -36,11 +36,16 @@ class ExecutionProposal:
     evidence_refs: tuple[str, ...]
     created_at: datetime
     expires_at: datetime
+    decision_id: str | None = None
+    strategy_id: str | None = None
+    experiment_id: str | None = None
 
     @classmethod
     def from_opportunity(
         cls, *, proposal_id: str, mission_id: str, opportunity: Opportunity,
         action: Action, evidence_refs: tuple[str, ...], expires_at: datetime,
+        decision_id: str | None = None, strategy_id: str | None = None,
+        experiment_id: str | None = None,
     ) -> ExecutionProposal:
         if action.decision is not Decision.LIVE_BUY_YES or action.max_price is None:
             raise ValueError("only a deterministic live YES order can form this proposal")
@@ -55,6 +60,7 @@ class ExecutionProposal:
             limit_price=Decimal(str(action.max_price)),
             expected_edge=Decimal(str(opportunity.robust_edge)),
             evidence_refs=tuple(evidence_refs), created_at=now, expires_at=expires_at,
+            decision_id=decision_id, strategy_id=strategy_id, experiment_id=experiment_id,
         )
 
 

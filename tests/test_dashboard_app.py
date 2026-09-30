@@ -5,7 +5,12 @@ import stat
 
 from fastapi.testclient import TestClient
 
-from noema.dashboard_app import _runtime_change_stream, app
+from noema.dashboard_app import _capital_sample_sleep_seconds, _runtime_change_stream, app
+
+
+def test_capital_sampler_uses_start_to_start_cadence() -> None:
+    assert _capital_sample_sleep_seconds(15, 100.0, now=106.0) == 9.0
+    assert _capital_sample_sleep_seconds(15, 100.0, now=117.0) == 0.0
 
 
 def test_dashboard_root_renders_console() -> None:
@@ -46,7 +51,7 @@ def test_execution_gateway_endpoint_is_read_only_and_fail_closed_without_databas
 
 
 def test_prediction_venues_endpoint_returns_read_only_status(monkeypatch) -> None:
-    async def fake_status():
+    async def fake_status(*, force=False):
         return {"execution_enabled": False, "venues": [], "cross_venue_comparison": {"matches": []}}
 
     monkeypatch.setattr("noema.dashboard_app.build_prediction_venue_status", fake_status)
@@ -127,9 +132,40 @@ def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tm
     )
     assert accepted.status_code == 200
     replica = tmp_path / "console-replica.db"
-    assert stat.S_IMODE(replica.stat().st_mode) == 0o444
+    assert stat.S_IMODE(replica.stat().st_mode) == 0o600
     with sqlite3.connect(replica) as conn:
         assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "real-market-record"
+        conn.execute("CREATE TABLE console_write_check (value TEXT)")
+
+
+def test_worker_snapshot_preserves_persisted_account_history(monkeypatch, tmp_path) -> None:
+    from noema.prediction_account_history import _ensure_schema
+
+    replica = tmp_path / "console-replica.db"
+    with sqlite3.connect(replica) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO prediction_account_records VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("kalshi", "fill", "live-fill-1", "KXTEST", None, None,
+             "2026-09-30T12:00:00+00:00", "2026-09-30T12:00:00+00:00",
+             "observed", "{}"),
+        )
+    source = tmp_path / "worker-source.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO worker_observation VALUES ('fresh-worker-record')")
+    monkeypatch.setenv("NOEMA_DB_PATH", str(replica))
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+    response = TestClient(app).post(
+        "/internal/snapshot", content=gzip.compress(source.read_bytes()),
+        headers={"Authorization": "Bearer snapshot-test-token"},
+    )
+    assert response.status_code == 200
+    with sqlite3.connect(replica) as conn:
+        assert conn.execute(
+            "SELECT external_id FROM prediction_account_records WHERE venue='kalshi'"
+        ).fetchone()[0] == "live-fill-1"
+        assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "fresh-worker-record"
 
 
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:
