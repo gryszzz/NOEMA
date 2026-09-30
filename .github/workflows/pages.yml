@@ -45,7 +45,7 @@ jobs:
       - name: Build Python wheel
         run: pip wheel --no-deps . --wheel-dir /tmp/noema-wheels
       - name: Validate source
-        run: ruff check . && pytest -q && npm run site:test
+        run: ruff check . && pytest -q && npm run site:test && npm run ops:test
 
       - name: Detect GitHub Pages
         id: pages
@@ -98,6 +98,9 @@ jobs:
         env:
           SITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}
         run: npm run site:qa
+
+      - name: Verify operations console
+        run: npm run ops:qa
 
       - name: Configure Pages
         if: steps.pages.outputs.enabled == 'true'

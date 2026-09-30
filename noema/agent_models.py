@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -28,6 +28,9 @@ class AgentCycleState:
     market_data: AgentConnectionState = AgentConnectionState("unconfigured")
     trench: AgentConnectionState = AgentConnectionState("disabled")
     polymarket_us: AgentConnectionState = AgentConnectionState("unconfigured")
+    duration_seconds: float | None = None
+    cadence_seconds: float | None = None
+    stage_timings: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

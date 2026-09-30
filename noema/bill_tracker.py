@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from .economic_ledger import EconomicEvent, ensure_economic_event_schema, record_event_on_connection
+
 
 def _money(value: Decimal) -> Decimal:
     if not value.is_finite() or value < 0 or value.as_tuple().exponent < -2:
@@ -21,6 +23,7 @@ class BillTracker:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
+        self.path = str(db)
         self.conn = sqlite3.connect(db)
         self.conn.execute(
             """CREATE TABLE IF NOT EXISTS bill_budget (
@@ -50,6 +53,7 @@ class BillTracker:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS bill_entries_activity_id ON bill_entries(activity_id)"
         )
+        ensure_economic_event_schema(self.conn)
         self.conn.commit()
 
     def configure(
@@ -83,13 +87,25 @@ class BillTracker:
         if activity_id is not None and (not activity_id.strip() or len(activity_id) > 128):
             raise ValueError("activity_id must be a non-empty identifier of at most 128 characters")
         at = (now or datetime.now(UTC)).astimezone(UTC)
-        self.conn.execute(
+        created_at = at.isoformat()
+        cursor = self.conn.execute(
             """INSERT INTO bill_entries
             (month_utc, kind, amount_usd, source, reference, created_at, activity_id)
             VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (at.strftime("%Y-%m"), kind, str(amount_usd), source.strip(),
-             reference.strip(), at.isoformat(), activity_id.strip() if activity_id else None),
+             reference.strip(), created_at, activity_id.strip() if activity_id else None),
         )
+        event_type = "operator_cash_receipt" if kind == "receipt" else "operator_expense_report"
+        record_event_on_connection(self.conn, EconomicEvent(
+            provider="operator_bill", external_reference_id=reference.strip(),
+            event_type=event_type, occurred_at=at, currency="USD", amount=amount_usd,
+            amount_usd=amount_usd, reconciliation_state="OBSERVED", value_state="realized",
+            capital_class="unclassified_cash" if kind == "receipt" else "cost",
+            confidence_state="operator_reported", completeness_state="incomplete",
+            activity_id=activity_id.strip() if activity_id else None,
+            evidence={"bill_entry_id": int(cursor.lastrowid), "source": source.strip(),
+                      "reference": reference.strip(), "classification": "operator_reported"},
+        ))
         self.conn.commit()
 
     def overview(self, *, now: datetime | None = None) -> dict[str, str | None]:

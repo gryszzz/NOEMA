@@ -265,9 +265,50 @@ async def test_research_selector_receives_registered_specialist_role_context(
     routed = captured['inputs']['candidates'][0]
     assert routed['assigned_specialist'] == 'trench-1'
     assert 'verified, timestamped observations' in routed['specialist_role']
-    assert captured['inputs']['selected_operational_goal'] == 'develop the currently evidence-favored specialist'
+    assert captured['inputs']['selected_operational_goal'] == 'improve measured research contribution and resource efficiency'
+    assert 'verified realized economic value after all' in captured['instructions']
     assert 'directly advances it' in captured['instructions']
     assert 'Candidate specialist roles are fixed routing context' in captured['instructions']
+
+
+@pytest.mark.asyncio
+async def test_explicit_openai_selection_does_not_route_to_local_or_cloudflare(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv('NOEMA_COGNITION_PROVIDER', 'openai')
+    monkeypatch.setenv('NOEMA_COGNITION_ENABLED', '1')
+    monkeypatch.setenv('NOEMA_LOCAL_COGNITION_ENABLED', '1')
+    monkeypatch.setenv('NOEMA_OPENAI_ENABLED', '1')
+    monkeypatch.setenv('OPENAI_API_KEY', 'fixture-key')
+    monkeypatch.setenv('NOEMA_OPENAI_MODEL', 'gpt-5.6-luna')
+    monkeypatch.setenv('NOEMA_CLOUDFLARE_ENABLED', '1')
+    monkeypatch.setenv('CLOUDFLARE_API_TOKEN', 'fixture-token')
+    monkeypatch.setenv('CLOUDFLARE_ACCOUNT_ID', 'fixture-account')
+    selected = {}
+
+    async def openai_triage(_store, _session, _instructions, _inputs, _schema, config):
+        selected['model'] = config.model
+        return ({'trial_id': 'real-trial', 'rationale': 'bounded fixture selection',
+                 'unknowns': []}, {'input_tokens': 12, 'output_tokens': 6}, 0.000008)
+
+    monkeypatch.setattr('noema.research_session._openai_triage', openai_triage)
+    monkeypatch.setattr(
+        'noema.research_session.try_acquire',
+        lambda _kind: pytest.fail('explicit hosted provider must bypass local routing'),
+    )
+    store = SessionStore(str(tmp_path / 'provider-priority.db'))
+    session_id = store.begin_worker('explicit provider routing test')
+    candidate = (SimpleNamespace(trial_id='real-trial', hypothesis='registered fixture'),
+                 'NOEMA', 'market_data_quality')
+
+    chosen = await choose_research(store, session_id, [candidate], None)
+
+    assert chosen == 'real-trial'
+    assert selected['model'] == 'gpt-5.6-luna'
+    row = store.conn.execute(
+        'SELECT provider,model FROM cognitive_sessions WHERE session_id=?', (session_id,),
+    ).fetchone()
+    assert row == ('openai', 'gpt-5.6-luna')
 
 
 def test_local_provider_cannot_silently_send_evidence_to_external_host():

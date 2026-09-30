@@ -46,6 +46,7 @@ class KalshiTelemetry:
             timeout=httpx.Timeout(15.0),
             headers={"User-Agent": "NOEMA/0.1"},
         )
+        self.coverage: dict[str, dict[str, Any]] = {}
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -75,25 +76,69 @@ class KalshiTelemetry:
         raise RuntimeError("unreachable")
 
     async def orders(self) -> list[ObservedOrder]:
-        payload = await self._get(
-            "/portfolio/orders",
-            params={"subaccount": 0, "limit": 1000},
-        )
-        return [parse_order(raw) for raw in payload.get("orders", [])]
+        rows = await self._get_all_pages("/portfolio/orders", "orders")
+        return [parse_order(raw) for raw in rows]
 
     async def fills(self, *, order_id: str | None = None) -> list[ObservedFill]:
-        params: dict[str, Any] = {"subaccount": 0, "limit": 1000}
+        params: dict[str, Any] = {"subaccount": 0}
         if order_id:
             params["order_id"] = order_id
-        payload = await self._get("/portfolio/fills", params=params)
-        return [parse_fill(raw) for raw in payload.get("fills", [])]
+        rows = await self._get_all_pages("/portfolio/fills", "fills", params=params)
+        return [parse_fill(raw) for raw in rows]
 
     async def positions(self) -> list[ObservedPosition]:
-        payload = await self._get(
-            "/portfolio/positions",
-            params={"subaccount": 0, "limit": 1000},
-        )
-        return [parse_position(raw) for raw in payload.get("market_positions", [])]
+        rows = await self._get_all_pages("/portfolio/positions", "market_positions")
+        return [parse_position(raw) for raw in rows]
+
+    async def settlements(self) -> list[dict[str, Any]]:
+        return await self._get_all_pages("/portfolio/settlements", "settlements", limit=200)
+
+    async def _get_all_pages(
+        self, endpoint: str, collection: str, *, params: dict[str, Any] | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        seen_records: set[str] = set()
+        pages = 0
+        while pages < 10000:
+            query = {"subaccount": 0, **(params or {}), "limit": limit}
+            if cursor is not None:
+                if cursor in seen_cursors:
+                    raise ValueError(f"{endpoint} returned a repeated cursor")
+                seen_cursors.add(cursor)
+                query["cursor"] = cursor
+            payload = await self._get(endpoint, params=query)
+            page = payload.get(collection)
+            if not isinstance(page, list) or not all(isinstance(row, dict) for row in page):
+                raise ValueError(f"{endpoint} omitted its {collection} array")
+            for row in page:
+                identity = (row.get("fill_id") if collection == "fills" else
+                            row.get("order_id") if collection == "orders" else
+                            row.get("ticker") if collection == "market_positions" else
+                            row.get("settlement_id") or (
+                                f"{row.get('ticker')}:{row.get('settled_time')}"
+                                if row.get("ticker") and row.get("settled_time") else None
+                            ))
+                if identity is not None:
+                    token = str(identity)
+                    if token in seen_records:
+                        continue
+                    seen_records.add(token)
+                rows.append(row)
+            pages += 1
+            next_cursor = payload.get("cursor")
+            if not next_cursor:
+                self.coverage[collection] = {"complete": True, "pages": pages,
+                                             "records": len(rows)}
+                return rows
+            if not isinstance(next_cursor, str):
+                raise TypeError(f"{endpoint} returned an invalid cursor")
+            cursor = next_cursor
+        self.coverage[collection] = {"complete": False, "pages": pages,
+                                     "records": len(rows), "reason": "page_limit_reached"}
+        raise ValueError(f"{endpoint} exceeded the pagination safety limit")
 
     async def queue_position(self, order_id: str) -> QueueObservation:
         payload = await self._get(f"/portfolio/orders/{order_id}/queue_position")

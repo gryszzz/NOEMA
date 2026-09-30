@@ -16,9 +16,11 @@ class TrenchCollectorConfig:
     jupiter_api_key: str | None = field(default=None, repr=False)
     solana_rpc_url: str = field(default=DEFAULT_SOLANA_RPC_URL, repr=False)
     solana_rpc_fallback_url: str | None = field(default=None, repr=False)
-    due_limit: int = 12
+    due_limit: int = 100
     enrichment_limit: int = 1
     request_pause_seconds: float = 2.1
+    sample_interval_seconds: float = 10.0
+    discovery_interval_seconds: float = 15.0
 
     @classmethod
     def from_env(cls) -> TrenchCollectorConfig:
@@ -29,10 +31,16 @@ class TrenchCollectorConfig:
             jupiter_api_key=os.getenv("NOEMA_JUPITER_API_KEY") or None,
             solana_rpc_url=primary_rpc,
             solana_rpc_fallback_url=configured_fallback or None,
-            due_limit=int(os.getenv("NOEMA_TRENCH_DUE_LIMIT", "12")),
+            due_limit=int(os.getenv("NOEMA_TRENCH_DUE_LIMIT", "100")),
             enrichment_limit=int(os.getenv("NOEMA_TRENCH_ENRICHMENT_LIMIT", "1")),
             request_pause_seconds=float(
                 os.getenv("NOEMA_TRENCH_REQUEST_PAUSE_SECONDS", "2.1")
+            ),
+            sample_interval_seconds=float(
+                os.getenv("NOEMA_TRENCH_SAMPLE_INTERVAL_SECONDS", "10")
+            ),
+            discovery_interval_seconds=float(
+                os.getenv("NOEMA_TRENCH_DISCOVERY_INTERVAL_SECONDS", "15")
             ),
         )
 
@@ -43,5 +51,9 @@ class TrenchCollectorConfig:
             raise ValueError("invalid NOEMA_TRENCH_ENRICHMENT_LIMIT")
         if self.request_pause_seconds < 0:
             raise ValueError("NOEMA_TRENCH_REQUEST_PAUSE_SECONDS must be non-negative")
+        if not 5 <= self.sample_interval_seconds <= 60:
+            raise ValueError("NOEMA_TRENCH_SAMPLE_INTERVAL_SECONDS must be in [5, 60]")
+        if not 15 <= self.discovery_interval_seconds <= 300:
+            raise ValueError("NOEMA_TRENCH_DISCOVERY_INTERVAL_SECONDS must be in [15, 300]")
         if not self.solana_rpc_url:
             raise ValueError("NOEMA_SOLANA_RPC_URL cannot be empty")

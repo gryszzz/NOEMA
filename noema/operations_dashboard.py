@@ -12,6 +12,7 @@ from typing import Any
 from .openclaw_worker import runtime_status as openclaw_runtime_status
 from .paper_execution import parse_aware_time
 from .resource_control import resource_status
+from .runtime_diagnostics import diagnose_runtime
 
 # Identifiers below are application constants, never request parameters.
 SECTIONS = {
@@ -31,6 +32,9 @@ SECTIONS = {
     "mission_events": ("mission_events", ("id,mission_id,created_at,actor,event_type,status,detail,"
                           "payload_json"), "id"),
     "wallet_transactions": ("economic_events", ("id,created_at,event_type,amount_usd,payload_json"), "id"),
+    "economic_events": ("economic_events", ("id,created_at,occurred_at,provider,event_type,"
+                        "amount_usd,reconciliation_state,capital_class,mission_id,"
+                        "strategy_id,lane"), "id"),
     "handoffs": ("mission_handoffs", ("handoff_id,mission_id,created_at,updated_at,from_specialist,"
                       "to_specialist,objective,status,capability_grants_json,resource_grant_json,"
                       "result_json"), "updated_at"),
@@ -61,6 +65,82 @@ ECONOMIC_LANES = (
     ("agent_services", "Agent services", ("agent_service", "agent_services")),
     ("other", "Other internet-native", ("other", "internet_native")),
 )
+
+
+def _experiment_relationship_counts(
+    conn: sqlite3.Connection, tables: set[str], record: dict[str, Any],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach counts using persisted trial/evidence/decision identities only."""
+    counts: dict[str, Any] = {
+        "run_count": None, "evidence_count": None, "decision_count": None,
+        "strategy_decision_count": None, "relationship_basis": "persisted identifiers",
+    }
+    trial_id = record.get("trial_id")
+    if "autonomous_research_runs" in tables and trial_id is not None:
+        try:
+            columns = {row[1] for row in conn.execute(
+                "PRAGMA table_info(autonomous_research_runs)"
+            )}
+            if "trial_id" in columns:
+                counts["run_count"] = conn.execute(
+                    "SELECT COUNT(*) FROM autonomous_research_runs WHERE trial_id=?", (trial_id,),
+                ).fetchone()[0]
+                evidence_cols = [key for key in ("evidence_hash", "evidence_path") if key in columns]
+                if evidence_cols:
+                    predicate = " OR ".join(f"COALESCE({key},'')!=''" for key in evidence_cols)
+                    counts["evidence_count"] = conn.execute(
+                        f"SELECT COUNT(*) FROM autonomous_research_runs WHERE trial_id=? AND ({predicate})",
+                        (trial_id,),
+                    ).fetchone()[0]
+        except sqlite3.Error:
+            pass
+    if "forecast_ledger" not in tables:
+        return counts
+    strategy_id = record.get("strategy_id")
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(forecast_ledger)")}
+        if not {"forecast_json"} <= columns:
+            return counts
+        clauses: list[str] = []
+        values: list[Any] = []
+        if trial_id is not None:
+            clauses.append("CASE WHEN json_valid(forecast_json) THEN json_extract(forecast_json,'$.trial_id') END=?")
+            values.append(trial_id)
+        if strategy_id is not None:
+            clauses.append("CASE WHEN json_valid(forecast_json) THEN json_extract(forecast_json,'$.strategy_id') END=?")
+            values.append(strategy_id)
+        if clauses:
+            counts["decision_count"] = conn.execute(
+                "SELECT COUNT(*) FROM forecast_ledger WHERE json_valid(forecast_json) "
+                "AND (" + " OR ".join(clauses) + ")", tuple(values),
+            ).fetchone()[0]
+        if strategy_id is not None:
+            counts["strategy_decision_count"] = conn.execute(
+                "SELECT COUNT(*) FROM forecast_ledger WHERE json_valid(forecast_json) "
+                "AND CASE WHEN json_valid(forecast_json) THEN json_extract(forecast_json,'$.strategy_id') END=?", (strategy_id,),
+            ).fetchone()[0]
+    except sqlite3.Error:
+        # JSON1 is optional in some system SQLite builds. Exact fallback keeps
+        # linked decisions visible without treating malformed records as matches.
+        try:
+            rows = conn.execute("SELECT forecast_json FROM forecast_ledger").fetchall()
+            matched = strategy_matches = 0
+            for (raw,) in rows:
+                try:
+                    forecast = _object(raw)
+                except (ValueError, TypeError):
+                    continue
+                by_trial = trial_id is not None and forecast.get("trial_id") == trial_id
+                by_strategy = strategy_id is not None and forecast.get("strategy_id") == strategy_id
+                matched += bool(by_trial or by_strategy)
+                strategy_matches += bool(by_strategy)
+            counts["decision_count"] = matched
+            if strategy_id is not None:
+                counts["strategy_decision_count"] = strategy_matches
+        except sqlite3.Error:
+            pass
+    return counts
 
 
 def _economic_lane_projection(conn: sqlite3.Connection, tables: set[str]) -> dict[str, Any]:
@@ -481,6 +561,7 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
             try:
                 session = conn.execute(
                     "SELECT session_id,status,objective,provider,model FROM cognitive_sessions "
+                    "WHERE COALESCE(provider,'')!='openclaw' "
                     "ORDER BY created_at DESC LIMIT 1"
                 ).fetchone()
                 if session:
@@ -496,27 +577,54 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
                     status = _object(row[0])
                     heartbeat = parse_aware_time(status["last_heartbeat_at"])
                     age = (now - heartbeat).total_seconds()
-                    state = "unknown" if age < 0 else (
-                        "stale" if age > 90 else
-                        "running" if status.get("running") is True else "stopped"
+                    diagnostics = diagnose_runtime(
+                        running=status.get("running") is True,
+                        heartbeat_age_seconds=age,
+                        identity_value=status.get("process_identity"),
+                        database_path=str(Path(path).resolve()),
+                        checkout_path=str(Path(__file__).resolve().parent.parent),
+                        now=now,
                     )
+                    state = diagnostics["state"].lower().replace(" ", "_")
+                    if state == "live":
+                        state = "running"
                     result["runtime"] = {
                         "state": state, "health": "unknown",
                         "last_heartbeat_at": heartbeat.isoformat(),
+                        "liveness": diagnostics["state"],
+                        "process_state": diagnostics["process_state"],
+                        "process_identity": diagnostics["process_identity"],
+                        "heartbeat_age_seconds": diagnostics["heartbeat_age_seconds"],
                     }
                     cycle = status.get("last_cycle")
                     if isinstance(cycle, dict):
                         result["runtime"]["health"] = _scalar(cycle.get("health")) or "unknown"
                         result["runtime"]["cycle"] = {
                             key: _scalar(cycle.get(key))
-                            for key in ("cycle_id", "active_goal", "health", "started_at", "completed_at")
+                            for key in ("cycle_id", "active_goal", "health", "started_at",
+                                        "completed_at", "note", "ecosystem_state",
+                                        "ecosystem_focus")
                         }
+                        result["runtime"]["cycle"].update({
+                            "duration_seconds": _scalar(cycle.get("duration_seconds")),
+                            "cadence_seconds": _scalar(cycle.get("cadence_seconds")),
+                            "stage_timings": cycle.get("stage_timings", {}),
+                        })
+                        if "agent_cycle_timings" in tables:
+                            timing = conn.execute(
+                                "SELECT duration_seconds,stage_timings_json FROM agent_cycle_timings WHERE cycle_id=?",
+                                (cycle.get("cycle_id"),),
+                            ).fetchone()
+                            if timing:
+                                result["runtime"]["cycle"]["duration_seconds"] = _scalar(timing[0])
+                                result["runtime"]["cycle"]["stage_timings"] = _object(timing[1])
                         result["runtime"]["connections"] = {
                             key: {
                                 "status": _scalar(cycle[key].get("status")),
                                 "detail": _scalar(cycle[key].get("detail")),
                             }
-                            for key in ("market_data", "kalshi", "cognition", "trench", "evm_wallet")
+                            for key in ("market_data", "kalshi", "cognition", "trench",
+                                        "evm_wallet", "polymarket_us")
                             if isinstance(cycle.get(key), dict)
                         }
             except (sqlite3.Error, ValueError, TypeError, KeyError):
@@ -531,6 +639,14 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
                         "SELECT id,created_at,event_type,amount_usd,payload_json FROM economic_events "
                         "WHERE event_type LIKE 'wallet_transaction_%' ORDER BY id DESC LIMIT 51"
                     ).fetchall()
+                elif name == "experiments":
+                    columns_present = {row[1] for row in conn.execute(
+                        "PRAGMA table_info(research_trials)"
+                    )}
+                    select = columns + (",params_json" if "params_json" in columns_present else "")
+                    rows = conn.execute(
+                        f"SELECT {select} FROM {table} ORDER BY {order} DESC LIMIT 51"
+                    ).fetchall()
                 else:
                     rows = conn.execute(
                         f"SELECT {columns} FROM {table} ORDER BY {order} DESC LIMIT 51"
@@ -541,7 +657,8 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
                     if name == "decisions":
                         try:
                             forecast, action = _object(row["forecast_json"]), _object(row["action_json"])
-                            for key in ("model_version", "probability_yes", "lower_bound", "upper_bound"):
+                            for key in ("model_version", "probability_yes", "lower_bound", "upper_bound",
+                                        "asset", "underlying_asset", "strategy_id", "trial_id"):
                                 record[key] = _scalar(forecast.get(key))
                             for key in ("decision", "reason"):
                                 record[key] = _scalar(action.get(key))
@@ -550,9 +667,79 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
                     elif name in {"research_runs", "sessions"} and row["result_json"]:
                         try:
                             result_payload = _object(row["result_json"])
-                            record["result"] = json.dumps(result_payload, sort_keys=True)[:4000]
+                            if name == "research_runs":
+                                for key in ("observations", "observation_count"):
+                                    value = result_payload.get(key)
+                                    if (isinstance(value, int) and not isinstance(value, bool)
+                                            and value >= 0):
+                                        record["observations"] = value
+                                        break
+                                review = result_payload.get("critic_review")
+                                if isinstance(review, dict):
+                                    verdict = str(review.get("verdict", "")).strip().upper()
+                                    if "result_accepted" not in review and verdict in {
+                                        "PASS", "ACCEPT", "ACCEPTED", "FAIL", "REJECT", "REJECTED",
+                                    }:
+                                        review = {**review, "result_accepted": verdict in {
+                                            "PASS", "ACCEPT", "ACCEPTED",
+                                        }}
+                                        result_payload = {**result_payload, "critic_review": review}
+                            encoded_result = json.dumps(result_payload, sort_keys=True)
+                            if name == "research_runs" and len(encoded_result) > 4000:
+                                compact = {
+                                    key: result_payload[key]
+                                    for key in ("observations", "observation_count", "valid_markets",
+                                                "critic_review", "verdict", "accepted")
+                                    if key in result_payload
+                                }
+                                review = compact.get("critic_review")
+                                if isinstance(review, dict):
+                                    compact["critic_review"] = {
+                                        key: (value[:500] if isinstance(value, str) else value)
+                                        for key, value in review.items()
+                                        if key in {"verdict", "result_accepted", "accepted", "reason", "status"}
+                                    }
+                                encoded_result = json.dumps(compact, sort_keys=True)
+                            record["result"] = encoded_result[:4000]
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
+                    elif name == "experiments":
+                        params_text = row["params_json"] if "params_json" in row.keys() else None  # noqa: SIM118 - sqlite3.Row has no dict.get
+                        params: dict[str, Any] = {}
+                        if params_text:
+                            try:
+                                decoded = _object(params_text)
+                                params = decoded if isinstance(decoded, dict) else {}
+                            except (ValueError, TypeError):
+                                record["record_status"] = "invalid_params"
+                        for key in ("strategy_id", "market_id", "venue", "asset", "ticker"):
+                            value = params.get(key)
+                            if value is None and isinstance(params.get("market"), dict):
+                                value = params["market"].get(key)
+                            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                                record[key] = str(value)
+                        evidence_hash = params.get("candidate_observation_hash")
+                        if (isinstance(evidence_hash, str)
+                                and "canonical_pair_observations" in tables):
+                            try:
+                                evidence = conn.execute(
+                                    "SELECT observation_json FROM canonical_pair_observations "
+                                    "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
+                                ).fetchone()
+                                if evidence:
+                                    observation = _object(evidence[0])
+                                    contracts = observation.get("native_contracts")
+                                    market_ids = list(dict.fromkeys(
+                                        item.get("market_id") for item in contracts
+                                        if isinstance(item, dict)
+                                        and isinstance(item.get("market_id"), str)
+                                    )) if isinstance(contracts, list) else []
+                                    if market_ids:
+                                        record["market_ids"] = market_ids
+                                        record.setdefault("market_id", market_ids[0])
+                            except (sqlite3.Error, ValueError, TypeError):
+                                pass
+                        record.update(_experiment_relationship_counts(conn, tables, record, params))
                     elif name == "missions":
                         for source, target in (("capability_grants_json", "capability_grants"),
                                                ("resource_grant_json", "resource_grant"),

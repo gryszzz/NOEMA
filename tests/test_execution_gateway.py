@@ -1,3 +1,5 @@
+import json
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -109,10 +111,17 @@ def test_workstation_read_is_read_only_when_gateway_store_does_not_exist(tmp_pat
 
 def test_structured_proposal_record_does_not_grant_execution(tmp_path):
     proposal, _, _, _ = _proposal()
+    proposal = replace(proposal, strategy_id="strategy-test", experiment_id="experiment-test")
     result = ExecutionGateway(str(tmp_path / "gateway.db")).record_proposal(proposal)
     assert result.status == "proposed"
     assert result.tier == "proposal"
     assert result.allowed is False
+    with sqlite3.connect(tmp_path / "gateway.db") as conn:
+        row = conn.execute("select request_json from execution_gateway_requests").fetchone()
+    payload = json.loads(row[0])
+    assert payload["decision_id"] == proposal.proposal_id
+    assert payload["strategy_id"] == "strategy-test"
+    assert payload["experiment_id"] == "experiment-test"
 
 
 def test_live_preflight_requires_stable_provider_reconciliation_capability(tmp_path):
@@ -315,6 +324,49 @@ async def test_prediction_submission_requires_economics_and_consumes_idempotency
     assert first.allowed and first.provider_reference == "test-order-1"
     assert not replay.allowed
     assert venue.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tamper", "reason"),
+    [
+        (
+            {"evidence_refs": ("unrelated-evidence",)},
+            "proposal evidence does not match the immutable forecast evidence",
+        ),
+        (
+            {"expected_edge": Decimal("0.37")},
+            "proposal expected edge does not match the deterministic opportunity",
+        ),
+    ],
+)
+async def test_prediction_proposal_rejects_unbound_evidence_or_edge(
+    tmp_path, monkeypatch, tamper, reason,
+):
+    for name, value in {
+        "NOEMA_EXECUTION_GATEWAY_ENABLED": "1",
+        "NOEMA_ALLOW_LIVE_ORDERS": "1",
+        "NOEMA_MASTER_HALT": "0",
+        "NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD": "5",
+        "NOEMA_LIVE_VENUES": "kalshi:production",
+    }.items():
+        monkeypatch.setenv(name, value)
+    proposal, opportunity, action, risk = _proposal()
+    proposal = replace(proposal, **tamper)
+    venue = FakeOrderVenue()
+    gateway = ExecutionGateway(
+        str(tmp_path / "gateway.db"), authority_resolver=lambda _mission: _authority(),
+    )
+
+    result = await gateway.submit_prediction_order(
+        proposal=proposal, opportunity=opportunity, action=action,
+        risk_engine=risk, venue_adapter=venue, bankroll_usd=500,
+    )
+
+    assert not result.allowed
+    assert result.status == "rejected"
+    assert reason in result.reasons
+    assert venue.calls == 0
 
 
 @pytest.mark.asyncio

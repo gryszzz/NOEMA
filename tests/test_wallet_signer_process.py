@@ -100,3 +100,15 @@ def test_evm_rpc_transport_error_is_sanitized() -> None:
 
     with pytest.raises(RuntimeError, match="EVM RPC request failed"):
         wallet_signer_process._evm_rpc(BrokenClient(), "https://rpc.example", "eth_chainId", [])
+
+
+def test_all_write_operations_remain_disabled_until_authority_gate_is_wired() -> None:
+    import pytest
+
+    for operation in (
+        wallet_signer_process.execute_native_transfer,
+        wallet_signer_process.execute_evm_transaction,
+        wallet_signer_process.execute_bitcoin_transaction,
+    ):
+        with pytest.raises(RuntimeError, match="canonical wallet authority gate is not wired"):
+            operation({})

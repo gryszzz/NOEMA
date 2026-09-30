@@ -8,6 +8,7 @@
   <title>NOEMA · Autonomous economy</title>
   <link rel="stylesheet" href="/static/operations.css">
   <link rel="stylesheet" href="/static/operations-habitat.css">
+  <link rel="stylesheet" href="/static/workstation-live.css">
   <script type="module" src="/static/operations.mjs"></script>
 </head>
 <body>
@@ -23,29 +24,202 @@
     <span class="ribbon-divider"></span>
     <span id="lead-cycle">Cycle unavailable</span>
     <span class="ribbon-spacer"></span>
-    <span class="ribbon-sync">LIVE SNAPSHOT · 15 SEC</span>
+    <span class="ribbon-sync" id="feed-transport">Event updates · 15s fallback</span>
+  </div>
+  <div class="source-status-strip" aria-label="Independent source freshness">
+    <span>Worker <strong id="worker-freshness">UNKNOWN</strong></span>
+    <span>Last snapshot <strong id="worker-snapshot-age">Unknown</strong></span>
+    <span>Console stream <strong id="console-freshness">CONNECTING</strong></span>
+    <span>Market feeds <strong id="market-freshness">UNKNOWN</strong></span>
+    <span>Account feeds <strong id="account-freshness">UNKNOWN</strong></span>
   </div>
   <p id="error" role="alert" hidden></p>
   <p id="live-change" class="live-change" aria-live="polite" aria-atomic="true"></p>
 
   <main id="world" class="world">
     <section class="world-heading" aria-labelledby="world-title">
-      <div><p class="eyebrow">THE AUTONOMOUS INTERNET ECONOMY</p><h1 id="world-title">NOEMA <span>OPERATING WORLD</span></h1><p class="world-description">A live view of work, evidence, resources and economic consequence.</p></div>
+      <div><p class="eyebrow">THE AUTONOMOUS INTERNET ECONOMY</p><h1 id="world-title">NOEMA <span>OPERATING WORLD</span></h1><p class="world-description">Follow the work. Read the evidence. See what changed.</p></div>
       <div class="world-presence"><span id="lead-state" class="presence-state">UNKNOWN</span><span id="sync-state" class="sync-state" data-state="connecting">SYNCING</span><span id="lead-cognition">Cognition unavailable</span></div>
     </section>
 
-    <section class="world-map" aria-labelledby="world-map-title">
-      <div class="section-title-row world-map-heading"><div><p class="eyebrow">LIVE CAPABILITY · OBSERVED RELATIONSHIPS · PERSISTED WORK</p><h2 id="world-map-title">NOEMA live topology</h2><p class="world-map-intro">Agents, providers, wallets and tools appear from current checks and recorded activity. Node fill marks type; outline marks status. Select a node to inspect its abilities, limits and evidence.</p></div><span id="world-map-state">Waiting for operating snapshot</span></div>
-      <div class="world-map-frame">
-        <canvas id="world-map-canvas" aria-label="Interactive perspective 3D field of NOEMA agents, providers, wallets, tools and persisted work, with links based on observed configuration or recorded events" tabindex="0"></canvas>
-        <div class="world-map-hud"><span>DRAG · ORBIT</span><span>SHIFT + DRAG · PAN</span><span>SCROLL / PINCH · ZOOM</span><span>SELECT · INSPECT</span><button id="world-reset" type="button">RESET VIEW</button></div>
-        <div id="world-type-legend" class="world-type-legend" role="group" aria-label="Topology type and status key"></div>
-        <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by live checks or persisted runtime records.</p><dl id="world-inspector-facts"></dl></aside>
+    <nav class="desk-toolbar" aria-label="Workstation navigation and reading controls">
+      <div class="desk-sections"><a href="#live-capital">Capital</a><a href="#workstation-topology">Topology</a><a href="#activity-desk">Terminal</a><a href="#workstation-intelligence">Decisions</a><a href="#workstation-evidence">Economics</a><a href="#deep-records">Records</a></div>
+      <div class="desk-actions"><button id="pause-updates" type="button" aria-pressed="false"><span aria-hidden="true">Ⅱ</span> Pause updates</button></div>
+    </nav>
+    <section class="live-capital capital-overall" id="live-capital" aria-labelledby="capital-title">
+      <div class="overall-balance"><span class="desk-label">NOEMA / LIVE ECONOMIC STATE</span><h2 id="capital-title">NOEMA Agent Balance</h2><strong id="capital-balance">UNAVAILABLE</strong><small id="capital-balance-note">Complete live balance reconciliation unavailable.</small></div>
+      <section class="capital-chart-panel" aria-labelledby="capital-chart-title">
+        <div class="capital-chart-heading"><h3 id="capital-chart-title">Known live cash + native-asset subtotal</h3><div class="chart-windows" role="group" aria-label="Balance chart window"><button type="button" data-capital-window="1H">1H</button><button type="button" data-capital-window="24H" aria-pressed="true">24H</button><button type="button" data-capital-window="7D">7D</button><button type="button" data-capital-window="30D">30D</button><button type="button" data-capital-window="ALL">ALL</button></div></div>
+        <span id="capital-chart-change">Waiting for observations</span><div id="capital-chart" class="capital-chart" aria-label="Observed account value history unavailable"></div><p id="capital-chart-caption">Persisted account observations · transfers, profit and loss are not inferred</p>
+      </section>
+      <div class="capital-summary-metrics">
+        <div><span>AVAILABLE CASH</span><strong id="capital-available">Unknown</strong><small id="capital-available-note">Cash source coverage unavailable</small></div>
+        <div><span>ON-CHAIN VALUE</span><strong id="capital-onchain">Unknown</strong><small id="capital-onchain-note">Native wallet marks unavailable</small></div>
+        <div><span>VENUE VALUE</span><strong id="capital-venue-value">Unknown</strong><small id="capital-venue-value-note">Account cash unavailable</small></div>
+        <div><span>NET LIVE P&amp;L</span><strong id="capital-pnl">UNRECONCILED</strong><small id="capital-pnl-note">Live positions, settlements, fees, and costs are not fully reconciled.</small></div>
+        <div><span>24H CHANGE</span><strong id="capital-change24">Unknown</strong><small id="capital-change24-note">24h history unavailable</small></div>
+        <div><span>OBSERVED VENUE VOLUME</span><strong id="capital-volume">Unknown</strong><small id="capital-volume-note">Venue activity unavailable</small></div>
+        <div><span>EXPOSURE</span><strong id="capital-exposure">Unknown</strong><small id="capital-exposure-note">Live position data unavailable</small></div>
+        <div><span>NET DEPOSITS / WITHDRAWALS</span><strong id="capital-net-flows">Unknown</strong><small>Transfer reconciliation unavailable</small></div>
       </div>
+      <section class="capital-source-breakdown" aria-label="Live account observations contributing to the known subtotal">
+        <div><h3>Web3 capital</h3><span>Funded state and trading authority are shown separately</span></div>
+        <div id="capital-wallet-list" class="capital-wallet-list"></div>
+        <div><h3>Prediction venue balances</h3><span>Read-only account value and venue freshness</span></div>
+        <div id="capital-venue-list"></div>
+      </section>
+    </section>
+    <section class="desk-brief" aria-label="Latest operating summary">
+      <div class="brief-main"><span class="desk-label">LATEST RECORDED DEVELOPMENT</span><h2 id="brief-title">Waiting for the first snapshot</h2><p id="brief-detail">Recorded activity will appear here when available.</p><span id="brief-time" class="brief-meta">No observation yet</span></div>
+      <div class="brief-diff"><span class="desk-label">SINCE THE PREVIOUS SNAPSHOT</span><strong id="brief-delta">—</strong><p id="brief-delta-note">Changes are counted after the first successful load.</p><span id="display-status" role="status">Connecting</span></div>
+      <div class="brief-chart"><span class="desk-label">RECORDED ACTIVITY</span><div id="feed-activity-chart" aria-label="Activity history unavailable"></div><p id="feed-activity-range">Loaded records · no throughput estimate</p></div>
+    </section>
+
+    <section class="workstation-telemetry" aria-label="Live operating context">
+      <div><span>RUNTIME</span><strong id="telemetry-runtime">Unknown</strong></div>
+      <div><span>COGNITION</span><strong id="telemetry-cognition">Unknown</strong></div>
+      <div><span>MISSION</span><strong id="telemetry-mission">Unknown</strong></div>
+      <div><span>AUTHORITY</span><strong id="telemetry-authority">Unknown</strong></div>
+      <div><span>BUDGET</span><strong id="telemetry-budget">Unknown</strong></div>
+      <div class="telemetry-alert" id="telemetry-alert" hidden><span>ALERT</span><strong id="telemetry-alert-text"></strong></div>
+    </section>
+    <section class="active-now" aria-labelledby="active-now-title">
+      <header><span class="desk-label">CURRENTLY OBSERVED · NO INFERRED ACTIVITY</span><h2 id="active-now-title">Active now</h2></header>
+      <div class="active-now-grid">
+        <div><span>Cycle</span><strong id="active-cycle">Unknown</strong></div>
+        <div><span>Mission</span><strong id="active-mission">Unknown</strong></div>
+        <div><span>Active specialist</span><strong id="active-specialist">Unknown</strong></div>
+        <div><span>Current market</span><strong id="active-market">Unknown</strong></div>
+        <div><span>Cognition</span><strong id="active-cognition">Unknown</strong></div>
+        <div><span>Last decision</span><strong id="active-decision">Unknown</strong></div>
+        <div><span>Last balance change</span><strong id="active-balance-change">Unknown</strong></div>
+        <div><span>Current blocker / idle reason</span><strong id="active-blocker">Unknown</strong></div>
+      </div>
+    </section>
+
+    <div class="workstation-shell" id="workstation-shell">
+      <aside class="workstation-sidebar" aria-label="Operating entities and work">
+        <section class="workstation-module"><header><span>CAPABILITY GRAPH</span><small id="sidebar-capability-count">Loading</small></header><div id="workstation-entities"></div></section>
+        <section class="workstation-module"><header><span>MISSIONS</span><a href="#workstation-mission-list">View</a></header><div id="workstation-missions"></div></section>
+        <section class="workstation-module"><header><span>AGENTS</span><a href="#workstation-agent-list">View</a></header><div id="workstation-agents"></div></section>
+        <nav class="workstation-jump" aria-label="Supporting workstation panes">
+          <a href="#workstation-intelligence">Radar & decisions</a><a href="#workstation-economics">Economics</a>
+          <a href="#workstation-execution">Execution</a><a href="#workstation-experiments">Experiments</a>
+        </nav>
+      </aside>
+
+      <section class="workstation-center" aria-label="NOEMA operating surface">
+        <div id="workstation-stage"></div>
+        <div id="workstation-topology"></div>
+        <section class="workstation-intelligence" id="workstation-intelligence" aria-label="Opportunity and decision streams">
+          <article class="workstation-pane radar-pane" aria-labelledby="radar-pane-title">
+            <header><div><span>LIVE MARKET EVIDENCE</span><h2 id="radar-pane-title">Opportunity radar</h2></div><small id="radar-pane-state">Loading</small></header>
+            <section id="market-data-qualification" class="market-qualification" aria-label="Market data qualification" aria-live="polite"><p class="quiet">Loading qualification evidence…</p></section>
+            <div id="workstation-radar-list"><p class="quiet">Loading recorded market evidence…</p></div>
+          </article>
+          <article class="workstation-pane decision-pane" aria-labelledby="decision-pane-title">
+            <header><div><span>IMMUTABLE FORECASTS</span><h2 id="decision-pane-title">Decision stream</h2></div><small id="decision-pane-state">Loading</small></header>
+            <div id="workstation-decision-list"><p class="quiet">Loading persisted forecasts…</p></div>
+          </article>
+          <article class="workstation-pane experiment-pane" id="workstation-experiments" aria-labelledby="experiment-pane-title">
+            <header><div><span>OUT-OF-SAMPLE EVIDENCE</span><h2 id="experiment-pane-title">Experiments</h2></div><small id="experiment-pane-state">Loading</small></header>
+            <div id="workstation-experiment-list"><p class="quiet">Loading persisted experiments…</p></div>
+          </article>
+        </section>
+        <div id="workstation-evidence"></div>
+        <section class="workstation-dock" id="workstation-dock" aria-label="Economics, resources and execution">
+          <div id="workstation-economics"></div>
+          <div id="workstation-resources"></div>
+          <div id="workstation-venues"></div>
+          <div id="workstation-web3"></div>
+          <div id="workstation-wallets"></div>
+          <div id="workstation-execution"></div>
+          <div id="workstation-revenue"></div>
+          <div id="workstation-learning"></div>
+          <div id="workstation-deep-records"></div>
+        </section>
+      </section>
+
+      <aside class="workstation-inspector" aria-label="Activity and shared selection inspector">
+        <section class="activity-desk" id="activity-desk" aria-labelledby="activity-title" data-view="terminal">
+          <header class="activity-heading"><div><span class="desk-label">NOEMA / EVENT STREAM</span><h2 id="activity-title">Live terminal</h2></div><div class="terminal-heading-controls"><span id="feed-count" class="feed-count">—</span><button type="button" id="feed-view-toggle" aria-pressed="true">Card view</button></div></header>
+          <div class="feed-filters" role="group" aria-label="Filter activity"><button type="button" data-feed-filter="all" aria-pressed="true">All</button><button type="button" data-feed-filter="balance" aria-pressed="false">Balance</button><button type="button" data-feed-filter="market" aria-pressed="false">Market</button><button type="button" data-feed-filter="cognition" aria-pressed="false">Cognition</button><button type="button" data-feed-filter="agent" aria-pressed="false">Agent</button><button type="button" data-feed-filter="decision" aria-pressed="false">Decision</button><button type="button" data-feed-filter="execution" aria-pressed="false">Execution</button><button type="button" data-feed-filter="fill" aria-pressed="false">Fill</button><button type="button" data-feed-filter="p&amp;l" aria-pressed="false">P&amp;L</button><button type="button" data-feed-filter="system" aria-pressed="false">System</button><button type="button" data-feed-filter="wallet" aria-pressed="false">Wallet</button><button type="button" data-feed-filter="economics" aria-pressed="false">Economics</button><button type="button" data-feed-filter="error" aria-pressed="false">Error</button></div>
+          <label class="feed-search"><span class="sr-only">Search recorded activity</span><input id="feed-search" type="search" placeholder="Search activity…" autocomplete="off"></label>
+          <ol id="live-feed" class="live-feed" aria-label="Recorded activity, newest first"><li class="feed-empty">Waiting for recorded events.</li></ol>
+          <p id="feed-window" class="feed-window">Newest first · select an event to read it</p>
+        </section>
+        <header class="inspector-heading" id="reader-heading"><div><span id="shared-selection-type">SYSTEM</span><h2 id="shared-selection-title">NOEMA</h2></div><button id="clear-shared-selection" type="button">CLEAR</button></header>
+        <p id="shared-selection-summary">Select a persisted entity, opportunity or decision to synchronize the workstation.</p>
+        <nav class="inspector-tabs" role="tablist" aria-label="Selection details">
+          <button type="button" role="tab" aria-selected="true" data-inspector-tab="overview">Overview</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="relationships">Relationships</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="evidence">Evidence</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="economics">Economics</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="history">History</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="activity">Activity</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="controls">Controls</button>
+          <button type="button" role="tab" aria-selected="false" data-inspector-tab="raw">Raw</button>
+        </nav>
+        <section class="inspector-tab-content" id="inspector-overview" role="tabpanel"><div id="workstation-inspector"></div><div id="shared-selection-overview"></div><article id="selection-reader" class="selection-reader" hidden><span class="desk-label">RECORDED DETAIL</span><p id="selection-reader-text"></p></article></section>
+        <section class="inspector-tab-content" id="inspector-relationships" role="tabpanel" hidden><div id="world-inspector-relationships" class="world-inspector-relationships"></div></section>
+        <section class="inspector-tab-content" id="inspector-evidence" role="tabpanel" hidden><div id="shared-selection-evidence"></div></section>
+        <section class="inspector-tab-content" id="inspector-economics" role="tabpanel" hidden><div id="shared-selection-economics"></div></section>
+        <section class="inspector-tab-content" id="inspector-history" role="tabpanel" hidden><div id="workstation-history"></div></section>
+        <section class="inspector-tab-content" id="inspector-activity" role="tabpanel" hidden><div id="world-inspector-activity" class="world-inspector-activity"></div></section>
+        <section class="inspector-tab-content" id="inspector-controls" role="tabpanel" hidden><div id="shared-selection-controls"></div></section>
+        <section class="inspector-tab-content" id="inspector-raw" role="tabpanel" hidden><pre id="world-inspector-raw" class="world-inspector-raw"></pre></section>
+      </aside>
+    </div>
+    <section class="workstation-analysis" aria-label="Economic categories and live detail">
+      <nav class="category-tabs" role="tablist" aria-label="Economic category">
+        <button type="button" id="tab-prediction" role="tab" data-category="prediction" aria-selected="true" aria-controls="category-prediction">Prediction Markets</button>
+        <button type="button" id="tab-web3" role="tab" data-category="web3" aria-selected="false" aria-controls="category-web3">Web3 / Wallets</button>
+        <button type="button" id="tab-strategies" role="tab" data-category="strategies" aria-selected="false" aria-controls="category-strategies">Strategies</button>
+        <button type="button" id="tab-markets" role="tab" data-category="markets" aria-selected="false" aria-controls="category-markets">Markets / Assets</button>
+        <button type="button" id="tab-economics" role="tab" data-category="economics" aria-selected="false" aria-controls="category-economics">Economics</button>
+        <button type="button" id="tab-revenue" role="tab" data-category="revenue" aria-selected="false" aria-controls="category-revenue">Revenue</button>
+        <button type="button" id="tab-research" role="tab" data-category="research" aria-selected="false" aria-controls="category-research">Research / Validation</button>
+        <button type="button" id="tab-system" role="tab" data-category="system" aria-selected="false" aria-controls="category-system">System / Records</button>
+      </nav>
+      <div class="category-context"><strong id="category-context-title">All NOEMA activity</strong><span id="category-freshness">Source freshness loading</span><button type="button" id="category-clear">Clear selection</button></div>
+      <section id="category-prediction" class="category-panel" role="tabpanel" aria-labelledby="tab-prediction"><div class="category-intro"><h2>Prediction markets</h2><p>Observed venue capital, positions and execution. Account totals include owner activity; attribution to NOEMA is separate.</p><span id="prediction-category-asof"></span></div><div id="prediction-live-details"></div></section>
+      <section id="category-web3" class="category-panel" role="tabpanel" aria-labelledby="tab-web3" hidden><div class="category-intro"><h2>Web3 / Wallets</h2><p>Native balances and observed USD marks from the same overall balance.</p><span id="capital-wallet-asof"></span></div><div id="web3-live-details"></div><details class="capital-wallet-details"><summary>Wallet permissions &amp; transaction receipts</summary><div id="capital-wallet-diagnostics"></div></details></section>
+      <section id="category-strategies" class="category-panel" role="tabpanel" aria-labelledby="tab-strategies" hidden><div class="category-intro"><h2>Strategies</h2><p>Persisted strategies and decisions. Live performance appears only with exact strategy attribution.</p></div><div id="strategy-live-details"></div></section>
+      <section id="category-markets" class="category-panel" role="tabpanel" aria-labelledby="tab-markets" hidden><div class="category-intro"><h2>Markets / Assets</h2><p>Observed reference prices and contracts. Select an instrument to synchronize the inspector and event stream.</p></div><div id="asset-live-details"></div><div id="workstation-research-panels"></div></section>
+      <section id="category-economics" class="category-panel" role="tabpanel" aria-labelledby="tab-economics" hidden><div class="category-intro"><h2>Economic results</h2><p>Account P&amp;L, fees, costs, revenue, volume and reconciliation coverage.</p></div><div id="account-pnl-details"></div><div id="workstation-economic-panels"></div></section>
+      <section id="category-revenue" class="category-panel" role="tabpanel" aria-labelledby="tab-revenue" hidden><div class="category-intro"><h2>Revenue / Stripe</h2><p>Current available funds. Historical gross payments and pending funds do not enter the available-balance subtotal.</p></div><div id="revenue-live-details"></div></section>
+      <section id="category-research" class="category-panel" role="tabpanel" aria-labelledby="tab-research" hidden><div class="category-intro"><h2>Research / Validation</h2><p>Experiments and historical testing. Simulation evidence retains its original mode.</p></div><div id="validation-history"></div></section>
+      <section id="category-system" class="category-panel" role="tabpanel" aria-labelledby="tab-system" hidden><div class="category-intro"><h2>System / Records</h2><p>Runtime resources, execution policy, service health and persisted records.</p></div><div id="workstation-support-panels"></div></section>
+    </section>
+    <section id="live-terminal-drawer" aria-label="Live event terminal"></section>
+
+    <section class="workstation-timeline" id="workstation-timeline" aria-label="Synchronized knowledge replay">
+      <header><span>SYNCHRONIZED OPERATIONAL TIMELINE</span><small id="timeline-context">Following current state</small></header>
+      <div id="workstation-timebar"></div><div id="workstation-event-list"></div>
+    </section>
+
+    <div id="workstation-staging" hidden>
+
+    <section class="world-map" aria-labelledby="world-map-title">
+      <div class="section-title-row world-map-heading"><div><p class="eyebrow">CONNECTED CAPABILITIES</p><h2 id="world-map-title">NOEMA live topology</h2><p class="world-map-intro">Explore the recorded relationships between NOEMA, its research and its resources. Click nodes and links to inspect evidence; double-click a node to explore its local network.</p></div><span id="world-map-state">Waiting for operating snapshot</span></div>
+      <nav class="topology-explorer" aria-label="Topology navigation">
+        <div class="topology-navigation"><button id="world-nav-back" type="button" aria-label="Back in topology history" disabled>←</button><button id="world-nav-forward" type="button" aria-label="Forward in topology history" disabled>→</button><div id="world-breadcrumbs" class="world-breadcrumbs" aria-label="Topology path"></div></div>
+        <label class="topology-search"><span class="sr-only">Search topology</span><input id="world-search" type="search" placeholder="Find an agent, mission, wallet, market…" autocomplete="off" maxlength="160"><div id="world-search-results" class="world-search-results" role="listbox" hidden></div></label>
+        <details class="topology-filter-menu"><summary>FILTERS</summary><div class="topology-filter-popover"><fieldset><legend>Entity</legend><div id="world-type-filters" class="topology-filter-options"></div></fieldset><fieldset><legend>Status</legend><div id="world-status-filters" class="topology-filter-options"></div></fieldset></div></details>
+        <div class="topology-presets" role="group" aria-label="Topology views"><button type="button" data-topology-view="all" aria-pressed="true">All</button><button type="button" data-topology-view="active">Active now</button><button type="button" data-topology-view="agents">Agents</button><button type="button" data-topology-view="money">Money</button><button type="button" data-topology-view="markets">Markets</button><button type="button" data-topology-view="research">Research</button><button type="button" data-topology-view="degraded">Degraded</button><button type="button" data-topology-view="mission">Current mission</button></div>
+        <details class="topology-compare"><summary>Compare <span id="world-pin-count">0</span></summary><div class="topology-compare-popover"><div id="world-pinned-entities" class="world-pinned-entities"></div><div id="world-compare-table" class="world-compare-table"></div></div></details>
+      </nav>
+      <div class="world-map-frame">
+        <div id="topology-tooltip" class="topology-tooltip" role="tooltip" hidden></div>
+        <canvas id="world-map-canvas" aria-label="Interactive perspective 3D field of NOEMA agents, providers, wallets, tools and persisted work, with links based on observed configuration or recorded events" tabindex="0"></canvas>
+        <div class="world-map-hud"><span>DRAG · ORBIT</span><span>SHIFT + DRAG · PAN</span><span>SCROLL / PINCH · ZOOM</span><span>CLICK · INSPECT</span><span>DOUBLE-CLICK · DRILL</span><span>SHIFT-CLICK · PIN</span><button id="world-reset" type="button">RESET VIEW</button></div>
+        <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by live checks or persisted runtime records.</p><dl id="world-inspector-facts"></dl><button id="world-inspector-drill" type="button">EXPLORE LOCAL NETWORK</button></aside>
+      </div>
+      <details id="world-type-legend-details" class="world-type-legend-details"><summary>MAP KEY</summary><div id="world-type-legend" class="world-type-legend" role="group" aria-label="Topology type and status key"></div></details>
       <div class="world-timebar"><div class="world-time-label"><span>KNOWLEDGE REPLAY · persisted event time</span><strong id="world-time-value">Latest known state</strong></div><input id="world-time-range" type="range" min="0" max="0" value="0" aria-label="Replay persisted NOEMA mission events by time"><div class="world-time-actions"><button id="world-time-live" type="button">FOLLOW LIVE</button><span id="world-time-count">No timeline events recorded</span></div></div>
       <div id="world-event-list" class="world-event-list" aria-label="Persisted event timeline"></div>
       <div id="world-entity-list" class="world-entity-list" aria-label="Accessible list of entities in the topology"></div>
-      <p class="truth-note">Node positions group objects for navigation. Cognition-provider links show configured routes; venue links show live data checks; wallet links show observed network state; sub-agent links show persisted registrations; tool links show recorded invocations. Mission, session, experiment and handoff links require persisted identifiers. Wallet visibility never grants authority. Historical replay hides current-only provider and wallet state.</p>
+      <details class="topology-provenance"><summary>Map sources and status legend</summary><p class="truth-note">Node positions group objects for navigation. Cognition-provider links show configured routes; venue links show live data checks; wallet links show observed network state; sub-agent links show persisted registrations; tool links show recorded invocations. Mission, session, experiment and handoff links require persisted identifiers. Wallet visibility never grants authority. Historical replay hides current-only provider and wallet state.</p></details>
     </section>
 
     <section class="mission-stage" aria-label="Current operating state and mission">
@@ -76,9 +250,7 @@
       </article>
 
       <article class="panel account-panel" aria-labelledby="account-title">
-        <div class="panel-heading"><div><p class="eyebrow">SETTLED PAPER RESULTS · HYPOTHETICAL</p><h2 id="account-title">Paper P&amp;L curve</h2><p id="account-note">Cumulative simulated net from validated settled paper positions. Operating costs and capital opportunity cost are excluded.</p></div><span id="wallet-state" class="series-state">NO SETTLEMENTS</span></div>
-        <div id="account-chart" class="account-chart" aria-label="Settled paper P and L chart unavailable"></div>
-        <div class="account-legend"><span>RECORDED CASH <strong id="metric-cash">Unknown</strong></span><span>VERIFIED REVENUE <strong id="metric-revenue">Unknown</strong></span><span>MODEL RESERVED <strong id="metric-model-cost">Unknown</strong></span><span>PAPER NET <strong id="metric-paper">Unknown</strong></span><span>ALL-IN PROFIT <strong id="metric-net">Unknown</strong></span></div>
+        <div class="panel-heading"><div><p class="eyebrow">LIVE RECONCILIATION EVIDENCE</p><h2 id="account-title">Economic source coverage</h2></div></div>
         <p id="mission-economics-progress" class="truth-note">Mission progress unavailable · self-funding unproven · unknown is not zero.</p>
         <div id="canonical-economy-grid" class="canonical-economy-grid" aria-label="Canonical economic ledger"></div>
         <div class="canonical-economy-detail">
@@ -154,6 +326,7 @@
       <summary><span>Deep inspection</span><small>Evidence records · sessions · provider routes · experiment results · immutable forecasts</small><span aria-hidden="true">＋</span></summary>
       <div class="deep-record-layout"><section class="records"><nav aria-label="Operational records" id="views"></nav><div class="tools"><h2 id="title">Autonomous sessions</h2><label>Filter loaded records<input id="search" type="search" placeholder="Mission, specialist, status…" maxlength="240"></label></div><p id="record-status" role="status">Loading records…</p><div class="table-wrap" tabindex="0" aria-label="Records table"><table><thead id="columns"></thead><tbody id="rows"></tbody></table></div></section><aside aria-label="Record inspector"><h3>Selected record</h3><p id="selection">Select a record to inspect its evidence.</p><dl id="detail"></dl><button id="back" hidden>Back to previous record</button><div id="links"></div></aside></div>
     </details>
+    </div>
   </main>
 
   <details class="runtime-detail"><summary>Runtime & provider diagnostics</summary><dl id="runtime-detail"></dl></details>

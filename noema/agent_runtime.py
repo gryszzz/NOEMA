@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import sqlite3
+import threading
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from time import perf_counter
 
 import httpx
 from polymarket_us.errors import PolymarketUSError
@@ -23,6 +25,8 @@ from .config import kalshi_production_read_only_config
 from .console_replication import publish_console_snapshot
 from .cross_venue_experiment import mature_paper_pairs
 from .economic_dashboard import build_economic_overview
+from .economic_investigations import advance_current_period_investigation
+from .economic_ledger import EconomicLedger
 from .ecosystem_controller import review_research_ecosystem
 from .ecosystem_evolution import evolve_default_specialists
 from .evm_watch import EvmWatchClient
@@ -34,10 +38,15 @@ from .outcomes import OutcomeStore
 from .paper_research import PaperResearchStore, collect_paper_quote
 from .provenance import EvidenceStore
 from .research_allocation import CollectionQuotas, collection_quotas
+from .runtime_diagnostics import capture_process_identity
 from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
-from .solana_research import JupiterTrenchResearchClient, SolanaRpcResearchClient
-from .stripe_economy import sync_stripe_economy
+from .solana_research import (
+    DexScreenerTrenchPriceClient,
+    JupiterTrenchResearchClient,
+    SolanaRpcResearchClient,
+)
+from .stripe_economy import reconcile_persisted_stripe_evidence, sync_stripe_economy
 from .sync import (
     cross_venue_outcome_targets,
     sync_kalshi_outcomes,
@@ -124,14 +133,19 @@ async def _trench_state(
                 rpc_url=config.solana_rpc_url,
                 fallback_rpc_url=config.solana_rpc_fallback_url,
             ),
+            price_fallback=DexScreenerTrenchPriceClient(),
             due_limit=config.due_limit,
             enrichment_limit=(config.enrichment_limit if quotas is None
                               else quotas.trench_enrichment),
             request_pause_seconds=config.request_pause_seconds,
             discover_new=quotas is None or quotas.trench_due > 0,
         )
+        required_provider_failures = tuple(
+            failure for failure in summary.provider_failures
+            if not failure.startswith("solana_rpc:")
+        )
         status = ("degraded" if summary.failed or summary.unavailable
-                  or summary.provider_failures else "connected")
+                  or required_provider_failures else "connected")
         return AgentConnectionState(
             status,
             (
@@ -139,7 +153,8 @@ async def _trench_state(
                 f"recorded={summary.recorded} unavailable={summary.unavailable} "
                 f"failed={summary.failed} assessments={summary.assessments_recorded} "
                 f"counterfactuals={summary.counterfactuals_recorded} "
-                f"provider_failures={','.join(summary.provider_failures) or 'none'}"
+                f"cycle_provider_failures={','.join(summary.provider_failures) or 'none'} "
+                f"provider_health={','.join(summary.provider_health) or 'unknown'}"
             ),
         )
     except httpx.HTTPStatusError as exc:
@@ -170,6 +185,86 @@ async def _trench_state(
         )
 
 
+async def _trench_sampler_loop(db_path: str, config: TrenchCollectorConfig) -> None:
+    """Collect scheduled launch snapshots independently of the long reasoning cycle."""
+    config.validate()
+    jupiter = JupiterTrenchResearchClient(api_key=config.jupiter_api_key)
+    solana = SolanaRpcResearchClient(
+        rpc_url=config.solana_rpc_url,
+        fallback_rpc_url=config.solana_rpc_fallback_url,
+    )
+    fallback = DexScreenerTrenchPriceClient()
+    interval = config.sample_interval_seconds
+    discovery_interval = config.discovery_interval_seconds
+    next_discovery = 0.0
+    while True:
+        started = asyncio.get_running_loop().time()
+        discover = started >= next_discovery
+        if discover:
+            next_discovery = started + discovery_interval
+        try:
+            summary = await collect_trench_cycle(
+                db_path=db_path,
+                jupiter=jupiter,
+                solana=solana,
+                price_fallback=fallback,
+                due_limit=config.due_limit,
+                enrichment_limit=0,
+                request_pause_seconds=0,
+                discover_new=discover,
+            )
+            if summary.due:
+                _log(
+                    "trench_forward_sampler",
+                    due=summary.due,
+                    recorded=summary.recorded,
+                    unavailable=summary.unavailable,
+                    failed=summary.failed,
+                )
+        except asyncio.CancelledError:
+            raise
+        except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
+                KeyError, TypeError) as exc:
+            _log("trench_forward_sampler_error", error=type(exc).__name__)
+        elapsed = asyncio.get_running_loop().time() - started
+        await asyncio.sleep(max(0.0, interval - elapsed))
+
+
+def _cycle_health(
+    *,
+    market_data: AgentConnectionState,
+    ecosystem_state: str,
+    ecosystem_focus: str | None,
+    trench: AgentConnectionState,
+    active_goal: str,
+    cognition: AgentConnectionState,
+    research_status: str,
+) -> str:
+    """Classify health from core services and the capability selected this cycle.
+
+    Wallet/account telemetry, optional cognition, and unselected research providers
+    remain visible in their own connection states without degrading core liveness.
+    """
+    required = {
+        "market_data": market_data.status,
+        "ecosystem": ecosystem_state,
+    }
+    if active_goal == "execute_registered_research" and ecosystem_focus == "trench-1":
+        required["trench"] = trench.status
+    if active_goal in {"model_guided_investigation", "collect_requested_research"}:
+        required["cognition"] = cognition.status
+    if active_goal == "execute_registered_research":
+        required["research"] = research_status
+
+    if any(value in {"degraded", "failed", "timed_out", "unavailable"}
+           for value in required.values()):
+        return "degraded"
+    if any(value in {"unconfigured", "disabled", "unknown"}
+           for value in required.values()):
+        return "partial"
+    return "healthy"
+
+
 async def run_cycle(
     *,
     cycle_id: int,
@@ -181,15 +276,42 @@ async def run_cycle(
     identity = identity or AgentIdentity()
     store = store or AgentStore(config.db_path)
     started = datetime.now(UTC)
+    cycle_clock = perf_counter()
+    stage_started = cycle_clock
+    stage_timings: dict[str, float] = {}
+
+    def finish_stage(name: str) -> None:
+        nonlocal stage_started
+        now_clock = perf_counter()
+        stage_timings[name] = round(max(0.0, now_clock - stage_started), 6)
+        stage_started = now_clock
+
+    stage_name = "economic_manifest_and_stripe_reconciliation"
+    try:
+        ledger = EconomicLedger(config.db_path)
+        try:
+            ledger.ensure_current_period_manifest(provenance={
+                "source": "NOEMA autonomous runtime", "cycle_id": cycle_id,
+                "manifest_version": "core-economic-sources-v1",
+            })
+        finally:
+            ledger.conn.close()
+    except (sqlite3.Error, OSError, ValueError):
+        _log("economic_period_manifest_error", status="unavailable")
     try:
         stripe_economy = await sync_stripe_economy(config.db_path)
+        stripe_canonical = reconcile_persisted_stripe_evidence(config.db_path)
+        _log("agent_stripe_canonical_reconciliation", **stripe_canonical)
     except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
         stripe_economy = {"status": "unavailable", "reason": "read-only Stripe sync failed"}
+        stripe_canonical = {"status": "unavailable"}
     if stripe_economy.get("status") not in {"cached", "disabled"}:
         _log("agent_stripe_economy", status=stripe_economy.get("status"),
              payment_intent_count=stripe_economy.get("payment_intent_count"),
              succeeded_count=stripe_economy.get("succeeded_count"),
              new_successful_payment_count=stripe_economy.get("new_successful_payment_count"))
+    finish_stage(stage_name)
+    stage_name = "research_allocation"
 
     # Persisted evidence determines real discretionary work before collecting data.
     # Small public baseline observation and existing outcome obligations continue even
@@ -207,6 +329,8 @@ async def run_cycle(
     except (sqlite3.Error, ValueError, OSError, KeyError, TypeError):
         quotas = CollectionQuotas()
         _log("agent_allocation_error", error="research allocation unavailable")
+    finish_stage(stage_name)
+    stage_name = "kalshi_market_collection"
 
     soak_store = SoakStore(config.db_path)
     forecast_ledger = ForecastLedger(config.db_path)
@@ -238,6 +362,8 @@ async def run_cycle(
             _log("agent_market_collection_error", error=type(exc).__name__)
         finally:
             await venue.close()
+    finish_stage(stage_name)
+    stage_name = "polymarket_market_collection"
 
     # Polymarket US enters the same immutable forecast/evidence ledger as
     # Kalshi. Collection is public/read-only and never creates an order.
@@ -262,6 +388,8 @@ async def run_cycle(
             polymarket_connection = AgentConnectionState(
                 "degraded", f"{type(exc).__name__}: public market collection failed",
             )
+    finish_stage(stage_name)
+    stage_name = "event_verification_and_forecast_candidates"
 
     # Verify complete event membership via the official public event endpoint.
     groups: dict[str, list] = {}
@@ -327,6 +455,8 @@ async def run_cycle(
                                     _log("agent_paper_quote_error", error=type(exc).__name__)
             finally:
                 await verifier.close()
+    finish_stage(stage_name)
+    stage_name = "account_and_trench_health"
 
     if collection is None:
         market_data = AgentConnectionState("degraded", "market collection failed")
@@ -347,6 +477,8 @@ async def run_cycle(
     radar = build_radar(config.db_path, limit=config.max_radar_rows)
     economic = build_economic_overview(config.db_path)
     economic_initialized = economic.get("snapshot") is not None
+    finish_stage(stage_name)
+    stage_name = "specialist_evolution"
 
     try:
         evolution = evolve_default_specialists(config.db_path)
@@ -368,6 +500,8 @@ async def run_cycle(
         evolution_reviews = 0
         challenger_count = 0
         _log("agent_ecosystem_error", error=type(exc).__name__)
+    finish_stage(stage_name)
+    stage_name = "cognition_and_goal_selection"
 
     goal = choose_goal(
         radar=radar,
@@ -387,6 +521,8 @@ async def run_cycle(
         )
 
     goal = refine_goal_with_cognition(goal, cognition_result)
+    finish_stage(stage_name)
+    stage_name = "research_work"
     try:
         research_work = await run_research_work(
             config.db_path, ecosystem_plan, selected_goal=goal.goal,
@@ -400,25 +536,37 @@ async def run_cycle(
         # financial authority or rewrite immutable forecasting evidence.
         ecosystem_plan = review_research_ecosystem(config.db_path)
         ecosystem_focus = ecosystem_plan.dominant_specialist
+    finish_stage(stage_name)
+    stage_name = "economic_investigation"
     cognition_state = AgentConnectionState(
         cognition_result.status,
         cognition_result.detail,
     )
 
-    health = "healthy"
-    if (
-        market_data.status == "degraded"
-        or kalshi.status == "degraded"
-        or evm.status == "degraded"
-        or cognition_result.status == "degraded"
-        or ecosystem_state == "degraded"
-        or trench.status == "degraded"
-        or polymarket_connection.status == "degraded"
-        or research_work["status"] in {"degraded", "failed", "timed_out"}
-    ):
-        health = "degraded"
-    elif kalshi.status == "unconfigured" or evm.status == "unconfigured":
-        health = "partial"
+    health = _cycle_health(
+        market_data=market_data,
+        ecosystem_state=ecosystem_state,
+        ecosystem_focus=ecosystem_focus,
+        trench=trench,
+        active_goal=goal.goal,
+        cognition=cognition_state,
+        research_status=research_work["status"],
+    )
+
+    try:
+        investigation_decision = advance_current_period_investigation(
+            config.db_path, now=datetime.now(UTC),
+        )
+        _log("agent_economic_investigation_decision",
+             action=investigation_decision["action"],
+             selected_candidate=investigation_decision["selected_candidate"],
+             decision_id=investigation_decision["decision_id"],
+             created_now=investigation_decision["created_now"],
+             owner_input_required=bool(investigation_decision["owner_input_required"]))
+    except (sqlite3.Error, OSError, ValueError, TypeError, KeyError):
+        investigation_decision = None
+        _log("agent_economic_investigation_unavailable", status="degraded")
+    finish_stage(stage_name)
 
     cycle = AgentCycleState(
         cycle_id=cycle_id,
@@ -436,6 +584,9 @@ async def run_cycle(
         market_data=market_data,
         trench=trench,
         polymarket_us=polymarket_connection,
+        duration_seconds=round(perf_counter() - cycle_clock, 6),
+        cadence_seconds=config.cycle_interval_seconds,
+        stage_timings=dict(stage_timings),
         note=(
             f"{goal.reason}; research_work={research_work['status']}"
             if collection is None
@@ -454,7 +605,8 @@ async def run_cycle(
                 f"stripe_economy={stripe_economy.get('status')}; "
                 f"collected={collection.scanned} "
                 f"valid={collection.valid} invalid={collection.invalid} "
-                f"history_candidates={candidates_recorded}"
+                f"history_candidates={candidates_recorded}; "
+                f"accounting_decision={('unavailable' if investigation_decision is None else investigation_decision['action'] + ':' + str(investigation_decision['selected_candidate']))}"
             )
         ),
     )
@@ -467,28 +619,35 @@ async def run_cycle(
         last_heartbeat_at=datetime.now(UTC),
         last_cycle=cycle,
     )
+    persistence_started = perf_counter()
     store.write_status(status)
     store.append_heartbeat(status)
+    stage_timings["state_persistence"] = round(perf_counter() - persistence_started, 6)
+    total_duration = round(perf_counter() - cycle_clock, 6)
+    store.append_cycle_timing(
+        cycle_id=cycle_id, started_at=started, completed_at=cycle.completed_at,
+        duration_seconds=total_duration, stage_timings=stage_timings,
+    )
     _log("agent_cycle", **asdict(cycle))
     return status
 
 
-async def _heartbeat_loop(
-    store: AgentStore,
-    identity: AgentIdentity,
+def _heartbeat_loop(
+    db_path: str,
     interval_seconds: float,
+    stop_event: threading.Event,
+    process_identity: dict[str, object],
 ) -> None:
-    while True:
-        await asyncio.sleep(interval_seconds)
-        current = store.read_status(identity)
-        if not current.running:
-            continue
-        heartbeat = replace(
-            current,
-            last_heartbeat_at=datetime.now(UTC),
-        )
-        store.write_status(heartbeat)
-        store.append_heartbeat(heartbeat)
+    store = AgentStore(db_path)
+    store.set_process_identity(process_identity)
+    try:
+        while not stop_event.wait(interval_seconds):
+            try:
+                store.refresh_heartbeat()
+            except sqlite3.Error:
+                _log("agent_heartbeat_error", status="unavailable")
+    finally:
+        store.conn.close()
 
 
 async def _sync_outcomes(config: AgentConfig) -> None:
@@ -532,6 +691,11 @@ async def run_agent(
     config.validate()
     identity = identity or AgentIdentity()
     store = AgentStore(config.db_path)
+    process_identity = asdict(capture_process_identity(config.db_path))
+    store.set_process_identity(process_identity)
+    runtime_session_id = (
+        f"runtime:{process_identity['pid']}:{process_identity['started_at']}"
+    )
     prior_status = store.read_status(identity)
     cycle_id = 0 if prior_status.last_cycle is None else prior_status.last_cycle.cycle_id
 
@@ -546,17 +710,34 @@ async def run_agent(
     )
     store.write_status(starting)
     store.append_heartbeat(starting)
+    store.append_runtime_event(
+        runtime_session_id,
+        "agent_runtime",
+        "started",
+        json.dumps(process_identity, sort_keys=True),
+    )
     _log("agent_started", agent_id=identity.agent_id, mission=identity.mission)
 
-    heartbeat_task = asyncio.create_task(
-        _heartbeat_loop(
-            store,
-            identity,
-            config.heartbeat_interval_seconds,
-        )
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop,
+        args=(config.db_path, config.heartbeat_interval_seconds, heartbeat_stop,
+              process_identity),
+        name="noema-agent-heartbeat",
+        daemon=True,
     )
+    heartbeat_thread.start()
+
+    trench_sampler: asyncio.Task[None] | None = None
+    trench_config = TrenchCollectorConfig.from_env()
+    if trench_config.enabled:
+        trench_sampler = asyncio.create_task(
+            _trench_sampler_loop(config.db_path, trench_config),
+            name="noema-trench-forward-sampler",
+        )
 
     next_outcome_sync = 0.0
+    first_cycle_event_written = False
     try:
         while True:
             cycle_id += 1
@@ -569,9 +750,21 @@ async def run_agent(
                         OSError, KeyError, TypeError) as exc:
                     _log("agent_outcome_sync_error", error=type(exc).__name__)
             try:
-                await run_cycle(
+                cycle_status = await run_cycle(
                     cycle_id=cycle_id, config=config, identity=identity, store=store,
                 )
+                if not first_cycle_event_written and cycle_status is not None:
+                    cycle = cycle_status.last_cycle
+                    store.append_runtime_event(
+                        runtime_session_id,
+                        "agent_cycle",
+                        "completed",
+                        json.dumps({
+                            "cycle_id": None if cycle is None else cycle.cycle_id,
+                            "health": "unknown" if cycle is None else cycle.health,
+                        }, sort_keys=True),
+                    )
+                    first_cycle_event_written = True
             except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                     KeyError, TypeError) as exc:
                 _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
@@ -583,11 +776,14 @@ async def run_agent(
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
+        if trench_sampler is not None:
+            trench_sampler.cancel()
+            try:
+                await trench_sampler
+            except asyncio.CancelledError:
+                pass
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=max(5.0, config.heartbeat_interval_seconds + 1))
 
         stopped = AgentStatus(
             agent_id=identity.agent_id,
@@ -600,4 +796,7 @@ async def run_agent(
         )
         store.write_status(stopped)
         store.append_heartbeat(stopped)
+        store.append_runtime_event(
+            runtime_session_id, "agent_runtime", "stopped", "runtime shutdown completed",
+        )
         _log("agent_stopped", agent_id=identity.agent_id)

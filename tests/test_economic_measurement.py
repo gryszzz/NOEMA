@@ -21,11 +21,34 @@ def test_missing_database_stays_missing_and_profit_unknown(tmp_path, monkeypatch
     assert report['status'] == 'no_recorded_cash'
     assert report['net_economic_profit_usd'] is None
     assert report['self_funding_demonstrated'] is False
+    progress = report['mission_progress']
+    assert progress['status'] == 'unproven'
+    assert progress['verified_realized_revenue_usd'] is None
+    assert progress['complete_attributable_costs_usd'] is None
+    assert progress['reserve_balance_usd'] is None
+    assert progress['self_funding_ratio'] is None
     assert not path.parent.exists()
     monkeypatch.setenv('NOEMA_DB_PATH', str(path))
     response = TestClient(app).get('/api/economic-measurement')
     assert response.status_code == 200
     assert not path.exists()
+
+
+def test_home_economic_api_exposes_period_closure_and_exact_provider_blockers(tmp_path, monkeypatch):
+    path = str(tmp_path / 'noema.db')
+    ledger = EconomicLedger(path)
+    ledger.ensure_current_period_manifest(provenance={'source': 'api-test'})
+    month = datetime.now(UTC).strftime('%Y-%m')
+    monkeypatch.setenv('NOEMA_DB_PATH', path)
+    response = TestClient(app).get('/api/economic-measurement')
+    assert response.status_code == 200
+    canonical = response.json()['canonical_ledger']
+    assert canonical['period_closure'] == 'OPEN'
+    assert canonical['coverage_status'] == 'PARTIAL'
+    assert canonical['blocking_providers']
+    assert all(row['month_utc'] == month for row in canonical['provider_coverage'])
+    assert canonical['net_verified_contribution_usd'] is None
+    ledger.conn.close()
 
 
 def test_revenue_less_full_recorded_expenses_is_a_loss_and_estimates_are_not_double_counted(tmp_path):
@@ -66,6 +89,9 @@ def test_positive_cash_does_not_claim_self_funding_and_corrupt_values_are_visibl
     report = build_economic_measurement(path, now=NOW)
     assert report['status'] == 'recorded_cash_surplus'
     assert report['self_funding_demonstrated'] is False
+    assert report['mission_progress']['verified_realized_revenue_usd'] is None
+    assert report['mission_progress']['known_operator_reported_cash_receipts_usd'] == '100'
+    assert report['mission_progress']['status'] == 'unproven'
     tracker.conn.execute("UPDATE bill_entries SET amount_usd='NaN'")
     tracker.conn.commit()
     report = build_economic_measurement(path, now=NOW)

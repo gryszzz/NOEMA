@@ -13,12 +13,19 @@ import re
 import sqlite3
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from .economic_ledger import (
+    EconomicEvent,
+    EconomicLedger,
+    ensure_economic_event_schema,
+    record_event_on_connection,
+)
 from .mission_store import MissionStore
 from .research_session import SessionStore
 from .resource_control import try_acquire
@@ -35,6 +42,15 @@ _NOT_EXPOSED = ("refunds", "payouts", "balance_transactions", "fees")
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _next_month_start(month: str) -> str:
+    year, number = (int(part) for part in month.split("-", 1))
+    if number == 12:
+        year, number = year + 1, 1
+    else:
+        number += 1
+    return datetime(year, number, 1, tzinfo=UTC).isoformat()
 
 
 def _tool_payload(result: Any) -> Any:
@@ -100,6 +116,7 @@ class StripeEconomyStore:
 
     def __init__(self, path: str):
         db = Path(path)
+        self.conn_path = str(db)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db, timeout=5)
         self.conn.row_factory = sqlite3.Row
@@ -136,11 +153,12 @@ class StripeEconomyStore:
             );
             CREATE INDEX IF NOT EXISTS stripe_payments_created
                 ON stripe_payment_observations(created_at DESC);
-            CREATE TABLE IF NOT EXISTS stripe_sync_state (
+        CREATE TABLE IF NOT EXISTS stripe_sync_state (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 next_sync_at TEXT NOT NULL
             );
         """)
+        ensure_economic_event_schema(self.conn)
         columns = {row[1] for row in self.conn.execute(
             "PRAGMA table_info(stripe_economy_snapshots)"
         )}
@@ -164,6 +182,108 @@ class StripeEconomyStore:
         except (ValueError, TypeError):
             return True
         return datetime.now(UTC) >= next_sync
+
+    def import_persisted_successes(self) -> int:
+        """Backfill already observed successful PaymentIntents into canonical evidence once."""
+        rows = self.conn.execute(
+            "SELECT payment_intent_id,charge_id,created_at,status,amount_received_minor,currency,"
+            "livemode,mission_id,attribution_json FROM stripe_payment_observations "
+            "WHERE status='succeeded' ORDER BY created_at"
+        ).fetchall()
+        inserted = 0
+        with self.conn:
+            for row in rows:
+                if (row[4] is None or type(row[4]) is not int or row[4] < 0
+                        or str(row[5]).lower() != "usd" or not row[2]):
+                    continue
+                try:
+                    occurred_at = datetime.fromisoformat(str(row[2]))
+                except ValueError:
+                    continue
+                if occurred_at.tzinfo is None:
+                    continue
+                amount = Decimal(row[4]) / Decimal(100)
+                result = record_event_on_connection(self.conn, EconomicEvent(
+                    provider="stripe", external_reference_id=str(row[0]),
+                    event_type="captured_payment_observed", occurred_at=occurred_at,
+                    currency="USD", amount=amount, amount_usd=amount,
+                    reconciliation_state="MATCHED", value_state="realized",
+                    capital_class="unclassified_cash", confidence_state="provider_confirmed",
+                    completeness_state="incomplete", mission_id=row[7],
+                    lane=(json.loads(row[8]).get("noema_lane") if row[8] else None),
+                    evidence={"payment_intent_id": str(row[0]), "charge_id": row[1],
+                              "livemode": None if row[6] is None else bool(row[6]),
+                              "origin": "persisted Stripe read-only observation",
+                              "revenue_classification": "unproven",
+                              "fees_refunds_disputes_payouts": "not_reconciled"},
+                ))
+                inserted += int(result["status"] == "inserted")
+        return inserted
+
+    def attest_current_period(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Attest only the evidence actually present in the latest Stripe read snapshot."""
+        now = (now or datetime.now(UTC)).astimezone(UTC)
+        month = now.strftime("%Y-%m")
+        snapshot = self.conn.execute(
+            "SELECT id,observed_at,status,payment_intent_count,succeeded_count,scan_limit,capabilities_json "
+            "FROM stripe_economy_snapshots ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if snapshot is None:
+            state, actual, activity, blockers = "UNAVAILABLE", [], None, [
+                "No authenticated Stripe snapshot exists for this period.",
+            ]
+            observed_at = now
+            evidence = {"result": "no persisted snapshot"}
+            provenance = {"source": "Stripe read-only account sync"}
+        else:
+            observed_at = datetime.fromisoformat(snapshot[1])
+            start = f"{month}-01T00:00:00+00:00"
+            rows = self.conn.execute(
+                "SELECT COUNT(*) FROM stripe_payment_observations WHERE status='succeeded' "
+                "AND currency='usd' AND created_at>=? AND created_at<?",
+                (start, _next_month_start(month)),
+            ).fetchone()
+            period_successes = int(rows[0])
+            try:
+                capabilities = json.loads(snapshot[6] or "{}")
+            except (ValueError, TypeError):
+                capabilities = {}
+            capability_rows = capabilities.get("available", []) if isinstance(capabilities, dict) else []
+            fee_refund_tools = {"list_refunds", "list_payouts", "list_balance_transactions"}
+            missing = sorted(fee_refund_tools - set(capability_rows))
+            blockers = ["Stripe fee/refund/payout reconciliation data is not exposed by the configured tools."]
+            if int(snapshot[5] or 0) <= int(snapshot[3] or 0):
+                blockers.append("PaymentIntent scan reached its configured limit; complete period coverage is unproven.")
+            state = "PARTIAL" if snapshot[2] == "connected" else "FAILED"
+            actual = ["captured_payments"] if snapshot[2] == "connected" else []
+            activity = period_successes > 0 if snapshot[2] == "connected" else None
+            evidence = {"snapshot_id": int(snapshot[0]), "snapshot_status": str(snapshot[2]),
+                        "payment_intent_count": int(snapshot[3] or 0),
+                        "succeeded_count": int(snapshot[4] or 0),
+                        "period_successful_usd_payment_intents": period_successes,
+                        "scan_limit": int(snapshot[5] or 0),
+                        "missing_read_capabilities": missing}
+            provenance = {"source": "Stripe read-only account sync", "snapshot_id": int(snapshot[0]),
+                          "observed_at": observed_at.isoformat()}
+        ledger = EconomicLedger(self.conn_path)
+        try:
+            latest = ledger.conn.execute(
+                "SELECT observed_at,state FROM economic_provider_coverage "
+                "WHERE provider='stripe' AND month_utc=? ORDER BY id DESC LIMIT 1", (month,),
+            ).fetchone()
+            if latest is not None and latest[0] == observed_at.astimezone(UTC).isoformat() and latest[1] == state:
+                return {"state": state, "period_successful_payment_intents": evidence.get(
+                    "period_successful_usd_payment_intents", 0), "updated": False}
+            ledger.attest_provider_coverage(
+                provider="stripe", month_utc=month, state=state,
+                actual_evidence_classes=actual, observed_at=observed_at,
+                provenance=provenance, evidence=evidence, unresolved_blockers=blockers,
+                applicable_activity_detected=activity,
+            )
+        finally:
+            ledger.conn.close()
+        return {"state": state, "period_successful_payment_intents": evidence.get(
+            "period_successful_usd_payment_intents", 0), "updated": True}
 
     def record(
         self, *, status: str, livemode: bool | None, available: list[dict[str, Any]] | None,
@@ -215,6 +335,28 @@ class StripeEconomyStore:
                      payment["mission_id"], json.dumps(payment["attribution"], sort_keys=True),
                      observed_at, observed_at),
                 )
+                if (payment["status"] == "succeeded" and payment["currency"] == "usd"
+                        and type(payment["amount_received_minor"]) is int
+                        and payment["amount_received_minor"] >= 0 and payment["created_at"]):
+                    try:
+                        occurred_at = datetime.fromisoformat(payment["created_at"])
+                    except (TypeError, ValueError):
+                        occurred_at = None
+                    if occurred_at is not None and occurred_at.tzinfo is not None:
+                        gross_usd = Decimal(payment["amount_received_minor"]) / Decimal(100)
+                        record_event_on_connection(self.conn, EconomicEvent(
+                            provider="stripe", external_reference_id=payment["id"],
+                            event_type="captured_payment_observed", occurred_at=occurred_at,
+                            currency="USD", amount=gross_usd, amount_usd=gross_usd,
+                            reconciliation_state="MATCHED", value_state="realized",
+                            capital_class="unclassified_cash", confidence_state="provider_confirmed",
+                            completeness_state="incomplete", mission_id=payment["mission_id"],
+                            lane=payment["attribution"].get("noema_lane"),
+                            evidence={"payment_intent_id": payment["id"],
+                                      "charge_id": payment["charge_id"],
+                                      "livemode": payment["livemode"],
+                                      "refunds_fees_and_payout": "not_reconciled"},
+                        ))
             interval = max(60, min(86400, int(os.getenv("NOEMA_STRIPE_SYNC_INTERVAL_SECONDS", "900"))))
             next_sync = datetime.now(UTC).timestamp() + interval
             self.conn.execute(
@@ -268,6 +410,17 @@ class StripeEconomyStore:
 
     def close(self) -> None:
         self.conn.close()
+
+
+def reconcile_persisted_stripe_evidence(path: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Backfill persisted authenticated observations and attest current-period limitations."""
+    store = StripeEconomyStore(path)
+    try:
+        imported = store.import_persisted_successes()
+        coverage = store.attest_current_period(now=now)
+        return {"imported_canonical_events": imported, **coverage}
+    finally:
+        store.close()
 
 
 def _payments(payload: Any, mission_ids: set[str]) -> list[dict[str, Any]]:

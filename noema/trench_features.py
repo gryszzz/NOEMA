@@ -12,7 +12,9 @@ def _fraction_change(start: float, end: float) -> float:
     return (end - start) / start
 
 
-def _flow_imbalance(buy: float, sell: float) -> float:
+def _flow_imbalance(buy: float | None, sell: float | None) -> float | None:
+    if buy is None or sell is None:
+        return None
     total = buy + sell
     return 0.0 if total <= 0 else (buy - sell) / total
 
@@ -82,7 +84,8 @@ def _organic_buyer_share(last: LaunchTick) -> float | None:
 
 
 def _organic_volume_fraction(last: LaunchTick) -> float | None:
-    if last.organic_buy_volume_usd is None or last.organic_sell_volume_usd is None:
+    if (last.organic_buy_volume_usd is None or last.organic_sell_volume_usd is None
+            or last.buy_volume_usd is None or last.sell_volume_usd is None):
         return None
     total = last.buy_volume_usd + last.sell_volume_usd
     if total <= 0:

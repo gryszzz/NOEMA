@@ -1,8 +1,10 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from noema.solana_research import (
+    DexScreenerTrenchPriceClient,
     JupiterTrenchResearchClient,
     ProviderFailure,
     SolanaRpcResearchClient,
@@ -35,6 +37,14 @@ class FakeSolana(SolanaRpcResearchClient):
         return (0.08, 0.06, 0.04, 0.03, 0.02)
 
 
+class FakeDexScreener(DexScreenerTrenchPriceClient):
+    def __init__(self, pair):
+        self.pair = pair
+
+    async def tokens_by_mint(self, mints):
+        return {mint: self.pair for mint in mints} if self.pair else {}
+
+
 def token_at(first_pool: datetime, *, price: float = 0.002):
     return {
         "id": "mint-a",
@@ -58,6 +68,47 @@ def token_at(first_pool: datetime, *, price: float = 0.002):
             "devBalancePercentage": 3,
         },
     }
+
+
+def test_legacy_rpc_enrichment_failures_backfill_canonical_health(tmp_path):
+    db = str(tmp_path / "legacy-rpc-health.db")
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE trench_collection_attempts (id INTEGER PRIMARY KEY, mint TEXT, "
+        "horizon_seconds INTEGER, attempted_at TEXT, status TEXT, detail TEXT, raw_json TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO trench_collection_attempts(attempted_at,detail,status) VALUES (?,?,?)",
+        [
+            ("2026-09-29T02:00:00+00:00", "holder enrichment unavailable: solana_rpc:rate_limited", "recorded"),
+            ("2026-09-29T03:00:00+00:00", "holder enrichment unavailable: solana_rpc:rate_limited", "recorded"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    store = TrenchCollectorStore(db)
+    health = store.provider_states()["solana_rpc:primary"]
+    assert health["state"] == "degraded"
+    assert health["last_attempt_at"] == "2026-09-29T03:00:00+00:00"
+    assert health["last_failure_at"] == "2026-09-29T03:00:00+00:00"
+    assert health["last_success_at"] is None
+    assert health["consecutive_failures"] == 2
+    assert health["last_error_class"] == "rate_limited"
+    store.close()
+
+    # Reopening does not rewrite newer canonical health from the migration.
+    store = TrenchCollectorStore(db)
+    store.record_provider_health(
+        "solana_rpc:primary", success=True,
+        attempted_at=datetime(2026, 9, 30, tzinfo=UTC),
+    )
+    store.close()
+    store = TrenchCollectorStore(db)
+    assert store.provider_states()["solana_rpc:primary"]["state"] == "healthy"
+    store.close()
 
 
 def test_duplicate_launch_refreshes_last_seen_without_creating_new_identity(tmp_path) -> None:
@@ -206,9 +257,190 @@ async def test_solana_rate_limit_keeps_jupiter_observation_and_persists_safe_cla
 
     assert summary.recorded == 1
     assert summary.provider_failures == ("solana_rpc:rate_limited",)
+    assert "solana_rpc:primary=degraded" in summary.provider_health
     assert attempt == ("recorded", "holder enrichment unavailable: solana_rpc:rate_limited")
     assert '"status":"unavailable"' in provenance_raw
     assert '"error_class":"rate_limited"' in provenance_raw
+
+
+@pytest.mark.asyncio
+async def test_dexscreener_current_price_fallback_is_provenanced_and_jupiter_raw_is_retained(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    token = token_at(start, price=0)
+    token["liquidity"] = None
+    pair = {
+        "chainId": "solana", "dexId": "fixture-dex", "pairAddress": "pool-1",
+        "baseToken": {"address": "mint-a"}, "priceUsd": "0.004",
+        "liquidity": {"usd": 12000}, "txns": {"m5": {"buys": 2, "sells": 1}},
+    }
+    db = str(tmp_path / "dex-fallback.db")
+    summary = await collect_trench_cycle(
+        db_path=db, jupiter=FakeJupiter(token), solana=FakeSolana(),
+        price_fallback=FakeDexScreener(pair), now=start + timedelta(seconds=300),
+    )
+    collector = TrenchCollectorStore(db)
+    row = collector.conn.execute(
+        "SELECT tick_json,raw_token_json,provider_provenance_json FROM trench_observations WHERE mint='mint-a' AND horizon_seconds=300"
+    ).fetchone()
+    tick, raw, provenance = (json.loads(value) for value in row)
+    assert summary.recorded == 1
+    assert tick["price_usd"] == 0.004
+    assert tick["liquidity_usd"] == 12000
+    assert raw["usdPrice"] == 0
+    assert raw["_noema_market_data_fallback"]["pairAddress"] == "pool-1"
+    assert raw["_noema_normalized_price_usd"] == 0.004
+    assert provenance["fields"]["price_usd"] == "dexscreener.priceUsd"
+    assert provenance["fields"]["liquidity_usd"] == "dexscreener.liquidity.usd"
+    assert provenance["market_fallback"]["minimum_recent_trades"] == 1
+    assert collector.provider_states()["dexscreener_market"]["state"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_jupiter_market_outage_does_not_block_independent_dexscreener_observation(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+
+    class JupiterMarketDown(FakeJupiter):
+        async def tokens_by_mint(self, _mints):
+            raise ProviderFailure("jupiter", "tokens_by_mint", "rate_limited", http_status=429)
+
+    pair = {
+        "chainId": "solana", "dexId": "fixture-dex", "pairAddress": "pool-1",
+        "baseToken": {"address": "mint-a"}, "priceUsd": "0.004",
+        "liquidity": {"usd": 12000}, "txns": {"m5": {"buys": 2, "sells": 1}},
+    }
+    db = str(tmp_path / "jupiter-outage.db")
+    summary = await collect_trench_cycle(
+        db_path=db, jupiter=JupiterMarketDown(token_at(start)), solana=FakeSolana(),
+        price_fallback=FakeDexScreener(pair), now=start + timedelta(seconds=300),
+    )
+    store = TrenchCollectorStore(db)
+    assert summary.recorded == 1
+    assert "jupiter:rate_limited" in summary.provider_failures
+    assert store.conn.execute(
+        "SELECT provider_provenance_json FROM trench_observations WHERE mint='mint-a' AND horizon_seconds=300"
+    ).fetchone()[0]
+    assert store.provider_states()["jupiter_market"]["state"] == "degraded"
+    assert store.provider_states()["dexscreener_market"]["state"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_price_unavailable_has_durable_bounded_retry_state(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    db = str(tmp_path / "price-retry.db")
+    summary = await collect_trench_cycle(
+        db_path=db, jupiter=FakeJupiter(token_at(start, price=0)), solana=FakeSolana(),
+        now=start + timedelta(seconds=300),
+    )
+    assert summary.unavailable == 1
+    store = TrenchCollectorStore(db)
+    attempt = store.conn.execute(
+        "SELECT retry_at FROM trench_collection_attempts WHERE mint='mint-a' AND horizon_seconds=300 AND status='unavailable'"
+    ).fetchone()
+    retry_at = datetime.fromisoformat(attempt[0])
+    store.close()
+    reopened = TrenchCollectorStore(db)
+    assert reopened.due_observations(now=retry_at - timedelta(milliseconds=1)) == []
+    assert reopened.due_observations(now=retry_at + timedelta(milliseconds=1)) == [
+        DueObservation("mint-a", start, 300, start + timedelta(seconds=300))
+    ]
+    reopened.close()
+
+
+def test_missed_horizon_accounting_is_idempotent(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    store = TrenchCollectorStore(str(tmp_path / "missed-idempotent.db"))
+    store.register_recent([token_at(start)], now=start)
+    due = DueObservation("mint-a", start, 30, start + timedelta(seconds=30))
+    first = store.record_attempt(due, status="missed", attempted_at=start + timedelta(seconds=90))
+    second = store.record_attempt(due, status="missed", attempted_at=start + timedelta(seconds=120))
+    assert first == second
+    assert store.conn.execute("SELECT COUNT(*) FROM trench_collection_attempts WHERE status='missed'").fetchone()[0] == 1
+
+
+def test_recorded_observation_is_never_reclassified_as_missed(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    store = TrenchCollectorStore(str(tmp_path / "recorded-not-missed.db"))
+    store.register_recent([token_at(start)], now=start)
+    due = DueObservation("mint-a", start, 30, start + timedelta(seconds=30))
+    assert store.record_observation(
+        due,
+        tick=LaunchTick(observed_at=start + timedelta(seconds=31), price_usd=0.002,
+                        liquidity_usd=10_000),
+        control=TokenControlState(),
+        raw_token={"id": "mint-a"},
+        holder_shares=(),
+    )
+
+    # A later scheduler pass happens after the target's allowed observation window.
+    assert store.due_observations(now=start + timedelta(seconds=61), horizons=(30,)) == []
+    assert store.conn.execute(
+        "SELECT COUNT(*) FROM trench_collection_attempts WHERE status='missed'"
+    ).fetchone() == (0,)
+
+
+def test_dashboard_missed_count_excludes_false_missed_after_recorded_observation(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    db = str(tmp_path / "dashboard-missed-reconcile.db")
+    store = TrenchCollectorStore(db)
+    store.register_recent([token_at(start)], now=start)
+    due = DueObservation("mint-a", start, 30, start + timedelta(seconds=30))
+    store.record_observation(
+        due,
+        tick=LaunchTick(observed_at=start + timedelta(seconds=31), price_usd=0.002,
+                        liquidity_usd=10_000),
+        control=TokenControlState(),
+        raw_token={"id": "mint-a"},
+        holder_shares=(),
+    )
+    store.record_attempt(due, status="missed", attempted_at=start + timedelta(seconds=90))
+    store.close()
+
+    progress = build_trench_overview(db)["progress"]
+    assert progress["attempt_statuses"]["missed"] == 0
+    assert progress["missed_attempts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_forward_label_schedule_survives_collector_restarts_end_to_end(tmp_path):
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    db = str(tmp_path / "forward-e2e.db")
+    jupiter = FakeJupiter(token_at(start))
+    solana = FakeSolana()
+    # Discovery and each scheduled prospective snapshot use separate collector
+    # instances, matching process restarts between polling cycles.
+    await collect_trench_cycle(db_path=db, jupiter=jupiter, solana=solana, now=start)
+    for horizon in (30, 60, 120, 300):
+        result = await collect_trench_cycle(
+            db_path=db, jupiter=jupiter, solana=solana,
+            now=start + timedelta(seconds=horizon), enrichment_limit=0,
+        )
+        assert result.recorded == 1
+    store = TrenchCollectorStore(db)
+    candidate = store.conn.execute(
+        "SELECT candidate_id FROM trench_candidates WHERE token_mint='mint-a'"
+    ).fetchone()
+    schedule = store.conn.execute(
+        "SELECT target_at,state FROM trench_candidate_maturities WHERE candidate_id=?",
+        candidate,
+    ).fetchone()
+    assert schedule == ((start + timedelta(seconds=3600)).isoformat(), "PENDING")
+    store.close()
+
+    matured = await collect_trench_cycle(
+        db_path=db, jupiter=FakeJupiter(token_at(start, price=0.0018)),
+        solana=solana, now=start + timedelta(seconds=3600), enrichment_limit=0,
+    )
+    assert matured.recorded == 1
+    assert matured.counterfactuals_recorded == 1
+    store = TrenchCollectorStore(db)
+    assert store.conn.execute(
+        "SELECT state FROM trench_candidate_maturities WHERE candidate_id=?", candidate,
+    ).fetchone() == ("RECORDED",)
+    assert store.conn.execute(
+        "SELECT observed_at FROM trench_counterfactuals WHERE candidate_id=? AND horizon_seconds=3600",
+        candidate,
+    ).fetchone() == ((start + timedelta(seconds=3600)).isoformat(),)
+    store.close()
 
 
 def test_transient_provider_failures_retry_until_horizon_is_missed(tmp_path) -> None:

@@ -522,7 +522,9 @@ def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, A
         trials.conn.close()
 
     if inserted and isinstance(result.get("paper_simulation", {}).get("paired_fill"), dict):
-        from .economic_ledger import EconomicLedger
+        from decimal import InvalidOperation
+
+        from .economic_ledger import EconomicEvent, EconomicLedger
 
         fill = result["paper_simulation"]["paired_fill"]
         try:
@@ -542,6 +544,17 @@ def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, A
                          "settled": False, "live_execution": False,
                          "assumptions": result["paper_simulation"].get("assumptions", [])},
             )
+            if net_result is not None:
+                economics.record_event(EconomicEvent(
+                    provider="paper_execution", external_reference_id=evidence_hash,
+                    event_type="paper_result", occurred_at=datetime.now(UTC),
+                    currency="USD", amount=net_result, amount_usd=net_result,
+                    reconciliation_state="OBSERVED", value_state="paper",
+                    capital_class="none", confidence_state="derived",
+                    completeness_state="incomplete", activity_id=trial_id,
+                    lane="prediction", evidence={"evidence_hash": evidence_hash,
+                                                  "settled": False, "live_execution": False},
+                ))
         finally:
             economics.conn.close()
 
@@ -843,12 +856,27 @@ def mature_paper_pairs(path: str, *, now: datetime | None = None) -> dict[str, A
         conn.close()
 
     if settled_rows:
-        from .economic_ledger import EconomicLedger
+        from .economic_ledger import EconomicEvent, EconomicLedger
 
         for result in settled_rows:
             ledger = EconomicLedger(path)
             try:
                 ledger.append_event("paper_cross_venue_settlement", payload=result)
+                if result.get("realized_net_if_paper_usd") is not None:
+                    amount = Decimal(str(result["realized_net_if_paper_usd"]))
+                    ledger.record_event(EconomicEvent(
+                        provider="paper_execution",
+                        external_reference_id=(f"{result.get('canonical_event_id')}:"
+                                               f"{result.get('evidence_hash')}"),
+                        event_type="paper_settlement", occurred_at=datetime.now(UTC),
+                        currency="USD", amount=amount, amount_usd=amount,
+                        reconciliation_state="OBSERVED", value_state="paper",
+                        capital_class="none", confidence_state="derived",
+                        completeness_state="incomplete", activity_id=result.get("trial_id"),
+                        lane="prediction", evidence={"evidence_hash": result.get("evidence_hash"),
+                                                      "settled_venues": result.get("settled_venues"),
+                                                      "live_execution": False},
+                    ))
             finally:
                 ledger.conn.close()
     walk_forward = _record_pair_walk_forward(path, now=now)

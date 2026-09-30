@@ -66,6 +66,18 @@ def _progress(
     attempt_statuses = ({str(state): int(count) for state, count in conn.execute(
         "SELECT status,COUNT(*) FROM trench_collection_attempts GROUP BY status"
     )} if "trench_collection_attempts" in tables else {})
+    if "trench_collection_attempts" in tables:
+        missed_query = (
+            "SELECT COUNT(*) FROM (SELECT DISTINCT a.mint,a.horizon_seconds "
+            "FROM trench_collection_attempts a WHERE a.status='missed'"
+        )
+        if "trench_observations" in tables:
+            missed_query += (
+                " AND NOT EXISTS (SELECT 1 FROM trench_observations o "
+                "WHERE o.mint=a.mint AND o.horizon_seconds=a.horizon_seconds)"
+            )
+        missed_query += ")"
+        attempt_statuses["missed"] = int(conn.execute(missed_query).fetchone()[0])
     latest_failure = None
     latest_rpc_failure = None
     latest_rpc_detail = None
@@ -73,7 +85,9 @@ def _progress(
     if "trench_collection_attempts" in tables:
         failure = conn.execute(
             "SELECT detail FROM trench_collection_attempts "
-            "WHERE status IN ('error','unavailable','missed') "
+            "WHERE status IN ('error','unavailable') OR (status='missed' AND NOT EXISTS ("
+            "SELECT 1 FROM trench_observations o WHERE o.mint=trench_collection_attempts.mint "
+            "AND o.horizon_seconds=trench_collection_attempts.horizon_seconds)) "
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
         latest_failure = str(failure[0]) if failure and failure[0] else None
@@ -291,9 +305,57 @@ def _progress(
                          (now - parse_aware_time(str(heartbeat)).astimezone(UTC)).total_seconds() <= 90)
     except (TypeError, ValueError):
         runtime_fresh = False
+    persisted_providers: dict[str, dict[str, Any]] = {}
+    if "trench_provider_health" in tables:
+        persisted_providers = {str(row[0]): {
+            "state": str(row[1]), "last_attempt_at": row[2], "last_success_at": row[3],
+            "last_failure_at": row[4], "consecutive_failures": int(row[5]),
+            "next_retry_at": row[6], "last_error_class": row[7],
+        } for row in conn.execute(
+            "SELECT provider,state,last_attempt_at,last_success_at,last_failure_at,consecutive_failures,next_retry_at,last_error_class FROM trench_provider_health"
+        )}
+    maturity_schedule: dict[str, int] = {}
+    maturity_rows: list[dict[str, Any]] = []
+    if "trench_candidate_maturities" in tables:
+        maturity_schedule = {str(row[0]): int(row[1]) for row in conn.execute(
+            "SELECT state,COUNT(*) FROM trench_candidate_maturities GROUP BY state"
+        )}
+        maturity_rows = [{
+            "candidate_id": str(row[0]), "target_at": str(row[1]),
+            "state": str(row[2]), "attempts": int(row[3]),
+            "last_attempt_at": row[4], "next_retry_at": row[5],
+            "detail": row[6],
+        } for row in conn.execute(
+            "SELECT candidate_id,target_at,state,attempts,last_attempt_at,next_retry_at,detail FROM trench_candidate_maturities ORDER BY target_at LIMIT 25"
+        )]
+
+    def provider_summary(keys: list[str]) -> dict[str, Any]:
+        rows = [persisted_providers[key] for key in keys if key in persisted_providers]
+        if not rows:
+            return {"state": "unknown", "last_success_at": None,
+                    "last_failure_at": None, "next_retry_at": None,
+                    "last_error_class": None}
+        latest = max(rows, key=lambda item: str(item.get("last_attempt_at") or ""))
+        failed_after_success = (latest.get("last_failure_at") is not None and
+                               (latest.get("last_success_at") is None or
+                                str(latest["last_failure_at"]) > str(latest["last_success_at"])))
+        return {"state": "degraded" if failed_after_success else latest["state"],
+                "last_success_at": latest.get("last_success_at"),
+                "last_failure_at": latest.get("last_failure_at"),
+                "next_retry_at": latest.get("next_retry_at"),
+                "last_error_class": latest.get("last_error_class")}
+
+    jupiter_provider_state = provider_summary(
+        ["jupiter_price", "jupiter_market", "jupiter_discovery"]
+    )
+    solana_provider_state = provider_summary([
+        provider for provider in persisted_providers if provider.startswith("solana_rpc:")
+    ])
     runtime_detail = str(runtime.get("detail") or "")
-    jupiter_degraded = runtime_fresh and "jupiter:" in runtime_detail
-    solana_health = ("degraded" if rpc_failed and latest_rpc_at
+    jupiter_degraded = (jupiter_provider_state["state"] == "degraded"
+                        if persisted_providers else runtime_fresh and "jupiter:" in runtime_detail)
+    solana_health = (solana_provider_state["state"] if persisted_providers else
+                     "degraded" if rpc_failed and latest_rpc_at
                      else health(latest_rpc_at, bool(rpc_success)))
     collector_status = (runtime["status"] if collector_enabled is True else
                         "disabled" if collector_enabled is False else "unknown_configuration")
@@ -343,8 +405,17 @@ def _progress(
         "last_successful_collection": last_success,
         "collector_enabled": collector_enabled,
         "collector_status": collector_status,
-        "provider_health": {"jupiter": "degraded" if jupiter_degraded else health(last_success, bool(last_success)),
-                            "solana_rpc": solana_health},
+        "provider_health": {
+            "jupiter": "degraded" if jupiter_degraded else health(last_success, bool(last_success)),
+            "solana_rpc": solana_health,
+            "records": persisted_providers,
+            "jupiter_detail": jupiter_provider_state,
+            "solana_rpc_detail": solana_provider_state,
+        },
+        "maturity_schedule": {
+            "states": maturity_schedule,
+            "candidates": maturity_rows,
+        },
         "solana_rpc_last_enrichment_at": rpc_success,
         "solana_rpc_last_attempt_at": latest_rpc_at,
         "solana_rpc_fallback_configured": bool(

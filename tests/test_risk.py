@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from math import inf, nan
 
 from noema.models import Forecast, MarketSnapshot, Mode, Opportunity
 from noema.risk import RiskEngine, RiskPolicy
@@ -80,3 +81,38 @@ def test_stale_market_snapshot_passes() -> None:
     action = RiskEngine(RiskPolicy()).decide(stale_op, bankroll_usd=2_000)
     assert action.decision.value == "pass"
     assert "stale" in action.reason
+
+
+def test_non_finite_opportunity_values_fail_closed() -> None:
+    op = opportunity()
+    malformed = (
+        replace(op, robust_edge=nan),
+        replace(op, forecast=replace(op.forecast, probability_yes=inf)),
+        replace(op, snapshot=replace(op.snapshot, yes_ask=nan)),
+        replace(op, snapshot=replace(op.snapshot, liquidity_usd=inf)),
+        replace(op, snapshot=replace(op.snapshot, captured_at=datetime.now(UTC).replace(tzinfo=None))),
+    )
+    for candidate in malformed:
+        action = RiskEngine(RiskPolicy(mode=Mode.LIVE)).decide(candidate, bankroll_usd=2_000)
+        assert action.decision.value == "pass"
+        assert action.stake_usd == 0
+        assert "malformed" in action.reason
+
+
+def test_invalid_policy_and_budget_inputs_fail_closed() -> None:
+    op = opportunity()
+    invalid_policies = (
+        replace(RiskPolicy(mode=Mode.LIVE), min_robust_edge=nan),
+        replace(RiskPolicy(mode=Mode.LIVE), max_stake_usd=inf),
+        replace(RiskPolicy(mode=Mode.LIVE), max_fraction_of_bankroll=-0.1),
+    )
+    for policy in invalid_policies:
+        action = RiskEngine(policy).decide(op, bankroll_usd=2_000)
+        assert action.decision.value == "pass"
+        assert "policy is malformed" in action.reason
+
+    engine = RiskEngine(RiskPolicy(mode=Mode.LIVE))
+    for bankroll, multiplier in ((nan, 1), (2_000, nan), (2_000, 1.1)):
+        action = engine.decide(op, bankroll_usd=bankroll, risk_multiplier=multiplier)
+        assert action.decision.value == "pass"
+        assert action.stake_usd == 0

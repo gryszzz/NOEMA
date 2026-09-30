@@ -32,7 +32,7 @@ jobs:
       - name: Install site tools
         run: npm ci
       - name: Validate report contract and build Pages
-        run: npm run site:test && npm run site:build
+        run: npm run site:test && npm run ops:test && npm run site:build
       - name: Install browser
         run: npx playwright install --with-deps chromium
       - name: Production browser QA
