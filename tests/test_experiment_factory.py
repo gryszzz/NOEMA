@@ -1,9 +1,9 @@
-from noema.experiment_factory import propose_challengers
+from noema.experiment_factory import propose_challengers, register_challengers
 from noema.specialist_evolution import SpecialistEvidence
 from noema.specialists import SpecialistProfile, SpecialistState
 
 
-def test_trench_labels_create_simple_survival_challengers() -> None:
+def test_trench_trial_waits_for_full_walk_forward_evidence_floor() -> None:
     profile = SpecialistProfile(
         name="trench-1",
         family="solana_new_tokens",
@@ -24,11 +24,61 @@ def test_trench_labels_create_simple_survival_challengers() -> None:
         research_credible=None,
     )
 
-    proposals = propose_challengers(profile, evidence, None)
+    assert propose_challengers(profile, evidence, None) == ()
 
-    assert proposals
+    qualified_profile = SpecialistProfile(
+        name="trench-1",
+        family="solana_new_tokens",
+        state=SpecialistState.PAPER,
+        resolved=70,
+        reliability=0.2,
+        calibration_error=None,
+        after_cost_return=None,
+        drawdown_fraction=None,
+    )
+    qualified_evidence = SpecialistEvidence(
+        resolved=70,
+        brier=None,
+        market_baseline_brier=None,
+        after_cost_return=None,
+        max_drawdown_fraction=None,
+        calibration_error=None,
+        research_credible=None,
+    )
+    proposals = propose_challengers(qualified_profile, qualified_evidence, None)
+
+    assert len(proposals) == 1
     assert proposals[0].family == "trench_survival"
-    assert len(proposals) <= 3
+    assert proposals[0].params["model"] == "logistic_baseline"
+
+
+def test_register_challengers_only_registers_allowlisted_worker_contracts(tmp_path) -> None:
+    profile = SpecialistProfile(
+        name="kalshi-history",
+        family="prediction_markets",
+        state=SpecialistState.PAPER,
+        resolved=150,
+        reliability=0.4,
+        calibration_error=0.15,
+        after_cost_return=-0.01,
+        drawdown_fraction=0.04,
+    )
+    evidence = SpecialistEvidence(
+        resolved=150,
+        brier=0.24,
+        market_baseline_brier=0.22,
+        after_cost_return=-0.01,
+        max_drawdown_fraction=0.04,
+        calibration_error=0.15,
+        research_credible=None,
+    )
+
+    registered = register_challengers(
+        str(tmp_path / "trials.db"), profile=profile, evidence=evidence, decision=None,
+    )
+
+    assert len(registered) == 1
+    assert registered[0].proposal.family == "prediction_markets_execution"
 
 
 def test_experiment_factory_reacts_to_calibration_and_cost_failure() -> None:
