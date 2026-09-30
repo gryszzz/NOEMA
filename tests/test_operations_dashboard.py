@@ -20,6 +20,61 @@ def test_missing_database_is_not_created(tmp_path):
     assert all(s["status"] == "not_recorded" for s in result["sections"].values())
 
 
+def test_operations_api_projects_durable_sidecar_when_worker_replica_is_missing(
+    tmp_path, monkeypatch,
+):
+    worker = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    with sqlite3.connect(sidecar) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(
+                trial_id TEXT,family TEXT,hypothesis TEXT,feature_set_version TEXT,
+                status TEXT,created_at TEXT,parent_trial_id TEXT,params_json TEXT,
+                metadata_json TEXT,strategy_id TEXT,market_id TEXT);
+            CREATE TABLE autonomous_research_runs(
+                id INTEGER,trial_id TEXT,specialist TEXT,kind TEXT,evidence_hash TEXT,
+                worker_version TEXT,status TEXT,created_at TEXT,completed_at TEXT,
+                elapsed_seconds REAL,compute_cost_usd TEXT,result_json TEXT,
+                evidence_path TEXT,mission_id TEXT);
+            CREATE TABLE economic_events(
+                id INTEGER,created_at TEXT,occurred_at TEXT,provider TEXT,event_type TEXT,
+                amount_usd TEXT,reconciliation_state TEXT,capital_class TEXT,
+                mission_id TEXT,strategy_id TEXT,lane TEXT,payload_json TEXT);
+        """)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
+            "sidecar-trial", "research", "durable hypothesis", "v1", "promoted",
+            NOW.isoformat(), None, json.dumps({"strategy_id": "sidecar-strategy"}),
+            json.dumps({"owner": "console"}), "sidecar-strategy", "MARKET-1",
+        ))
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "sidecar-trial", "critic", "validation", "evidence-1", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, "0.10", '{"observations":3}', None, None,
+        ))
+        conn.execute("INSERT INTO economic_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, NOW.isoformat(), NOW.isoformat(), "system", "research_evidence", None,
+            "OBSERVED", "none", None, "sidecar-strategy", "research", "{}",
+        ))
+
+    monkeypatch.setenv("NOEMA_DB_PATH", str(worker))
+    monkeypatch.setenv("NOEMA_CONSOLE_STATE_DB_PATH", str(sidecar))
+    with TestClient(app) as client:
+        response = client.get("/api/operations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database_present"] is False
+    assert payload["runtime"]["state"] == "unknown"
+    assert payload["sections"]["research_runs"]["status"] == "recorded"
+    assert payload["sections"]["research_runs"]["rows"][0]["trial_id"] == "sidecar-trial"
+    experiment = payload["sections"]["experiments"]["rows"][0]
+    assert experiment["trial_id"] == "sidecar-trial"
+    assert experiment["params"]["strategy_id"] == "sidecar-strategy"
+    assert experiment["run_count"] == 1
+    assert payload["sections"]["economic_events"]["status"] == "recorded"
+    assert payload["sections"]["economic_events"]["rows"][0]["event_type"] == "research_evidence"
+    assert not worker.exists()
+
+
 def test_experiment_projection_links_persisted_runs_evidence_decisions_and_critic(tmp_path):
     path = tmp_path / "experiment-projection.db"
     with sqlite3.connect(path) as conn:
