@@ -11,6 +11,11 @@ from typing import Any
 
 from .openclaw_worker import runtime_status as openclaw_runtime_status
 from .paper_execution import parse_aware_time
+from .research_state import (
+    merge_research_run_records,
+    research_run_identity,
+    research_trial_update_is_newer,
+)
 from .resource_control import resource_status
 from .runtime_diagnostics import diagnose_runtime
 
@@ -69,7 +74,8 @@ ECONOMIC_LANES = (
 
 def _experiment_relationship_counts(
     conn: sqlite3.Connection, tables: set[str], record: dict[str, Any],
-    params: dict[str, Any],
+    params: dict[str, Any], *, decision_conn: sqlite3.Connection | None = None,
+    decision_tables: set[str] | None = None,
 ) -> dict[str, Any]:
     """Attach counts using persisted trial/evidence/decision identities only."""
     counts: dict[str, Any] = {
@@ -95,11 +101,13 @@ def _experiment_relationship_counts(
                     ).fetchone()[0]
         except sqlite3.Error:
             pass
-    if "forecast_ledger" not in tables:
+    forecast_tables = tables if decision_tables is None else decision_tables
+    forecast_conn = decision_conn or conn
+    if "forecast_ledger" not in forecast_tables:
         return counts
     strategy_id = record.get("strategy_id")
     try:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(forecast_ledger)")}
+        columns = {row[1] for row in forecast_conn.execute("PRAGMA table_info(forecast_ledger)")}
         if not {"forecast_json"} <= columns:
             return counts
         clauses: list[str] = []
@@ -111,12 +119,12 @@ def _experiment_relationship_counts(
             clauses.append("CASE WHEN json_valid(forecast_json) THEN json_extract(forecast_json,'$.strategy_id') END=?")
             values.append(strategy_id)
         if clauses:
-            counts["decision_count"] = conn.execute(
+            counts["decision_count"] = forecast_conn.execute(
                 "SELECT COUNT(*) FROM forecast_ledger WHERE json_valid(forecast_json) "
                 "AND (" + " OR ".join(clauses) + ")", tuple(values),
             ).fetchone()[0]
         if strategy_id is not None:
-            counts["strategy_decision_count"] = conn.execute(
+            counts["strategy_decision_count"] = forecast_conn.execute(
                 "SELECT COUNT(*) FROM forecast_ledger WHERE json_valid(forecast_json) "
                 "AND CASE WHEN json_valid(forecast_json) THEN json_extract(forecast_json,'$.strategy_id') END=?", (strategy_id,),
             ).fetchone()[0]
@@ -124,7 +132,7 @@ def _experiment_relationship_counts(
         # JSON1 is optional in some system SQLite builds. Exact fallback keeps
         # linked decisions visible without treating malformed records as matches.
         try:
-            rows = conn.execute("SELECT forecast_json FROM forecast_ledger").fetchall()
+            rows = forecast_conn.execute("SELECT forecast_json FROM forecast_ledger").fetchall()
             matched = strategy_matches = 0
             for (raw,) in rows:
                 try:
@@ -141,6 +149,105 @@ def _experiment_relationship_counts(
         except sqlite3.Error:
             pass
     return counts
+
+
+def _project_experiment_record(
+    row: sqlite3.Row, conn: sqlite3.Connection, tables: set[str], *,
+    decision_conn: sqlite3.Connection | None = None, decision_tables: set[str] | None = None,
+) -> dict[str, Any]:
+    """Canonical trial projection shared by worker and console-sidecar records."""
+    values = dict(row)
+    record = {key: _scalar(value) for key, value in values.items()
+              if not key.endswith("_json")}
+    params: dict[str, Any] = {}
+    raw_params = values.get("params_json")
+    if raw_params:
+        try:
+            parsed = _object(raw_params)
+            params = parsed if isinstance(parsed, dict) else {}
+            record["params"] = params
+        except (ValueError, TypeError):
+            record["record_status"] = "invalid_params"
+    raw_metadata = values.get("metadata_json")
+    if raw_metadata:
+        try:
+            metadata = _object(raw_metadata)
+            record["experiment_metadata"] = metadata
+            params = {**metadata, **params}
+        except (ValueError, TypeError):
+            record["record_status"] = "invalid_metadata"
+    for key in ("strategy_id", "market_id", "venue", "asset", "ticker"):
+        value = record.get(key) or params.get(key)
+        if value is None and isinstance(params.get("market"), dict):
+            value = params["market"].get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            record[key] = str(value)
+    evidence_hash = params.get("candidate_observation_hash")
+    if isinstance(evidence_hash, str) and "canonical_pair_observations" in tables:
+        try:
+            evidence = conn.execute(
+                "SELECT observation_json FROM canonical_pair_observations "
+                "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
+            ).fetchone()
+            if evidence:
+                observation = _object(evidence[0])
+                contracts = observation.get("native_contracts")
+                market_ids = list(dict.fromkeys(
+                    item.get("market_id") for item in contracts
+                    if isinstance(item, dict) and isinstance(item.get("market_id"), str)
+                )) if isinstance(contracts, list) else []
+                if market_ids:
+                    record["market_ids"] = market_ids
+                    record.setdefault("market_id", market_ids[0])
+        except (sqlite3.Error, ValueError, TypeError):
+            pass
+    record.update(_experiment_relationship_counts(
+        conn, tables, record, params, decision_conn=decision_conn,
+        decision_tables=decision_tables,
+    ))
+    return record
+
+
+def _combined_research_run_counts(
+    connections: tuple[sqlite3.Connection, ...], trial_id: str,
+) -> dict[str, int | None]:
+    """Count deduplicated run/evidence identities across worker and sidecar files."""
+    run_keys: set[tuple[Any, ...]] = set()
+    evidence_keys: set[tuple[str, str]] = set()
+    table_available = False
+    for conn in connections:
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "autonomous_research_runs" not in tables:
+            continue
+        table_available = True
+        columns = {row[1] for row in conn.execute(
+            "PRAGMA table_info(autonomous_research_runs)")}
+        if "trial_id" not in columns:
+            continue
+        fields = [field for field in (
+            "id", "trial_id", "evidence_hash", "evidence_path", "worker_version",
+        ) if field in columns]
+        for row in conn.execute(
+            f"SELECT {','.join(fields)} FROM autonomous_research_runs WHERE trial_id=?",
+            (trial_id,),
+        ):
+            item = dict(zip(fields, row, strict=True))
+            digest, version = item.get("evidence_hash"), item.get("worker_version")
+            if digest:
+                run_keys.add(("evidence", str(digest), str(version or "")))
+                evidence_keys.add(("hash", str(digest)))
+            else:
+                path = item.get("evidence_path")
+                if path:
+                    run_keys.add(("path", str(path), str(version or "")))
+                    evidence_keys.add(("path", str(path)))
+                else:
+                    run_keys.add(("row", str(item.get("id"))))
+    return {
+        "run_count": len(run_keys) if table_available else None,
+        "evidence_count": len(evidence_keys) if table_available else None,
+    }
 
 
 def _economic_lane_projection(conn: sqlite3.Connection, tables: set[str]) -> dict[str, Any]:
@@ -513,7 +620,9 @@ def _object(value: str) -> dict:
     return parsed
 
 
-def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any]:
+def build_operations(
+    path: str, *, additional_paths: tuple[str, ...] = (), now: datetime | None = None,
+) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ValueError("timezone required")
@@ -643,9 +752,13 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
                     columns_present = {row[1] for row in conn.execute(
                         "PRAGMA table_info(research_trials)"
                     )}
-                    select = columns + (",params_json" if "params_json" in columns_present else "")
+                    selected = columns.split(",")
+                    selected.extend(field for field in (
+                        "params_json", "metadata_json", "strategy_id", "market_id", "venue",
+                        "asset", "ticker", "status_updated_at",
+                    ) if field in columns_present and field not in selected)
                     rows = conn.execute(
-                        f"SELECT {select} FROM {table} ORDER BY {order} DESC LIMIT 51"
+                        f"SELECT {','.join(selected)} FROM {table} ORDER BY {order} DESC LIMIT 51"
                     ).fetchall()
                 else:
                     rows = conn.execute(
@@ -704,42 +817,7 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
                     elif name == "experiments":
-                        params_text = row["params_json"] if "params_json" in row.keys() else None  # noqa: SIM118 - sqlite3.Row has no dict.get
-                        params: dict[str, Any] = {}
-                        if params_text:
-                            try:
-                                decoded = _object(params_text)
-                                params = decoded if isinstance(decoded, dict) else {}
-                            except (ValueError, TypeError):
-                                record["record_status"] = "invalid_params"
-                        for key in ("strategy_id", "market_id", "venue", "asset", "ticker"):
-                            value = params.get(key)
-                            if value is None and isinstance(params.get("market"), dict):
-                                value = params["market"].get(key)
-                            if isinstance(value, (str, int)) and not isinstance(value, bool):
-                                record[key] = str(value)
-                        evidence_hash = params.get("candidate_observation_hash")
-                        if (isinstance(evidence_hash, str)
-                                and "canonical_pair_observations" in tables):
-                            try:
-                                evidence = conn.execute(
-                                    "SELECT observation_json FROM canonical_pair_observations "
-                                    "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
-                                ).fetchone()
-                                if evidence:
-                                    observation = _object(evidence[0])
-                                    contracts = observation.get("native_contracts")
-                                    market_ids = list(dict.fromkeys(
-                                        item.get("market_id") for item in contracts
-                                        if isinstance(item, dict)
-                                        and isinstance(item.get("market_id"), str)
-                                    )) if isinstance(contracts, list) else []
-                                    if market_ids:
-                                        record["market_ids"] = market_ids
-                                        record.setdefault("market_id", market_ids[0])
-                            except (sqlite3.Error, ValueError, TypeError):
-                                pass
-                        record.update(_experiment_relationship_counts(conn, tables, record, params))
+                        record = _project_experiment_record(row, conn, tables)
                     elif name == "missions":
                         for source, target in (("capability_grants_json", "capability_grants"),
                                                ("resource_grant_json", "resource_grant"),
@@ -866,5 +944,199 @@ def build_operations(path: str, *, now: datetime | None = None) -> dict[str, Any
     finally:
         if conn is not None:
             conn.close()
+    _append_additional_console_records(result, path, additional_paths)
     result["openclaw_worker"] = openclaw_runtime_status(path)
     return result
+
+
+def _append_additional_console_records(
+    result: dict[str, Any], primary_path: str, additional_paths: tuple[str, ...],
+) -> None:
+    """Project console-sidecar records into the existing operational sections."""
+    seen_trials = {
+        research_run_identity(row): index
+        for index, row in enumerate(result["sections"]["research_runs"]["rows"])
+    }
+    seen_experiments = {
+        str(row.get("trial_id")): index
+        for index, row in enumerate(result["sections"]["experiments"]["rows"])
+    }
+    seen_wallet = {
+        (row.get("created_at"), row.get("event_type"), row.get("amount_usd"),
+         json.dumps(row.get("payload"), sort_keys=True, default=str))
+        for row in result["sections"]["wallet_transactions"]["rows"]
+    }
+    seen_economic = {
+        tuple(row.get(key) for key in (
+            "created_at", "occurred_at", "provider", "event_type", "amount_usd",
+            "reconciliation_state", "capital_class", "mission_id", "strategy_id", "lane",
+        ))
+        for row in result["sections"]["economic_events"]["rows"]
+    }
+    for source_index, path in enumerate(additional_paths):
+        database = Path(path)
+        if not database.is_file() or database.resolve() == Path(primary_path).resolve():
+            continue
+        conn: sqlite3.Connection | None = None
+        decision_conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(
+                database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1,
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            decision_tables: set[str] = set()
+            primary = Path(primary_path)
+            if primary.is_file() and primary.resolve() != database.resolve():
+                decision_conn = sqlite3.connect(
+                    primary.resolve().as_uri() + "?mode=ro", uri=True, timeout=1,
+                )
+                decision_conn.row_factory = sqlite3.Row
+                decision_conn.execute("PRAGMA query_only=ON")
+                decision_tables = {row[0] for row in decision_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "autonomous_research_runs" in tables:
+                columns = {row[1] for row in conn.execute(
+                    "PRAGMA table_info(autonomous_research_runs)"
+                )}
+                required = {"trial_id", "specialist", "kind", "evidence_hash", "worker_version",
+                            "status", "created_at", "result_json"}
+                if required <= columns:
+                    run_fields = (
+                        "trial_id", "specialist", "kind", "evidence_hash", "worker_version",
+                        "status", "created_at", "completed_at", "elapsed_seconds",
+                        "compute_cost_usd", "result_json", "evidence_path", "mission_id",
+                    )
+                    selected_run_fields = [field for field in run_fields if field in columns]
+                    for row in conn.execute(
+                        f"SELECT {','.join(selected_run_fields)} FROM autonomous_research_runs "
+                        "ORDER BY created_at DESC LIMIT 100"
+                    ):
+                        record = {
+                            key: _scalar(row[key]) for key in selected_run_fields
+                            if key != "result_json"
+                        }
+                        try:
+                            payload = _object(row["result_json"])
+                            for key in ("observations", "observation_count"):
+                                count = payload.get(key)
+                                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                                    record["observations"] = count
+                                    break
+                            review = payload.get("critic_review")
+                            if isinstance(review, dict):
+                                record["critic_review"] = review
+                            record["result"] = json.dumps(payload, sort_keys=True)[:4000]
+                        except (ValueError, TypeError):
+                            record["record_status"] = "invalid"
+                        identity = research_run_identity(record)
+                        existing_index = seen_trials.get(identity)
+                        if existing_index is None:
+                            seen_trials[identity] = len(result["sections"]["research_runs"]["rows"])
+                            result["sections"]["research_runs"]["rows"].append(record)
+                        else:
+                            existing_record = result["sections"]["research_runs"]["rows"][existing_index]
+                            merged = merge_research_run_records(existing_record, record)
+                            merged["id"] = existing_record.get("id", record.get("id"))
+                            result["sections"]["research_runs"]["rows"][existing_index] = merged
+            if "research_trials" in tables:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(research_trials)")}
+                if "trial_id" in columns:
+                    trial_fields = [field for field in (
+                        "trial_id", "family", "hypothesis", "feature_set_version", "status",
+                        "created_at", "parent_trial_id", "params_json", "metadata_json",
+                        "strategy_id", "market_id", "venue", "asset", "ticker",
+                        "status_updated_at",
+                    ) if field in columns]
+                    for row in conn.execute(
+                        f"SELECT {','.join(trial_fields)} FROM research_trials "
+                        + ("ORDER BY created_at DESC " if "created_at" in columns else "")
+                        + "LIMIT 100"
+                    ):
+                        trial_id = str(row["trial_id"])
+                        record = _project_experiment_record(
+                            row, conn, tables, decision_conn=decision_conn,
+                            decision_tables=decision_tables,
+                        )
+                        run_count_sources = (conn,) if decision_conn is None else (conn, decision_conn)
+                        record.update(_combined_research_run_counts(run_count_sources, trial_id))
+                        existing_index = seen_experiments.get(trial_id)
+                        if existing_index is None:
+                            seen_experiments[trial_id] = len(result["sections"]["experiments"]["rows"])
+                            result["sections"]["experiments"]["rows"].append(record)
+                        else:
+                            existing_record = result["sections"]["experiments"]["rows"][existing_index]
+                            if research_trial_update_is_newer(
+                                record.get("status"), record.get("status_updated_at"),
+                                existing_record.get("status"), existing_record.get("status_updated_at"),
+                            ):
+                                result["sections"]["experiments"]["rows"][existing_index] = {
+                                    **existing_record, **record,
+                                }
+                            else:
+                                for key, value in record.items():
+                                    if ((key in {"run_count", "evidence_count"}
+                                         and value is not None)
+                                            or (existing_record.get(key) is None and value is not None)):
+                                        existing_record[key] = value
+            if "economic_events" in tables:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}
+                wallet_columns = {"id", "created_at", "event_type", "amount_usd", "payload_json"}
+                if wallet_columns <= columns:
+                    for row in conn.execute(
+                        "SELECT id,created_at,event_type,amount_usd,payload_json FROM economic_events "
+                        "WHERE event_type LIKE 'wallet_transaction_%' ORDER BY created_at DESC LIMIT 100"
+                    ):
+                        try:
+                            payload = _object(row["payload_json"])
+                        except (ValueError, TypeError):
+                            payload = {}
+                        identity = (row["created_at"], row["event_type"], row["amount_usd"],
+                                    json.dumps(payload, sort_keys=True, default=str))
+                        if identity in seen_wallet:
+                            continue
+                        seen_wallet.add(identity)
+                        result["sections"]["wallet_transactions"]["rows"].append({
+                            "id": f"console-state-{source_index}-{row['id']}",
+                            "created_at": _scalar(row["created_at"]),
+                            "event_type": _scalar(row["event_type"]),
+                            "amount_usd": _scalar(row["amount_usd"]), "payload": payload,
+                        })
+                event_fields = (
+                    "id", "created_at", "occurred_at", "provider", "event_type", "amount_usd",
+                    "reconciliation_state", "capital_class", "mission_id", "strategy_id", "lane",
+                )
+                available = [field for field in event_fields if field in columns]
+                required = {"id", "created_at", "event_type"}
+                if required <= set(available):
+                    selected = ",".join(available)
+                    for row in conn.execute(
+                        f"SELECT {selected} FROM economic_events ORDER BY created_at DESC LIMIT 100"
+                    ):
+                        identity = tuple(row[field] if field in available else None
+                                         for field in event_fields[1:])
+                        if identity in seen_economic:
+                            continue
+                        seen_economic.add(identity)
+                        record = {field: _scalar(row[field]) for field in available if field != "id"}
+                        record["id"] = f"console-state-{source_index}-{row['id']}"
+                        result["sections"]["economic_events"]["rows"].append(record)
+        except sqlite3.Error:
+            continue
+        finally:
+            if conn is not None:
+                conn.close()
+            if decision_conn is not None:
+                decision_conn.close()
+    for name in ("research_runs", "experiments", "wallet_transactions", "economic_events"):
+        section = result["sections"][name]
+        section["rows"].sort(
+            key=lambda row: str(row.get("created_at") or ""), reverse=True,
+        )
+        section["has_more"] = section["has_more"] or len(section["rows"]) > 50
+        section["rows"] = section["rows"][:50]
+        if section["rows"]:
+            section["status"] = "recorded"

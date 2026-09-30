@@ -651,7 +651,9 @@ def recent_evaluations(path: str, *, limit: int = 20) -> list[dict[str, Any]]:
     return records
 
 
-def mature_paper_pairs(path: str, *, now: datetime | None = None) -> dict[str, Any]:
+def mature_paper_pairs(
+    path: str, *, outcome_path: str | None = None, now: datetime | None = None,
+) -> dict[str, Any]:
     """Settle only previously simulated pairs from prospective official outcomes.
 
     Result events stay non-cash in the economic ledger. A later contradictory
@@ -660,18 +662,29 @@ def mature_paper_pairs(path: str, *, now: datetime | None = None) -> dict[str, A
     """
     now = now or datetime.now(UTC)
     db = Path(path)
-    if not db.exists():
+    outcomes_db = Path(outcome_path or path)
+    if not db.exists() or not outcomes_db.exists():
         return {"status": "outcomes_unavailable", "matured": 0, "matured_total": 0,
                 "paper_fill_count": 0, "live_trade_count": 0, "capacity": "unknown",
                 "walk_forward": None}
-    conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+    state_conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+    same_database = outcomes_db.resolve() == db.resolve()
+    outcomes_conn = state_conn if same_database else sqlite3.connect(
+        outcomes_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2,
+    )
     try:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if not {"outcomes", "canonical_pair_observations", "economic_events"} <= tables:
+        state_tables = {row[0] for row in state_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        outcome_tables = {row[0] for row in outcomes_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if not {"canonical_pair_observations", "economic_events"} <= state_tables \
+                or "outcomes" not in outcome_tables:
             return {"status": "outcomes_unavailable", "matured": 0, "matured_total": 0,
                     "paper_fill_count": 0, "live_trade_count": 0, "capacity": "unknown",
                     "walk_forward": None}
-        outcome_columns = {row[1] for row in conn.execute("PRAGMA table_info(outcomes)")}
+        outcome_columns = {row[1] for row in outcomes_conn.execute("PRAGMA table_info(outcomes)")}
         if not {"venue", "market_id", "outcome_yes", "resolved_at", "first_seen_at"} <= outcome_columns:
             return {"status": "outcomes_unavailable", "matured": 0, "matured_total": 0,
                     "paper_fill_count": 0, "live_trade_count": 0, "capacity": "unknown",
@@ -685,19 +698,19 @@ def mature_paper_pairs(path: str, *, now: datetime | None = None) -> dict[str, A
                 "raw_json": raw, "source": source,
                 "canonical_proposition_id": proposition,
             }
-            for venue, market_id, value, resolved, first_seen, raw, source, proposition in conn.execute(
+            for venue, market_id, value, resolved, first_seen, raw, source, proposition in outcomes_conn.execute(
                 "SELECT venue,market_id,outcome_yes,resolved_at,first_seen_at," + raw_column + ","
                 + ("source" if "source" in outcome_columns else "NULL") + ","
                 + ("canonical_proposition_id" if "canonical_proposition_id" in outcome_columns else "NULL")
                 + " FROM outcomes"
             )
         }
-        records = conn.execute(
+        records = state_conn.execute(
             "SELECT observation_hash,observation_json FROM canonical_pair_observations ORDER BY id"
         ).fetchall()
         existing: set[str] = set()
         existing_statuses: dict[str, str] = {}
-        for (payload,) in conn.execute(
+        for (payload,) in state_conn.execute(
             "SELECT payload_json FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
         ):
             try:
@@ -721,8 +734,8 @@ def mature_paper_pairs(path: str, *, now: datetime | None = None) -> dict[str, A
                     continue
                 paper_fill_count += 1
                 run_row = None
-                if "autonomous_research_runs" in tables:
-                    run_row = conn.execute(
+                if "autonomous_research_runs" in state_tables:
+                    run_row = state_conn.execute(
                         "SELECT trial_id FROM autonomous_research_runs WHERE evidence_hash=? "
                         "AND kind='cross_venue_paper_experiment' ORDER BY id DESC LIMIT 1",
                         (str(digest),),
@@ -853,7 +866,9 @@ def mature_paper_pairs(path: str, *, now: datetime | None = None) -> dict[str, A
             except (ValueError, TypeError, KeyError, InvalidOperation, ArithmeticError, AttributeError):
                 continue
     finally:
-        conn.close()
+        state_conn.close()
+        if not same_database:
+            outcomes_conn.close()
 
     if settled_rows:
         from .economic_ledger import EconomicEvent, EconomicLedger

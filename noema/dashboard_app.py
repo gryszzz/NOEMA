@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
+import json
 import logging
 import os
 import secrets
@@ -26,6 +28,7 @@ from .console_replication import (
     load_worker_metadata,
     persist_worker_metadata,
 )
+from .console_state import console_state_db_path
 from .dashboard_data import build_overview
 from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
@@ -41,11 +44,13 @@ from .operations_dashboard import build_operations
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
 from .polymarket_account_stream import run_polymarket_account_stream
+from .prediction_account_history import _ensure_schema as ensure_prediction_account_schema
 from .prediction_venues import (
     apply_polymarket_stream_projection,
     build_prediction_venue_status,
     cached_prediction_venue_status,
 )
+from .research_state import research_trial_update_is_newer
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
@@ -62,6 +67,313 @@ _log = logging.getLogger(__name__)
 
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 _MAX_DATABASE_BYTES = 512 * 1024 * 1024
+
+
+def _merge_account_history_into_console_state(source_path: str, state_path: str) -> None:
+    """Import snapshot account evidence into the non-replaceable console database."""
+    source_path = str(Path(source_path).resolve())
+    state = Path(state_path)
+    if not Path(source_path).is_file() or Path(source_path) == state.resolve():
+        return
+    source_uri = Path(source_path).as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=5) as source:
+        source_tables = {row[0] for row in source.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        retained_tables = {
+            "prediction_account_records", "prediction_account_sync_state",
+            "prediction_account_baselines", "live_balance_observations",
+            "canonical_pair_observations", "autonomous_research_runs", "research_trials",
+            "economic_events",
+        }
+        if not source_tables.intersection(retained_tables):
+            return
+        state.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(state, timeout=5) as target:
+            _copy_account_history_tables(source, target, source_tables)
+            _copy_console_research_history(source, target, source_tables)
+
+
+def _copy_account_history_tables(
+    source: sqlite3.Connection, target: sqlite3.Connection, source_tables: set[str],
+) -> None:
+    """Merge immutable/idempotent account rows; never replace the writer database."""
+    retained_tables = {
+        "prediction_account_records", "prediction_account_sync_state",
+        "prediction_account_baselines", "live_balance_observations",
+    }
+    if not source_tables.intersection(retained_tables):
+        return
+    ensure_prediction_account_schema(target)
+    for table, columns in (
+        ("prediction_account_records", "venue,record_type,external_id,market_id,related_order_id,occurred_at,first_observed_at,last_observed_at,state,payload_json"),
+        ("prediction_account_sync_state", "venue,stream,last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type"),
+    ):
+        if table not in source_tables:
+            continue
+        rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
+        if table == "prediction_account_records":
+            for row in rows:
+                key = row[:3]
+                current = target.execute(
+                    "SELECT first_observed_at,last_observed_at FROM prediction_account_records "
+                    "WHERE venue=? AND record_type=? AND external_id=?", key,
+                ).fetchone()
+                first_seen = _earliest_timestamp(row[6], current[0] if current else None)
+                if current and not _timestamp_is_newer(row[7], current[1]):
+                    if first_seen != current[0]:
+                        target.execute(
+                            "UPDATE prediction_account_records SET first_observed_at=? "
+                            "WHERE venue=? AND record_type=? AND external_id=?",
+                            (first_seen, *key),
+                        )
+                    continue
+                target.execute(
+                    "INSERT INTO prediction_account_records "
+                    f"({columns}) VALUES ({','.join('?' for _ in columns.split(','))}) "
+                    "ON CONFLICT(venue,record_type,external_id) DO UPDATE SET "
+                    "market_id=excluded.market_id, related_order_id=excluded.related_order_id, "
+                    "occurred_at=excluded.occurred_at, first_observed_at=excluded.first_observed_at, "
+                    "last_observed_at=excluded.last_observed_at, state=excluded.state, "
+                    "payload_json=excluded.payload_json",
+                    (*row[:6], first_seen, *row[7:]),
+                )
+        elif table == "prediction_account_sync_state":
+            for row in rows:
+                key = row[:2]
+                current = target.execute(
+                    "SELECT last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type "
+                    "FROM prediction_account_sync_state WHERE venue=? AND stream=?", key,
+                ).fetchone()
+                if current is None:
+                    target.execute(
+                        f"INSERT INTO {table} ({columns}) VALUES "
+                        f"({','.join('?' for _ in columns.split(','))})", row,
+                    )
+                    continue
+                success = _later_timestamp(row[2], current[0])
+                audit = _later_timestamp(row[3], current[1])
+                incoming_high_water_is_newer = _timestamp_is_newer(row[4], current[2])
+                high_water_at = row[4] if incoming_high_water_is_newer else current[2]
+                high_water_id = row[5] if incoming_high_water_is_newer else current[3]
+                incoming_state_at = _latest_sync_timestamp(row[2:4], row[4])
+                existing_state_at = _latest_sync_timestamp(current[:2], current[2])
+                error = row[6] if _timestamp_is_newer(incoming_state_at, existing_state_at) else current[4]
+                target.execute(
+                    "UPDATE prediction_account_sync_state SET last_success_at=?, "
+                    "last_full_audit_at=?, high_water_at=?, high_water_id=?, last_error_type=? "
+                    "WHERE venue=? AND stream=?",
+                    (success, audit, high_water_at, high_water_id, error, *key),
+                )
+    if "prediction_account_baselines" in source_tables:
+        target.execute("""CREATE TABLE IF NOT EXISTS prediction_account_baselines (
+                venue TEXT PRIMARY KEY, observed_at TEXT NOT NULL, cash_usd TEXT NOT NULL,
+                portfolio_value_usd TEXT NOT NULL, source TEXT NOT NULL)""")
+        target.executemany("""INSERT OR IGNORE INTO prediction_account_baselines
+                (venue,observed_at,cash_usd,portfolio_value_usd,source) VALUES (?,?,?,?,?)""",
+            source.execute("SELECT venue,observed_at,cash_usd,portfolio_value_usd,source "
+                           "FROM prediction_account_baselines").fetchall())
+    if "live_balance_observations" in source_tables:
+        target.execute("""CREATE TABLE IF NOT EXISTS live_balance_observations (
+                fingerprint TEXT PRIMARY KEY, observed_at TEXT NOT NULL, amount_usd TEXT NOT NULL,
+                scope TEXT NOT NULL, sources_json TEXT NOT NULL)""")
+        target.executemany("""INSERT OR IGNORE INTO live_balance_observations
+                (fingerprint,observed_at,amount_usd,scope,sources_json) VALUES (?,?,?,?,?)""",
+            source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
+                           "FROM live_balance_observations").fetchall())
+    target.commit()
+
+
+def _copy_console_research_history(
+    source: sqlite3.Connection, target: sqlite3.Connection, source_tables: set[str],
+) -> None:
+    """Merge durable pair evidence and its run/settlement history idempotently."""
+    for table in (
+        "canonical_pair_observations", "autonomous_research_runs", "research_trials",
+    ):
+        if table not in source_tables:
+            continue
+        definition = source.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,),
+        ).fetchone()
+        if not definition or not definition[0]:
+            continue
+        target.execute(definition[0].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
+        source_columns = [row[1] for row in source.execute(f"PRAGMA table_info({table})")]
+        target_columns = {row[1] for row in target.execute(f"PRAGMA table_info({table})")}
+        missing_columns = [row for row in source.execute(f"PRAGMA table_info({table})")
+                           if row[1] not in target_columns]
+        for _, name, data_type, _, default, _ in missing_columns:
+            declaration = f"ALTER TABLE {table} ADD COLUMN {name} {data_type or 'TEXT'}"
+            if default is not None:
+                declaration += f" DEFAULT {default}"
+            target.execute(declaration)
+        target_columns = {row[1] for row in target.execute(f"PRAGMA table_info({table})")}
+        if table == "research_trials" and "status_updated_at" not in target_columns:
+            target.execute("ALTER TABLE research_trials ADD COLUMN status_updated_at TEXT")
+        columns = [name for name in source_columns if name != "id"]
+        if not columns:
+            continue
+        rows = source.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        if table == "research_trials" and {"trial_id", "status"} <= set(source_columns):
+            status_time_column = next((name for name in ("status_updated_at", "updated_at")
+                                       if name in columns), None)
+            pending = []
+            for row in rows:
+                values = dict(zip(columns, row, strict=True))
+                trial_id = values["trial_id"]
+                status = values["status"]
+                existing = target.execute(
+                    "SELECT status,status_updated_at FROM research_trials WHERE trial_id=?", (trial_id,),
+                ).fetchone()
+                if existing is None:
+                    pending.append(row)
+                elif research_trial_update_is_newer(
+                    status, values.get(status_time_column) if status_time_column else None,
+                    existing[0], existing[1],
+                ):
+                    target.execute(
+                        "UPDATE research_trials SET status=?,status_updated_at=? WHERE trial_id=?",
+                        (status, values.get(status_time_column) if status_time_column else None, trial_id),
+                    )
+            rows = pending
+        if table == "autonomous_research_runs" and {
+            "trial_id", "evidence_hash", "worker_version", "status", "completed_at",
+        } <= set(source_columns):
+            update_columns = [name for name in columns if name not in {
+                "trial_id", "evidence_hash", "worker_version",
+            }]
+            for row in rows:
+                existing = target.execute(
+                    "SELECT completed_at FROM autonomous_research_runs "
+                    "WHERE trial_id=? AND evidence_hash=? AND worker_version=?",
+                    (row[columns.index("trial_id")], row[columns.index("evidence_hash")],
+                     row[columns.index("worker_version")]),
+                ).fetchone()
+                incoming_completed = row[columns.index("completed_at")]
+                if existing is not None and incoming_completed is not None and (
+                    existing[0] is None or str(incoming_completed) >= str(existing[0])
+                ):
+                    target.execute(
+                        f"UPDATE autonomous_research_runs SET "
+                        f"{','.join(f'{name}=?' for name in update_columns)} "
+                        "WHERE trial_id=? AND evidence_hash=? AND worker_version=?",
+                        tuple(row[columns.index(name)] for name in update_columns) + (
+                            row[columns.index("trial_id")], row[columns.index("evidence_hash")],
+                            row[columns.index("worker_version")],
+                        ),
+                    )
+        target.executemany(
+            f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})", rows,
+        )
+
+    if "economic_events" not in source_tables:
+        target.commit()
+        return
+    definition = source.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='economic_events'",
+    ).fetchone()
+    if definition and definition[0]:
+        target.execute(definition[0].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
+    source_columns = [row[1] for row in source.execute("PRAGMA table_info(economic_events)")]
+    target_columns = {row[1] for row in target.execute("PRAGMA table_info(economic_events)")}
+    for _, name, data_type, _, default, _ in source.execute("PRAGMA table_info(economic_events)"):
+        if name in target_columns:
+            continue
+        declaration = f"ALTER TABLE economic_events ADD COLUMN {name} {data_type or 'TEXT'}"
+        if default is not None:
+            declaration += f" DEFAULT {default}"
+        target.execute(declaration)
+        target_columns.add(name)
+    for name, declaration in {
+        "provider": "TEXT", "external_reference_id": "TEXT", "occurred_at": "TEXT",
+        "currency": "TEXT", "amount": "TEXT", "mission_id": "TEXT", "strategy_id": "TEXT",
+        "activity_id": "TEXT", "lane": "TEXT", "evidence_json": "TEXT",
+        "reconciliation_state": "TEXT", "value_state": "TEXT", "capital_class": "TEXT",
+        "confidence_state": "TEXT", "completeness_state": "TEXT", "related_event_id": "INTEGER",
+        "owned_account_id": "TEXT", "counterparty_account_id": "TEXT",
+    }.items():
+        if name not in target_columns:
+            target.execute(f"ALTER TABLE economic_events ADD COLUMN {name} {declaration}")
+            target_columns.add(name)
+    columns = [name for name in source_columns if name in target_columns and name != "id"]
+    required = {"created_at", "event_type", "payload_json"}
+    if not required <= set(columns):
+        target.commit()
+        return
+    target.execute("""CREATE TABLE IF NOT EXISTS console_imported_research_events (
+        event_hash TEXT PRIMARY KEY)""")
+    selected = ",".join(columns)
+    existing_events = target.execute(
+        "SELECT " + selected + " FROM economic_events WHERE "
+        "event_type='canonical_market_observation' OR event_type LIKE 'paper_cross_venue_%' "
+        "OR event_type IN ('paper_settlement','paper_result')"
+    ).fetchall()
+    for row in existing_events:
+        digest = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+        target.execute(
+            "INSERT OR IGNORE INTO console_imported_research_events VALUES (?)", (digest,),
+        )
+    rows = source.execute(
+        "SELECT " + selected + " FROM economic_events WHERE "
+        "event_type='canonical_market_observation' OR event_type LIKE 'paper_cross_venue_%' "
+        "OR event_type IN ('paper_settlement','paper_result')"
+    ).fetchall()
+    placeholders = ",".join("?" for _ in columns)
+    for row in rows:
+        digest = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+        exists = target.execute(
+            "SELECT 1 FROM console_imported_research_events WHERE event_hash=?", (digest,),
+        ).fetchone()
+        if exists:
+            continue
+        target.execute(
+            f"INSERT OR IGNORE INTO economic_events ({selected}) VALUES ({placeholders})", row,
+        )
+        target.execute(
+            "INSERT OR IGNORE INTO console_imported_research_events VALUES (?)", (digest,),
+        )
+    target.commit()
+
+
+def _parsed_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _timestamp_is_newer(candidate: Any, current: Any) -> bool:
+    candidate_at = _parsed_timestamp(candidate)
+    current_at = _parsed_timestamp(current)
+    return candidate_at is not None and (current_at is None or candidate_at > current_at)
+
+
+def _later_timestamp(left: Any, right: Any) -> Any:
+    return left if _timestamp_is_newer(left, right) else right
+
+
+def _earliest_timestamp(left: Any, right: Any) -> Any:
+    left_at, right_at = _parsed_timestamp(left), _parsed_timestamp(right)
+    if left_at is None:
+        return right
+    if right_at is None or left_at < right_at:
+        return left
+    return right
+
+
+def _latest_sync_timestamp(success_fields: Any, high_water: Any) -> datetime | None:
+    candidates = [*success_fields, high_water]
+    parsed = [_parsed_timestamp(item) for item in candidates]
+    valid = [item for item in parsed if item is not None]
+    return max(valid) if valid else None
 
 
 def _constant_time_equal(left: str, right: str) -> bool:
@@ -139,7 +451,7 @@ async def _sample_capital_history() -> None:
             wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
             stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
             await asyncio.to_thread(
-                balance_history, _db_path(), venues,
+                balance_history, _console_state_db_path(), venues,
                 {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
                 window="24H", stripe=stripe,
             )
@@ -153,10 +465,14 @@ async def _sample_capital_history() -> None:
 @app.on_event("startup")
 async def start_capital_sampler() -> None:
     global _capital_sampler_task, _polymarket_stream_task
+    # Import console-owned rows written by the previous colocated-database
+    # version before enabling the sidecar writers. SQLite uniqueness makes
+    # concurrent web-process startup migrations idempotent.
+    _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
     if os.getenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
         _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
     _polymarket_stream_task = asyncio.create_task(
-        run_polymarket_account_stream(_db_path, apply_polymarket_stream_projection),
+        run_polymarket_account_stream(_console_state_db_path, apply_polymarket_stream_projection),
         name="noema-polymarket-account-stream",
     )
 
@@ -177,6 +493,10 @@ async def stop_capital_sampler() -> None:
 
 def _db_path() -> str:
     return os.getenv("NOEMA_DB_PATH", "data/noema.db")
+
+
+def _console_state_db_path() -> str:
+    return console_state_db_path(_db_path())
 
 
 def _worker_provider_health() -> dict[str, Any]:
@@ -254,7 +574,7 @@ def runtime_info() -> dict[str, Any]:
 
 @app.post("/internal/snapshot")
 async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
-    """Atomically replace the console's read-only replica with a verified SQLite image."""
+    """Atomically replace the worker snapshot without replacing console-owned state."""
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -296,6 +616,12 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         else:
             if check is None or check[0] != "ok":
                 raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
+        # Account rows included in worker snapshots are imported into the
+        # console-owned sidecar. Live console writers target that same file,
+        # which this atomic worker replacement never touches.
+        _merge_account_history_into_console_state(temporary_path, _console_state_db_path())
+        # The replica is an immutable worker-provided snapshot. Console-owned
+        # state is persisted in the sidecar, never in this replaceable file.
         os.chmod(temporary_path, 0o444)
         os.replace(temporary_path, destination)
         temporary_path = None
@@ -322,24 +648,29 @@ async def index() -> str:
 
 
 async def _runtime_change_stream(request: Request):
-    """Push invalidations when a verified worker snapshot is atomically replaced."""
-    path = Path(_db_path()).resolve()
-    if not path.is_file():
+    """Push invalidations for worker snapshots and console-owned account commits."""
+    paths = (Path(_db_path()).resolve(), Path(_console_state_db_path()).resolve())
+    if not paths[0].is_file():
         yield "event: unavailable\ndata: {}\n\n"
         return
+
+    def versions() -> tuple[tuple[int, int, int, int] | None, ...]:
+        values = []
+        for watched_path in paths:
+            try:
+                stat = watched_path.stat()
+                values.append((stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size))
+            except FileNotFoundError:
+                values.append(None)
+        return tuple(values)
+
     try:
-        stat = path.stat()
-        version = (stat.st_mtime_ns, stat.st_size)
+        version = versions()
         yield "event: ready\ndata: {}\n\n"
         last_keepalive = time.monotonic()
         while not await request.is_disconnected():
             await asyncio.sleep(1)
-            try:
-                current_stat = path.stat()
-                current = (current_stat.st_mtime_ns, current_stat.st_size)
-            except FileNotFoundError:
-                yield "event: unavailable\ndata: {}\n\n"
-                return
+            current = versions()
             if current != version:
                 version = current
                 yield "event: change\ndata: {}\n\n"
@@ -367,7 +698,7 @@ async def detailed() -> str:
 
 @app.get("/api/operations")
 def operations() -> dict[str, Any]:
-    return build_operations(_db_path())
+    return build_operations(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/knowledge")
@@ -439,7 +770,7 @@ async def overview() -> dict[str, Any]:
 
 @app.get("/api/economy")
 async def economy() -> dict[str, Any]:
-    return build_economic_overview(_db_path())
+    return build_economic_overview(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/stripe-economy")
@@ -455,7 +786,7 @@ async def ecosystem() -> dict[str, Any]:
 
 @app.get("/api/economic-measurement")
 async def economic_measurement() -> dict[str, Any]:
-    return build_economic_measurement(_db_path())
+    return build_economic_measurement(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/bill")
@@ -530,7 +861,7 @@ async def wallet_status(*, force: bool = False) -> dict[str, Any]:
 async def capital_history(window: Literal["1H", "24H", "7D", "30D", "ALL"] = "24H") -> dict:
     wallets = {"networks": _wallet_status_cache["networks"],
                "observed_at": _wallet_status_cache.get("observed_at")}
-    return await asyncio.to_thread(balance_history, _db_path(), cached_prediction_venue_status(),
+    return await asyncio.to_thread(balance_history, _console_state_db_path(), cached_prediction_venue_status(),
                                    wallets, window=window, stripe=stripe_economy_overview(_db_path()))
 
 

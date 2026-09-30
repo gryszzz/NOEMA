@@ -1,7 +1,9 @@
 import asyncio
 import gzip
+import os
 import sqlite3
 import stat
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -61,6 +63,23 @@ def test_prediction_venues_endpoint_returns_read_only_status(monkeypatch) -> Non
     assert response.json()["execution_enabled"] is False
 
 
+def test_wallet_refresh_applies_native_asset_valuation_before_projection(monkeypatch) -> None:
+    async def raw_wallets():
+        return [{"chain": "solana", "address": "wallet", "readable": True, "sol": "2"}]
+
+    async def value_wallets(networks):
+        return [{**networks[0], "native_value_usd": "300.00",
+                 "native_valuation": {"source": "test spot quote", "price_usd": "150"}}]
+
+    monkeypatch.setattr("noema.dashboard_app.live_wallet_networks", raw_wallets)
+    monkeypatch.setattr("noema.dashboard_app.value_native_wallets", value_wallets)
+    response = TestClient(app).get("/api/wallet-status?force=true")
+    assert response.status_code == 200
+    network = response.json()["networks"][0]
+    assert network["native_value_usd"] == "300.00"
+    assert network["native_valuation"]["source"] == "test spot quote"
+
+
 def test_stripe_projection_endpoint_is_read_only_and_safe_without_database(monkeypatch, tmp_path) -> None:
     path = tmp_path / "missing-stripe.db"
     monkeypatch.setenv("NOEMA_DB_PATH", str(path))
@@ -70,31 +89,48 @@ def test_stripe_projection_endpoint_is_read_only_and_safe_without_database(monke
     assert not path.exists()
 
 
-def test_runtime_stream_notifies_after_another_connection_commits(monkeypatch, tmp_path) -> None:
+def test_runtime_stream_tracks_snapshot_replacement_and_console_state(monkeypatch, tmp_path) -> None:
+    from noema.console_state import console_state_db_path
+    from noema.prediction_account_history import persist_prediction_account_records
+
     path = tmp_path / "stream.db"
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE marker(value TEXT)")
     conn.commit()
     conn.close()
     monkeypatch.setenv("NOEMA_DB_PATH", str(path))
+    state_path = console_state_db_path(path)
+
     class ConnectedRequest:
         async def is_disconnected(self):
             return False
 
-    async def observe_commit():
+    async def observe_updates():
         stream = _runtime_change_stream(ConnectedRequest())
         ready = await anext(stream)
-        writer = sqlite3.connect(path)
-        writer.execute("INSERT INTO marker VALUES ('commit')")
-        writer.commit()
-        writer.close()
-        changed = await anext(stream)
+        replacement = tmp_path / "replacement.db"
+        with sqlite3.connect(replacement) as writer:
+            writer.execute("CREATE TABLE marker(value TEXT)")
+            writer.execute("INSERT INTO marker VALUES ('new snapshot')")
+        os.replace(replacement, path)
+        replaced = await anext(stream)
+        persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+            "fill_id": "stream-fill", "created_time": "2026-09-30T12:00:00Z",
+        }]}], observed_at="2026-09-30T12:00:01Z")
+        account_changed = await anext(stream)
         await stream.aclose()
-        return ready, changed
+        return ready, replaced, account_changed
 
-    ready, changed = asyncio.run(observe_commit())
+    ready, replaced, account_changed = asyncio.run(observe_updates())
     assert ready == "event: ready\ndata: {}\n\n"
-    assert changed == "event: change\ndata: {}\n\n"
+    assert replaced == "event: change\ndata: {}\n\n"
+    assert account_changed == "event: change\ndata: {}\n\n"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "new snapshot"
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute(
+            "SELECT external_id FROM prediction_account_records WHERE record_type='fill'"
+        ).fetchone()[0] == "stream-fill"
 
 
 def test_console_auth_covers_html_static_and_api(monkeypatch) -> None:
@@ -136,6 +172,261 @@ def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tm
     assert stat.S_IMODE(replica.stat().st_mode) == 0o444
     with sqlite3.connect(replica) as conn:
         assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "real-market-record"
+
+
+def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
+    monkeypatch, tmp_path,
+) -> None:
+    from noema.console_state import console_state_db_path
+    from noema.dashboard_app import _merge_account_history_into_console_state
+    from noema.prediction_account_history import persist_prediction_account_records
+
+    replica = tmp_path / "console-replica.db"
+    old_console_record = [{"venue": "kalshi", "fills": [{
+        "fill_id": "shared-fill", "ticker": "KX-OLD", "created_time": "2026-09-30T12:00:00Z",
+    }], "sync_state": {"activity": {
+        "success": True, "complete": True, "high_water_at": "2026-09-30T12:00:00Z",
+        "high_water_id": "cursor-old",
+    }}}]
+    persist_prediction_account_records(str(replica), old_console_record,
+                                       observed_at="2026-09-30T12:00:01Z")
+    source_records = [{"venue": "kalshi", "fills": [
+        {"fill_id": "shared-fill", "ticker": "KX-WORKER-NEW", "created_time": "2026-09-30T12:01:00Z"},
+        {"fill_id": "worker-fill", "ticker": "KXWORKER", "created_time": "2026-09-30T12:01:00Z"},
+        {"fill_id": "state-newer-fill", "ticker": "KX-SNAPSHOT-OLD", "created_time": "2026-09-30T12:02:00Z"},
+    ], "sync_state": {"activity": {
+        "success": True, "complete": True, "high_water_at": "2026-09-30T12:01:00Z",
+        "high_water_id": "cursor-worker",
+    }}}]
+    source = tmp_path / "worker-source.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO worker_observation VALUES ('fresh-worker-record')")
+        conn.execute("""CREATE TABLE canonical_pair_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, observed_at TEXT NOT NULL,
+            canonical_event_id TEXT NOT NULL, canonical_proposition_id TEXT NOT NULL,
+            semantic_status TEXT NOT NULL, settlement_equivalence TEXT NOT NULL,
+            observation_hash TEXT NOT NULL UNIQUE, observation_json TEXT NOT NULL)""")
+        conn.execute("INSERT INTO canonical_pair_observations VALUES (1,?,?,?,?,?,?,?)", (
+            "2026-09-30T12:01:00Z", "event-1", "proposition-1", "confirmed", "unverified",
+            "pair-hash-1", '{"experiment_evaluation":{"verdict":"PASS"}}',
+        ))
+        conn.execute("""CREATE TABLE autonomous_research_runs (
+            id INTEGER PRIMARY KEY, trial_id TEXT NOT NULL, specialist TEXT NOT NULL,
+            kind TEXT NOT NULL, evidence_hash TEXT NOT NULL, worker_version TEXT NOT NULL,
+            status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT,
+            deadline_at TEXT NOT NULL, elapsed_seconds REAL, compute_cost_usd TEXT,
+            result_json TEXT, evidence_path TEXT, mission_id TEXT,
+            UNIQUE(trial_id,evidence_hash,worker_version))""")
+        conn.execute("INSERT INTO autonomous_research_runs VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            "trial-1", "specialist-1", "cross_venue_paper_experiment", "pair-hash-1",
+            "version-1", "completed", "2026-09-30T12:01:00Z", "2026-09-30T12:01:01Z",
+            "2026-09-30T12:02:00Z", None, None, '{"critic_review":{"verdict":"PASS"}}',
+            None, None,
+        ))
+        conn.execute("""CREATE TABLE economic_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
+            event_type TEXT NOT NULL, amount_usd TEXT, payload_json TEXT NOT NULL)""")
+        conn.execute(
+            "INSERT INTO economic_events VALUES (1,?,?,?,?)",
+            ("2026-09-30T12:01:01Z", "paper_cross_venue_settlement", None,
+             '{"evidence_hash":"pair-hash-1","status":"settled"}'),
+        )
+    persist_prediction_account_records(str(source), source_records,
+                                       observed_at="2026-09-30T12:01:01Z")
+    monkeypatch.setenv("NOEMA_DB_PATH", str(replica))
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+    state_path = console_state_db_path(replica)
+    _merge_account_history_into_console_state(str(replica), state_path)
+    persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+        "fill_id": "state-newer-fill", "ticker": "KX-CONSOLE-NEWER",
+        "created_time": "2026-09-30T12:03:00Z",
+    }], "sync_state": {"activity": {
+        "success": True, "complete": True, "high_water_at": "2026-09-30T12:03:00Z",
+        "high_water_id": "cursor-console-newer",
+    }}}], observed_at="2026-09-30T12:03:01Z")
+    real_replace = os.replace
+    interleaved: list[str] = []
+
+    def write_during_atomic_replacement(src, dst):
+        if Path(dst) == replica.resolve():
+            persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+                "fill_id": "concurrent-fill", "ticker": "KXCONCURRENT",
+                "created_time": "2026-09-30T12:02:00Z",
+            }]}], observed_at="2026-09-30T12:02:01Z")
+            interleaved.append("persisted-before-replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("noema.dashboard_app.os.replace", write_during_atomic_replacement)
+    response = TestClient(app).post(
+        "/internal/snapshot", content=gzip.compress(source.read_bytes()),
+        headers={"Authorization": "Bearer snapshot-test-token"},
+    )
+    assert response.status_code == 200
+    assert interleaved == ["persisted-before-replace"]
+    with sqlite3.connect(replica) as conn:
+        assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "fresh-worker-record"
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    with sqlite3.connect(state_path) as conn:
+        stored = {row[0] for row in conn.execute(
+            "SELECT external_id FROM prediction_account_records WHERE venue='kalshi' AND record_type='fill'"
+        )}
+        assert stored == {"shared-fill", "worker-fill", "state-newer-fill", "concurrent-fill"}
+        shared_payload = conn.execute(
+            "SELECT payload_json FROM prediction_account_records WHERE external_id='shared-fill'"
+        ).fetchone()[0]
+        newer_payload = conn.execute(
+            "SELECT payload_json FROM prediction_account_records WHERE external_id='state-newer-fill'"
+        ).fetchone()[0]
+        assert 'KX-WORKER-NEW' in shared_payload
+        assert 'KX-CONSOLE-NEWER' in newer_payload
+        assert conn.execute(
+            "SELECT high_water_at,high_water_id FROM prediction_account_sync_state "
+            "WHERE venue='kalshi' AND stream='activity'"
+        ).fetchone() == ("2026-09-30T12:03:00Z", "cursor-console-newer")
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert conn.execute(
+            "SELECT observation_hash FROM canonical_pair_observations"
+        ).fetchone()[0] == "pair-hash-1"
+        assert conn.execute(
+            "SELECT evidence_hash FROM autonomous_research_runs"
+        ).fetchone()[0] == "pair-hash-1"
+        assert conn.execute(
+            "SELECT count(*) FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
+        ).fetchone()[0] == 1
+    _merge_account_history_into_console_state(str(source), state_path)
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute("SELECT count(*) FROM canonical_pair_observations").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM autonomous_research_runs").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT count(*) FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
+        ).fetchone()[0] == 1
+    # Repeated polling of the same provider event remains idempotent.
+    persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+        "fill_id": "concurrent-fill", "ticker": "KXCONCURRENT",
+        "created_time": "2026-09-30T12:02:00Z",
+    }]}], observed_at="2026-09-30T12:03:00Z")
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM prediction_account_records WHERE external_id='concurrent-fill'"
+        ).fetchone()[0] == 1
+
+
+def test_console_research_migration_updates_a_previously_incomplete_run(tmp_path):
+    import sqlite3
+
+    from noema.dashboard_app import _merge_account_history_into_console_state
+
+    source = tmp_path / "worker.db"
+    state = tmp_path / "console-state.db"
+    schema = """CREATE TABLE autonomous_research_runs(
+        id INTEGER PRIMARY KEY,trial_id TEXT NOT NULL,specialist TEXT NOT NULL,kind TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,worker_version TEXT NOT NULL,status TEXT NOT NULL,
+        created_at TEXT NOT NULL,completed_at TEXT,deadline_at TEXT NOT NULL,
+        elapsed_seconds REAL,compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,mission_id TEXT,
+        UNIQUE(trial_id,evidence_hash,worker_version))"""
+    values = ("trial-a", "specialist-a", "validation", "evidence-a", "v1", "completed",
+              "2026-09-30T12:00:00Z", "2026-09-30T12:05:00Z", "2026-09-30T12:10:00Z",
+              5.0, "0.10", '{"observations":3}', None, None)
+    with sqlite3.connect(source) as conn:
+        conn.execute(schema)
+        conn.execute(
+            "INSERT INTO autonomous_research_runs VALUES(1," + ",".join("?" for _ in values) + ")",
+            values,
+        )
+    with sqlite3.connect(state) as conn:
+        conn.execute(schema)
+        conn.execute(
+            "INSERT INTO autonomous_research_runs VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (*values[:5], "running", values[6], None, *values[8:]),
+        )
+
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        row = conn.execute(
+            "SELECT status,completed_at,result_json FROM autonomous_research_runs"
+        ).fetchone()
+    assert row == ("completed", "2026-09-30T12:05:00Z", '{"observations":3}')
+
+
+def test_research_trial_migration_tracks_recency_without_replacing_identity(tmp_path):
+    import sqlite3
+
+    from noema.dashboard_app import _merge_account_history_into_console_state
+
+    source = tmp_path / "worker.db"
+    state = tmp_path / "console-state.db"
+    schema = """CREATE TABLE research_trials(
+        trial_id TEXT PRIMARY KEY,family TEXT NOT NULL,hypothesis TEXT NOT NULL,
+        params_json TEXT NOT NULL,feature_set_version TEXT NOT NULL,status TEXT NOT NULL,
+        created_at TEXT NOT NULL,parent_trial_id TEXT,status_updated_at TEXT)"""
+    with sqlite3.connect(source) as conn:
+        conn.execute(schema)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?)", (
+            "trial-id", "worker-copy", "worker hypothesis", '{"market_id":"new"}', "v1",
+            "rejected", "2026-09-30T12:00:00Z", None, "2026-09-30T12:05:00Z",
+        ))
+    with sqlite3.connect(state) as conn:
+        conn.execute(schema)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?)", (
+            "trial-id", "sidecar-canonical", "canonical hypothesis", '{"market_id":"old"}', "v1",
+            "running", "2026-09-30T12:00:00Z", None, "2026-09-30T12:02:00Z",
+        ))
+
+    _merge_account_history_into_console_state(str(source), str(state))
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute(
+            "SELECT status,status_updated_at,family,hypothesis,params_json FROM research_trials"
+        ).fetchone() == (
+            "rejected", "2026-09-30T12:05:00Z", "sidecar-canonical", "canonical hypothesis",
+            '{"market_id":"old"}',
+        )
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE research_trials SET status='promoted',status_updated_at='2026-09-30T12:08:00Z' "
+            "WHERE trial_id='trial-id'"
+        )
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute(
+            "SELECT status,status_updated_at FROM research_trials WHERE trial_id='trial-id'"
+        ).fetchone() == ("promoted", "2026-09-30T12:08:00Z")
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE research_trials SET status='retired',status_updated_at='2026-09-30T12:07:00Z' "
+            "WHERE trial_id='trial-id'"
+        )
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute(
+            "SELECT status,status_updated_at FROM research_trials WHERE trial_id='trial-id'"
+        ).fetchone() == ("promoted", "2026-09-30T12:08:00Z")
+
+
+def test_console_research_migration_advances_mutable_trial_status(tmp_path):
+    from noema.dashboard_app import _merge_account_history_into_console_state
+
+    source, state = tmp_path / "worker.db", tmp_path / "console-state.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE research_trials(trial_id TEXT PRIMARY KEY,status TEXT NOT NULL)")
+        conn.execute("INSERT INTO research_trials VALUES('trial-a','registered')")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE research_trials SET status='promoted' WHERE trial_id='trial-a'")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "promoted"
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE research_trials SET status='retired' WHERE trial_id='trial-a'")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "retired"
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE research_trials SET status='promoted' WHERE trial_id='trial-a'")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "retired"
 
 
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:

@@ -29,3 +29,6 @@ def test_trial_registry_counts_unique_parameter_searches(tmp_path) -> None:
 
     store.set_status(first, "rejected")
     assert store.get(first).status == "rejected"
+    assert store.conn.execute(
+        "SELECT status_updated_at FROM research_trials WHERE trial_id=?", (first,),
+    ).fetchone()[0]

@@ -52,6 +52,39 @@ def test_provider_events_deduplicate_and_conflicts_are_append_only(tmp_path):
     assert projection["unreconciled_event_count"] >= 1
 
 
+def test_read_projection_merges_console_sidecar_events_without_duplicates(tmp_path):
+    primary = EconomicLedger(str(tmp_path / "worker.db"))
+    sidecar = EconomicLedger(str(tmp_path / "console-state.db"))
+    primary.record_event(event(external_reference_id="worker-event"))
+    sidecar.record_event(event(external_reference_id="console-event", event_type="fee",
+                               capital_class="cost", amount=Decimal(-2),
+                               amount_usd=Decimal(-2)))
+
+    projection = EconomicLedger.read_projection(
+        str(tmp_path / "worker.db"), additional_paths=(str(tmp_path / "console-state.db"),),
+    )
+    assert projection["event_count"] == 2
+
+    # A matching event copied into both databases is represented only once.
+    sidecar.record_event(event(external_reference_id="worker-event"))
+    projection = EconomicLedger.read_projection(
+        str(tmp_path / "worker.db"), additional_paths=(str(tmp_path / "console-state.db"),),
+    )
+    assert projection["event_count"] == 2
+
+
+def test_read_projection_uses_sidecar_when_worker_replica_is_missing(tmp_path):
+    sidecar_path = tmp_path / "console-state.db"
+    sidecar = EconomicLedger(str(sidecar_path))
+    sidecar.record_event(event(external_reference_id="durable-sidecar-event"))
+
+    projection = EconomicLedger.read_projection(
+        str(tmp_path / "missing-worker.db"), additional_paths=(str(sidecar_path),),
+    )
+
+    assert projection["event_count"] == 1
+
+
 def test_same_provider_event_can_gain_reconciliation_without_rewriting_source(tmp_path):
     ledger = EconomicLedger(str(tmp_path / "events.db"))
     observed = event(reconciliation_state="OBSERVED", confidence_state="estimated",

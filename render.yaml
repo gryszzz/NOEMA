@@ -56,6 +56,8 @@ services:
     envVars:
       - key: NOEMA_DB_PATH
         value: /opt/render/project/src/console-data/noema.db
+      - key: NOEMA_CONSOLE_STATE_DB_PATH
+        value: /opt/render/project/src/console-data/noema-console-state.db
       - key: NOEMA_RUNTIME_SOURCE
         value: worker-sqlite-replica
       - key: NOEMA_CONSOLE_USERNAME

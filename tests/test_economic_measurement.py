@@ -34,6 +34,65 @@ def test_missing_database_stays_missing_and_profit_unknown(tmp_path, monkeypatch
     assert not path.exists()
 
 
+def test_measurement_includes_sidecar_only_research_run_cost(tmp_path):
+    worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute("""CREATE TABLE autonomous_research_runs(
+            id INTEGER PRIMARY KEY,trial_id TEXT NOT NULL,specialist TEXT NOT NULL,
+            kind TEXT NOT NULL,evidence_hash TEXT NOT NULL,worker_version TEXT NOT NULL,
+            status TEXT NOT NULL,created_at TEXT NOT NULL,completed_at TEXT,deadline_at TEXT NOT NULL,
+            elapsed_seconds REAL,compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,
+            mission_id TEXT,UNIQUE(trial_id,evidence_hash,worker_version))""")
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "trial-sidecar", "critic", "research", "hash-a", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), NOW.isoformat(), 1.0, "0.42", "{}", None, None,
+        ))
+    report = build_economic_measurement(
+        str(worker), now=NOW + timedelta(hours=1), additional_paths=(str(sidecar),),
+    )
+    row = next(item for item in report["activity_costs"]["rows"]
+               if item["activity_id"] == "trial-sidecar")
+    assert row["recorded_compute_cost_usd"] == "0.42"
+
+
+def test_measurement_uses_completed_sidecar_run_once_when_worker_copy_is_stale(tmp_path, monkeypatch):
+    worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
+    run_schema = """CREATE TABLE autonomous_research_runs(
+        id INTEGER PRIMARY KEY,trial_id TEXT NOT NULL,specialist TEXT NOT NULL,
+        kind TEXT NOT NULL,evidence_hash TEXT NOT NULL,worker_version TEXT NOT NULL,
+        status TEXT NOT NULL,created_at TEXT NOT NULL,completed_at TEXT,deadline_at TEXT NOT NULL,
+        elapsed_seconds REAL,compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,
+        mission_id TEXT,UNIQUE(trial_id,evidence_hash,worker_version))"""
+    values = ("trial-cost", "critic", "research", "hash-cost", "v1", "running",
+              NOW.isoformat(), None, NOW.isoformat(), None, "0.20", "{}", None, None)
+    with sqlite3.connect(worker) as conn:
+        conn.execute(run_schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(1," + ",".join("?" for _ in values) + ")",
+                     values)
+    completed_at = (NOW + timedelta(minutes=10)).isoformat()
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute(run_schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, *values[:5], "completed", values[6], completed_at, values[8], 2.0, "0.42",
+            '{"observations":5}', None, None,
+        ))
+
+    report = build_economic_measurement(
+        str(worker), now=NOW + timedelta(hours=1), additional_paths=(str(sidecar),),
+    )
+    rows = [item for item in report["activity_costs"]["rows"]
+            if item["activity_id"] == "trial-cost"]
+    assert len(rows) == 1
+    assert rows[0]["recorded_compute_cost_usd"] == "0.42"
+    monkeypatch.setenv("NOEMA_DB_PATH", str(worker))
+    monkeypatch.setenv("NOEMA_CONSOLE_STATE_DB_PATH", str(sidecar))
+    response = TestClient(app).get("/api/economic-measurement")
+    assert response.status_code == 200
+    api_row = next(item for item in response.json()["activity_costs"]["rows"]
+                   if item["activity_id"] == "trial-cost")
+    assert api_row["recorded_compute_cost_usd"] == "0.42"
+
+
 def test_home_economic_api_exposes_period_closure_and_exact_provider_blockers(tmp_path, monkeypatch):
     path = str(tmp_path / 'noema.db')
     ledger = EconomicLedger(path)

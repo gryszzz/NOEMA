@@ -102,11 +102,11 @@ def _account_rows(message: dict[str, Any]) -> tuple[
         if order_id:
             orders.append({
                 "order_id": str(order_id),
-                "ticker": order.get("marketSlug"),
-                "status": order.get("state"),
-                "side": order.get("side"),
-                "fill_count_fp": order.get("cumQuantity"),
-                "remaining_count_fp": order.get("leavesQuantity"),
+                "ticker": order.get("marketSlug") or execution.get("marketSlug"),
+                "status": order.get("state") or execution.get("status"),
+                "side": order.get("side") or execution.get("side"),
+                "fill_count_fp": order.get("cumQuantity") or execution.get("cumQuantity"),
+                "remaining_count_fp": order.get("leavesQuantity") or execution.get("leavesQuantity"),
                 "last_update_time": execution.get("transactTime"),
             })
         trade_id = execution.get("tradeId")
@@ -118,9 +118,10 @@ def _account_rows(message: dict[str, Any]) -> tuple[
         if trade_id and price_usd is not None and quantity is not None:
             fills.append({
                 "fill_id": str(trade_id), "order_id": str(order_id) if order_id else None,
-                "ticker": order.get("marketSlug"), "count_fp": str(quantity),
+                "ticker": order.get("marketSlug") or execution.get("marketSlug"),
+                "count_fp": str(quantity),
                 "price_usd": price_usd,
-                "side": order.get("side"), "fee_cost": (
+                "side": order.get("side") or execution.get("side"), "fee_cost": (
                     fee.get("value") if isinstance(fee, dict)
                     and str(fee.get("currency", "")).upper() == "USD" else None
                 ),

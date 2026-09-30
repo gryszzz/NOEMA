@@ -1,3 +1,5 @@
+import sqlite3
+
 from noema import prediction_venues
 from noema.polymarket_account_stream import _account_rows
 from noema.prediction_account_history import persist_prediction_account_records
@@ -69,6 +71,31 @@ def test_private_fill_requires_usd_price_and_has_stable_trade_id():
         "realized_pnl_usd": None, "created_time": "2026-09-29T12:00:00Z",
         "state": None,
     }]
+
+
+def test_legacy_execution_order_fields_fall_back_to_execution_envelope(tmp_path):
+    _, _, orders, fills = _account_rows({"orderSubscriptionUpdate": {"execution": {
+        "orderId": "legacy-order-1", "marketSlug": "legacy-market", "status": "OPEN",
+        "side": "BUY_YES", "cumQuantity": "2", "leavesQuantity": "3",
+        "tradeId": "legacy-trade-1", "lastShares": "1",
+        "lastPx": {"value": "0.5", "currency": "USD"},
+    }}})
+    assert orders == [{
+        "order_id": "legacy-order-1", "ticker": "legacy-market", "status": "OPEN",
+        "side": "BUY_YES", "fill_count_fp": "2", "remaining_count_fp": "3",
+        "last_update_time": None,
+    }]
+    assert fills[0]["ticker"] == "legacy-market"
+    assert fills[0]["side"] == "BUY_YES"
+    database = tmp_path / "legacy-order.db"
+    persist_prediction_account_records(str(database), [{"venue": "polymarket_us", "orders": orders}])
+    with sqlite3.connect(database) as conn:
+        market_id, state, payload = conn.execute(
+            "SELECT market_id,state,payload_json FROM prediction_account_records "
+            "WHERE venue='polymarket_us' AND record_type='order'"
+        ).fetchone()
+    assert (market_id, state) == ("legacy-market", "OPEN")
+    assert '"status":"OPEN"' in payload
 
 
 def test_authenticated_balance_after_state_updates_cached_projection_without_a_rest_read():

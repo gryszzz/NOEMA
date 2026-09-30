@@ -63,6 +63,208 @@ def test_experiment_projection_links_persisted_runs_evidence_decisions_and_criti
     assert json.loads(run["result"])["critic_review"]["result_accepted"] is True
 
 
+def test_sidecar_terminal_run_wins_over_incomplete_worker_copy(tmp_path):
+    worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
+    schema = """CREATE TABLE autonomous_research_runs(
+        id INTEGER PRIMARY KEY,trial_id TEXT,specialist TEXT,kind TEXT,evidence_hash TEXT,
+        worker_version TEXT,status TEXT,created_at TEXT,completed_at TEXT,elapsed_seconds REAL,
+        compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,mission_id TEXT)"""
+    with sqlite3.connect(worker) as conn:
+        conn.execute(schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "trial-a", "critic", "quality", "hash-a", "v1", "running",
+            NOW.isoformat(), None, None, None, '{"observations":1}', None, None,
+        ))
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute(schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            8, "trial-a", "critic", "quality", "hash-a", "v1", "timed_out",
+            NOW.isoformat(), (NOW + timedelta(seconds=4)).isoformat(), 4.0, None,
+            '{"observations":7}', None, None,
+        ))
+
+    runs = build_operations(str(worker), now=NOW, additional_paths=(str(sidecar),))["sections"]["research_runs"]["rows"]
+    assert len(runs) == 1
+    assert runs[0]["id"] == 1
+    assert runs[0]["status"] == "timed_out"
+    assert runs[0]["observations"] == 7
+
+
+def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path):
+    worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
+    with sqlite3.connect(worker) as conn:
+        conn.execute("CREATE TABLE research_trials(trial_id TEXT,family TEXT,hypothesis TEXT,"
+                     "feature_set_version TEXT,status TEXT,created_at TEXT,parent_trial_id TEXT,params_json TEXT)")
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?)", (
+            "trial-a", "prediction", "test", "v1", "registered", NOW.isoformat(), None,
+            json.dumps({"strategy_id":"strategy-a"}),
+        ))
+        conn.execute("CREATE TABLE autonomous_research_runs(id,trial_id,specialist,kind,evidence_hash,"
+                     "worker_version,status,created_at,completed_at,elapsed_seconds,compute_cost_usd,"
+                     "result_json,evidence_path,mission_id)")
+        conn.executemany("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            (1, "trial-a", "critic", "cross_venue_paper_experiment", "obs-a", "v1", "completed",
+             NOW.isoformat(), NOW.isoformat(), 1.0, None, '{"observations":2}', None, None),
+            (2, "trial-a", "critic", "cross_venue_paper_experiment", "obs-b", "v1", "completed",
+             NOW.isoformat(), NOW.isoformat(), 1.0, None, '{"observations":2}', None, None),
+        ])
+        conn.execute("CREATE TABLE forecast_ledger(id,created_at,venue,market_id,forecast_json,action_json)")
+        conn.execute("INSERT INTO forecast_ledger VALUES(?,?,?,?,?,?)", (
+            1, NOW.isoformat(), "kalshi", "MKT-A",
+            json.dumps({"trial_id":"trial-a", "strategy_id":"strategy-a"}),
+            json.dumps({"decision":"pass"}),
+        ))
+    with sqlite3.connect(sidecar) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(trial_id TEXT,family TEXT,hypothesis TEXT,
+                feature_set_version TEXT,status TEXT,created_at TEXT,parent_trial_id TEXT,params_json TEXT);
+            CREATE TABLE autonomous_research_runs(id,trial_id,specialist,kind,evidence_hash,
+                worker_version,status,created_at,completed_at,elapsed_seconds,compute_cost_usd,
+                result_json,evidence_path,mission_id);
+            CREATE TABLE canonical_pair_observations(id,observed_at,canonical_event_id,
+                canonical_proposition_id,semantic_status,settlement_equivalence,
+                observation_hash,observation_json);
+        """)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?)", (
+            "trial-a", "prediction", "test", "v1", "promoted", NOW.isoformat(), None,
+            json.dumps({"strategy_id":"strategy-a", "candidate_observation_hash":"obs-a"}),
+        ))
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "trial-a", "critic", "cross_venue_paper_experiment", "obs-a", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, '{"observations":2}', None, None,
+        ))
+        conn.execute("INSERT INTO canonical_pair_observations VALUES(?,?,?,?,?,?,?,?)", (
+            1, NOW.isoformat(), "event-a", "prop-a", "matched", "equivalent", "obs-a",
+            json.dumps({"native_contracts":[{"market_id":"MKT-A"}]}),
+        ))
+
+    experiment = build_operations(
+        str(worker), now=NOW, additional_paths=(str(sidecar),),
+    )["sections"]["experiments"]["rows"][0]
+    assert experiment["strategy_id"] == "strategy-a"
+    assert experiment["status"] == "promoted"
+    assert experiment["market_id"] == "MKT-A"
+    assert experiment["market_ids"] == ["MKT-A"]
+    assert experiment["run_count"] == 2
+    assert experiment["evidence_count"] == 2
+    assert experiment["decision_count"] == 1
+    assert experiment["strategy_decision_count"] == 1
+
+
+def test_console_sidecar_records_are_included_in_existing_operation_sections(tmp_path):
+    primary = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    with sqlite3.connect(primary) as conn:
+        conn.execute("CREATE TABLE runtime_events(id,created_at,stage,status)")
+    with sqlite3.connect(sidecar) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(
+                trial_id,family,hypothesis,feature_set_version,status,created_at,parent_trial_id
+            );
+            CREATE TABLE autonomous_research_runs(
+                id,trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,
+                completed_at,elapsed_seconds,compute_cost_usd,result_json,evidence_path,mission_id
+            );
+            CREATE TABLE economic_events(
+                id INTEGER PRIMARY KEY,created_at TEXT,event_type TEXT,amount_usd TEXT,payload_json TEXT
+            );
+        """)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?)", (
+            "sidecar-trial", "prediction", "Test hypothesis", "v1", "active", NOW.isoformat(), None,
+        ))
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "sidecar-trial", "critic", "validation", "evidence-1", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, json.dumps({"observations": 4}), None, None,
+        ))
+        conn.execute("INSERT INTO economic_events VALUES(1,?,?,?,?)", (
+            NOW.isoformat(), "wallet_transaction_confirmed", "12.50", "{}",
+        ))
+
+    sections = build_operations(str(primary), additional_paths=(str(sidecar),), now=NOW)["sections"]
+    assert sections["experiments"]["rows"][0]["trial_id"] == "sidecar-trial"
+    assert sections["research_runs"]["rows"][0]["observations"] == 4
+    assert sections["wallet_transactions"]["rows"][0]["event_type"] == "wallet_transaction_confirmed"
+
+
+def test_sidecar_terminal_run_wins_over_stale_incomplete_worker_record(tmp_path):
+    primary = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    run_schema = """CREATE TABLE autonomous_research_runs(
+        id INTEGER PRIMARY KEY,trial_id TEXT,specialist TEXT,kind TEXT,evidence_hash TEXT,
+        worker_version TEXT,status TEXT,created_at TEXT,completed_at TEXT,elapsed_seconds REAL,
+        compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,mission_id TEXT)"""
+    with sqlite3.connect(primary) as conn:
+        conn.execute("CREATE TABLE runtime_events(id,created_at,stage,status)")
+        conn.execute(run_schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "trial", "critic", "validation", "hash", "v1", "running", NOW.isoformat(),
+            None, None, None, json.dumps({"observations": 1}), None, None,
+        ))
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute(run_schema)
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            7, "trial", "critic", "validation", "hash", "v1", "completed", NOW.isoformat(),
+            (NOW + timedelta(minutes=1)).isoformat(), 2.0, "0.3",
+            json.dumps({"observations": 7, "critic_review": {"verdict": "PASS"}}), None, None,
+        ))
+
+    runs = build_operations(
+        str(primary), additional_paths=(str(sidecar),), now=NOW,
+    )["sections"]["research_runs"]["rows"]
+    assert len(runs) == 1
+    assert runs[0]["status"] == "completed"
+    assert runs[0]["observations"] == 7
+    assert runs[0]["compute_cost_usd"] == "0.3"
+
+
+def test_sidecar_only_experiment_uses_canonical_projection_relationships(tmp_path):
+    primary = tmp_path / "worker.db"
+    sidecar = tmp_path / "console-state.db"
+    with sqlite3.connect(primary) as conn:
+        conn.execute("CREATE TABLE runtime_events(id,created_at,stage,status)")
+        conn.execute("CREATE TABLE forecast_ledger(id,forecast_json)")
+        conn.execute("INSERT INTO forecast_ledger VALUES(1,?)", (
+            json.dumps({"trial_id": "sidecar-trial", "strategy_id": "strategy-a"}),
+        ))
+    with sqlite3.connect(sidecar) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(
+                trial_id TEXT,family TEXT,hypothesis TEXT,feature_set_version TEXT,status TEXT,
+                created_at TEXT,parent_trial_id TEXT,params_json TEXT,status_updated_at TEXT
+            );
+            CREATE TABLE autonomous_research_runs(
+                id,trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,
+                completed_at,elapsed_seconds,compute_cost_usd,result_json,evidence_path,mission_id
+            );
+            CREATE TABLE canonical_pair_observations(observation_hash TEXT,observation_json TEXT);
+        """)
+        params = {"strategy_id": "strategy-a", "market_id": "MARKET-A",
+                  "candidate_observation_hash": "observation-a"}
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?,?)", (
+            "sidecar-trial", "prediction", "Hypothesis", "v1", "running", NOW.isoformat(),
+            None, json.dumps(params), NOW.isoformat(),
+        ))
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "sidecar-trial", "critic", "validation", "evidence-a", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, "{}", "evidence/path", None,
+        ))
+        conn.execute("INSERT INTO canonical_pair_observations VALUES(?,?)", (
+            "observation-a", json.dumps({"native_contracts": [{"market_id": "MARKET-A"}]}),
+        ))
+
+    experiments = build_operations(
+        str(primary), additional_paths=(str(sidecar),), now=NOW,
+    )["sections"]["experiments"]["rows"]
+    row = next(item for item in experiments if item["trial_id"] == "sidecar-trial")
+    assert row["params"] == params
+    assert row["strategy_id"] == "strategy-a"
+    assert row["market_id"] == "MARKET-A"
+    assert row["market_ids"] == ["MARKET-A"]
+    assert row["run_count"] == 1
+    assert row["evidence_count"] == 1
+    assert row["decision_count"] == 1
+
+
 def test_bounded_read_only_records_and_private_json_excluded(tmp_path):
     path = tmp_path / "work.db"
     with sqlite3.connect(path) as conn:

@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 
 from noema.account import KalshiAccount
+from noema.prediction_account_history import get_or_create_prediction_account_baseline
 from noema.prediction_venues import (
     _kalshi_account_metrics,
+    _kalshi_open_position_count,
     _polymarket_position_capital,
     _retain_last_successful_account,
 )
@@ -15,7 +17,8 @@ def test_kalshi_realized_pnl_requires_complete_reconciled_opening_balance_window
     baseline = {"observed_at": "2026-09-29T11:00:00+00:00", "cash_usd": "20", "portfolio_value_usd": "0"}
     metrics = _kalshi_account_metrics(
         {"balance_dollars": "21.17", "portfolio_value_dollars": "0"},
-        {"market_positions": [], "pagination": complete},
+        {"market_positions": [{"ticker": "MKT-CLOSED", "position_fp": "0",
+                                "market_exposure_dollars": "0"}], "pagination": complete},
         {"fills": [{"fill_id": "fill-1", "outcome_side": "yes", "book_side": "bid",
                     "count_fp": "2", "yes_price_dollars": "0.40", "fee_cost": "0.01",
                     "created_time": "2026-09-29T11:30:00Z"}],
@@ -37,6 +40,29 @@ def test_kalshi_realized_pnl_requires_complete_reconciled_opening_balance_window
     assert metrics["volume"]["value"] == "0.80"
     assert metrics["fees"]["value"] == "0.03"
     assert metrics["unrealized_pnl"]["value"] is None
+
+
+def test_kalshi_flat_baseline_ignores_historical_zero_position_rows():
+    historical_rows = [
+        {"ticker": "MKT-CLOSED", "position_fp": "0"},
+        {"ticker": "MKT-OPEN", "position_fp": "2.5"},
+    ]
+    assert _kalshi_open_position_count(historical_rows) == 1
+    flat_history = [{"ticker": "MKT-CLOSED", "position_fp": "0"}]
+    assert _kalshi_open_position_count(flat_history) == 0
+    assert _kalshi_open_position_count([{"ticker": "MKT-UNKNOWN"}]) is None
+
+
+def test_kalshi_flat_baseline_persists_with_only_historical_zero_position_rows(tmp_path):
+    open_positions = _kalshi_open_position_count([
+        {"ticker": "MKT-CLOSED", "position_fp": "0"},
+    ])
+    baseline = get_or_create_prediction_account_baseline(
+        tmp_path / "baseline.db", "kalshi", observed_at="2026-09-30T12:00:00+00:00",
+        cash_usd="25", portfolio_value_usd="0", positions_complete=True,
+        open_positions=open_positions,
+    )
+    assert baseline["cash_usd"] == "25"
 
 
 def test_kalshi_realized_pnl_stays_unavailable_without_opening_baseline():

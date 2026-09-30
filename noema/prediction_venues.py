@@ -34,6 +34,7 @@ from .canonical_market_identity import (
     registered_resolvers,
 )
 from .config import KalshiConfig, kalshi_production_read_only_config
+from .console_state import console_state_db_path
 from .cross_venue_experiment import (
     evaluate_candidate,
     extract_clause_evidence,
@@ -68,7 +69,7 @@ def _account_history_plan(
     venue: str, record_types: tuple[str, ...], *, required_streams: tuple[str, ...] = ("activity", "settlement"),
 ) -> tuple[bool, int | None, dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     """Choose a durable incremental cursor and scheduled full-coverage audit."""
-    path = os.getenv("NOEMA_DB_PATH", "data/noema.db")
+    path = console_state_db_path()
     state = prediction_account_sync_state(path, venue)
     now = datetime.now(UTC)
     full_audit = True
@@ -327,6 +328,8 @@ def _kalshi_account_metrics(
     fills_complete = fills.get("pagination", {}).get("complete") is True
     settlements_complete = settlements.get("pagination", {}).get("complete") is True
     positions_complete = positions.get("pagination", {}).get("complete") is True
+    open_position_count = _kalshi_open_position_count(positions.get("market_positions"))
+    positions_flat = positions_complete and open_position_count == 0
     cashflows: list[Decimal | None] = []
     volume_values: list[Decimal | None] = []
     for row in fill_rows:
@@ -452,7 +455,7 @@ def _kalshi_account_metrics(
     if (cash is not None and portfolio is not None and baseline_equity is not None
             and deposit_complete and withdrawal_complete and transfers_complete
             and deposits_net is not None and withdrawals_net is not None and window_realized is not None
-            and fills_complete and settlements_complete and positions_complete and not position_rows
+            and fills_complete and settlements_complete and positions_flat
             and not transfer_scope_conflict):
         end_equity = cash + portfolio
         external_net = deposits_net + withdrawals_net
@@ -516,6 +519,16 @@ def _kalshi_account_metrics(
             None if fees is not None else ("Fill or settlement pagination is incomplete." if not fills_complete or not settlements_complete else "At least one fill or settlement is missing fee_cost."),
             source_ids=fill_ids + settlement_ids, components={"basis": "fill fee_cost + settlement fee_cost"}),
     }
+
+
+def _kalshi_open_position_count(rows: Any) -> int | None:
+    """Count only nonzero authenticated positions; unknown quantity is not flat."""
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return None
+    quantities = [_decimal(row.get("position_fp")) for row in rows]
+    if any(quantity is None for quantity in quantities):
+        return None
+    return sum(quantity != 0 for quantity in quantities)
 
 
 def _polymarket_activity_keys(row: Any) -> set[str]:
@@ -740,9 +753,13 @@ async def _kalshi_status() -> dict[str, Any]:
                 "pagination": {**snapshot.transfers.get("pagination", {}),
                                "complete": transfers_complete},
             }
+            open_position_count = (
+                _kalshi_open_position_count(snapshot.positions.get("market_positions"))
+                if positions_complete else None
+            )
             balance_updated_at = _kalshi_balance_updated_at(snapshot.balance.get("updated_ts"))
             baseline = get_or_create_prediction_account_baseline(
-                os.getenv("NOEMA_DB_PATH", "data/noema.db"), "kalshi",
+                console_state_db_path(), "kalshi",
                 observed_at=balance_updated_at or "",
                 cash_usd=kalshi_cash_usd(snapshot.balance),
                 portfolio_value_usd=(
@@ -752,8 +769,7 @@ async def _kalshi_status() -> dict[str, Any]:
                      format((_decimal(snapshot.balance.get("portfolio_value")) / 100).normalize(), "f"))
                 ),
                 positions_complete=positions_complete,
-                open_positions=(len(snapshot.positions.get("market_positions", []))
-                                if positions_complete else None),
+                open_positions=open_position_count,
             )
             account_metrics = _kalshi_account_metrics(
                 snapshot.balance, snapshot.positions, metric_fills, metric_settlements,
@@ -783,7 +799,7 @@ async def _kalshi_status() -> dict[str, Any]:
                 "observed_at": datetime.now(UTC).isoformat(),
                 "capital": capital,
                 "account_metrics": account_metrics,
-                "positions": len(snapshot.positions.get("market_positions", [])),
+                "positions": open_position_count,
                 "open_orders": sum(
                     str(order.get("status", "")).lower() in {"resting", "open", "pending"}
                     for order in snapshot.orders.get("orders", [])
@@ -1564,31 +1580,8 @@ async def _discover_tesla_threshold_candidate(
 
 
 def _load_registered_quote_pair() -> list[dict[str, Any]] | None:
-    ledger: ForecastLedger | None = None
-    try:
-        ledger = ForecastLedger(os.getenv("NOEMA_DB_PATH", "data/noema.db"))
-        rows = ledger.conn.execute(
-            """SELECT canonical_proposition_id, observation_json FROM canonical_pair_observations
-               WHERE semantic_status='confirmed'
-               ORDER BY id DESC LIMIT 100"""
-        ).fetchall()
-        registered: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for proposition_id, payload in rows:
-            if proposition_id in seen:
-                continue
-            value = json.loads(payload)
-            identities = value.get("canonical_identity", {}).get("contracts", [])
-            venues = {item.get("venue") for item in identities if isinstance(item, dict)}
-            if venues == {"kalshi", "polymarket-us"}:
-                registered.append(value)
-                seen.add(proposition_id)
-        return registered or None
-    except (OSError, sqlite3.Error, ValueError, TypeError):
-        return None
-    finally:
-        if ledger is not None:
-            ledger.conn.close()
+    runtime_path = os.getenv("NOEMA_DB_PATH", "data/noema.db")
+    return _load_registered_pair_rows((console_state_db_path(runtime_path), runtime_path)) or None
 
 
 async def _refresh_registered_pair(previous: dict[str, Any]) -> dict[str, Any] | None:
@@ -1971,47 +1964,84 @@ def _normalize_polymarket_depth(payload: Any, slug: str) -> dict[str, Any] | Non
             "normalization": "Polymarket US official L2 price/qty levels"}
 
 
-def _fixed_lifecycle_pairs(path: str, *, limit: int = 5) -> set[tuple[str, str]]:
+def _fixed_lifecycle_pairs(
+    path: str, *, fallback_paths: tuple[str, ...] = (), limit: int = 5,
+) -> set[tuple[str, str]]:
     """Read the already-registered lifecycle cohort without enrolling discoveries."""
     if not 1 <= limit <= 5:
         raise ValueError("lifecycle cohort limit must be 1..5")
-    db = Path(path)
-    if not db.exists():
-        return set()
-    try:
-        conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
-        try:
-            tables = {row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )}
-            if "canonical_pair_observations" not in tables:
-                return set()
-            rows = conn.execute(
-                "SELECT observation_json FROM canonical_pair_observations "
-                "ORDER BY id DESC LIMIT 500"
-            ).fetchall()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return set()
     pairs: set[tuple[str, str]] = set()
-    for (payload,) in rows:
-        try:
-            observation = json.loads(payload)
-            evaluation = observation.get("experiment_evaluation")
-            contracts = (observation.get("canonical_identity") or {}).get("contracts", [])
-            if not isinstance(evaluation, dict) or not isinstance(contracts, list):
-                continue
-            by_venue = {str(item.get("venue")): item for item in contracts if isinstance(item, dict)}
-            kalshi = by_venue.get("kalshi", {}).get("contract_id")
-            polymarket = by_venue.get("polymarket-us", {}).get("contract_id")
-            if kalshi and polymarket:
-                pairs.add((str(kalshi), str(polymarket)))
-                if len(pairs) >= limit:
-                    break
-        except (ValueError, TypeError, AttributeError):
+    for candidate_path in (path, *fallback_paths):
+        db = Path(candidate_path)
+        if not db.exists():
             continue
+        try:
+            conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+            try:
+                tables = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )}
+                if "canonical_pair_observations" not in tables:
+                    continue
+                rows = conn.execute(
+                    "SELECT observation_json FROM canonical_pair_observations "
+                    "ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            continue
+        for (payload,) in rows:
+            try:
+                observation = json.loads(payload)
+                evaluation = observation.get("experiment_evaluation")
+                contracts = (observation.get("canonical_identity") or {}).get("contracts", [])
+                if not isinstance(evaluation, dict) or not isinstance(contracts, list):
+                    continue
+                by_venue = {str(item.get("venue")): item for item in contracts if isinstance(item, dict)}
+                kalshi = by_venue.get("kalshi", {}).get("contract_id")
+                polymarket = by_venue.get("polymarket-us", {}).get("contract_id")
+                if kalshi and polymarket:
+                    pairs.add((str(kalshi), str(polymarket)))
+                    if len(pairs) >= limit:
+                        return pairs
+            except (ValueError, TypeError, AttributeError):
+                continue
     return pairs
+
+
+def _load_registered_pair_rows(paths: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Read registered pairs from durable console history and worker snapshots."""
+    registered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in paths:
+        database = Path(path)
+        if not database.is_file():
+            continue
+        try:
+            with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=2) as conn:
+                tables = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )}
+                if "canonical_pair_observations" not in tables:
+                    continue
+                rows = conn.execute(
+                    """SELECT canonical_proposition_id, observation_json
+                       FROM canonical_pair_observations WHERE semantic_status='confirmed'
+                       ORDER BY id DESC LIMIT 100""",
+                ).fetchall()
+            for proposition_id, payload in rows:
+                if proposition_id in seen:
+                    continue
+                value = json.loads(payload)
+                identities = value.get("canonical_identity", {}).get("contracts", [])
+                venues = {item.get("venue") for item in identities if isinstance(item, dict)}
+                if venues == {"kalshi", "polymarket-us"}:
+                    registered.append(value)
+                    seen.add(proposition_id)
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            continue
+    return registered
 
 
 async def _lifecycle_evidence(candidate: dict[str, Any]) -> dict[str, Any] | None:
@@ -2175,6 +2205,7 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
         return _cache["payload"]
     async with _lock:
         db_path = os.getenv("NOEMA_DB_PATH", "data/noema.db")
+        console_db_path = console_state_db_path(db_path)
         now = monotonic()
         if not force and _cache["payload"] is not None and now - _cache["at"] < 15:
             return _cache["payload"]
@@ -2235,7 +2266,7 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
             try:
                 persistence = await asyncio.to_thread(
                     persist_prediction_account_records,
-                    os.getenv("NOEMA_DB_PATH", "data/noema.db"),
+                    console_db_path,
                     history_records,
                 )
                 for venue in (kalshi, polymarket):
@@ -2249,9 +2280,11 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
                         }
         if comparison.get("matches"):
             comparison["persistence_status"] = await asyncio.to_thread(
-                _persist_canonical_observations, comparison["matches"],
+                _persist_canonical_observations, comparison["matches"], console_db_path,
             )
-            fixed_pairs = await asyncio.to_thread(_fixed_lifecycle_pairs, db_path)
+            fixed_pairs = await asyncio.to_thread(
+                _fixed_lifecycle_pairs, console_db_path, fallback_paths=(db_path,),
+            )
             lifecycle_rows = []
             for candidate in comparison.get("matches", [])[:5]:
                 contracts = (candidate.get("canonical_identity") or {}).get("contracts", [])
@@ -2268,7 +2301,7 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
                         continue
                     evaluation = evaluate_candidate(lifecycle_candidate)
                     lifecycle = await asyncio.to_thread(
-                        persist_evaluation, db_path, lifecycle_candidate, evaluation,
+                        persist_evaluation, console_db_path, lifecycle_candidate, evaluation,
                     )
                     candidate.update(lifecycle_candidate)
                     candidate["experiment_evaluation"] = evaluation
@@ -2286,7 +2319,7 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
             comparison["persistence_status"] = "no_candidate_to_record"
         try:
             paper_maturation = await asyncio.to_thread(
-                mature_paper_pairs, os.getenv("NOEMA_DB_PATH", "data/noema.db"),
+                mature_paper_pairs, console_db_path, outcome_path=db_path,
             )
         except (OSError, sqlite3.Error, TypeError, ValueError):
             paper_maturation = {"status": "unavailable", "matured": 0,
@@ -2373,18 +2406,21 @@ async def build_prediction_venue_status(*, force: bool = False) -> dict[str, Any
             "cross_venue_comparison": comparison,
             "cross_venue_paper_maturation": paper_maturation,
             "cross_venue_experiment_history": await asyncio.to_thread(
-                recent_evaluations, os.getenv("NOEMA_DB_PATH", "data/noema.db"), limit=20,
+                recent_evaluations, console_db_path, limit=20,
             ),
         }
         _cache.update(at=monotonic(), payload=payload)
         return payload
 
 
-def _persist_canonical_observations(observations: list[dict[str, Any]]) -> str:
+def _persist_canonical_observations(
+    observations: list[dict[str, Any]], path: str | None = None,
+) -> str:
     ledger: ForecastLedger | None = None
     economic_ledger = None
+    database_path = path or console_state_db_path()
     try:
-        ledger = ForecastLedger(os.getenv("NOEMA_DB_PATH", "data/noema.db"))
+        ledger = ForecastLedger(database_path)
         inserted_observations = [
             item for item in observations if ledger.append_canonical_pair_observation(item)
         ]
@@ -2394,7 +2430,7 @@ def _persist_canonical_observations(observations: list[dict[str, Any]]) -> str:
             # non-monetary provenance. No parallel accounting store is created.
             from .economic_ledger import EconomicLedger
 
-            economic_ledger = EconomicLedger(os.getenv("NOEMA_DB_PATH", "data/noema.db"))
+            economic_ledger = EconomicLedger(database_path)
             for item in inserted_observations:
                 append_shared_economic_event(
                     economic_ledger, canonical_observation_event(item), amount_usd=None,

@@ -155,7 +155,9 @@ def test_canonical_pair_observation_is_append_only_and_deduplicated(tmp_path):
     }
 
 
-def test_venue_status_persists_canonical_candidate_in_configured_ledger(monkeypatch, tmp_path):
+def test_venue_status_persists_console_research_outside_read_only_worker_snapshot(
+    monkeypatch, tmp_path,
+):
     kalshi = _identity("kalshi", "KXMLB-26LAD", 2026, "Los Angeles Dodgers", "Rule A")
     polymarket = _identity("polymarket-us", "ws-champion-dodgers", 2026, "Dodgers", "Rule B")
     candidate = {
@@ -179,7 +181,19 @@ def test_venue_status_persists_canonical_candidate_in_configured_ledger(monkeypa
     async def cross_venue_candidate():
         return {"status": "candidate_only", "matches": [candidate]}
 
-    monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "runtime.db"))
+    import os
+    import sqlite3
+    import stat
+
+    from noema.console_state import console_state_db_path
+
+    runtime_db = tmp_path / "runtime.db"
+    with sqlite3.connect(runtime_db) as connection:
+        connection.execute("CREATE TABLE outcomes (venue TEXT, market_id TEXT)")
+        connection.execute("INSERT INTO outcomes VALUES ('worker', 'immutable')")
+    os.chmod(runtime_db, 0o444)
+    runtime_bytes = runtime_db.read_bytes()
+    monkeypatch.setenv("NOEMA_DB_PATH", str(runtime_db))
     monkeypatch.setattr(prediction_venues, "_kalshi_status", kalshi_status)
     monkeypatch.setattr(prediction_venues, "_polymarket_us_status", polymarket_status)
     monkeypatch.setattr(prediction_venues, "_cross_venue_candidate", cross_venue_candidate)
@@ -198,9 +212,7 @@ def test_venue_status_persists_canonical_candidate_in_configured_ledger(monkeypa
     assert [item["venue"] for item in loaded_pair[0]["canonical_identity"]["contracts"]] == [
         "kalshi", "polymarket-us",
     ]
-    import sqlite3
-
-    connection = sqlite3.connect(tmp_path / "runtime.db")
+    connection = sqlite3.connect(console_state_db_path(runtime_db))
     persisted = connection.execute("SELECT count(*) FROM canonical_pair_observations").fetchone()[0]
     evidence_counts = (
         connection.execute("SELECT count(*) FROM economic_comparability_assessments").fetchone()[0],
@@ -210,6 +222,8 @@ def test_venue_status_persists_canonical_candidate_in_configured_ledger(monkeypa
     connection.close()
     assert persisted == 1
     assert evidence_counts == (1, 1, 1)
+    assert stat.S_IMODE(runtime_db.stat().st_mode) == 0o444
+    assert runtime_db.read_bytes() == runtime_bytes
 
 
 def test_distinct_proposition_structures_require_all_explicit_identity_fields():

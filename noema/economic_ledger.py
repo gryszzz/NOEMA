@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -512,11 +513,57 @@ class EconomicLedger:
                 "unresolved_blockers": blockers}
 
     @staticmethod
-    def read_projection(path: str = "data/noema.db", *, month_utc: str | None = None) -> dict[str, Any]:
+    def read_projection(
+        path: str = "data/noema.db", *, month_utc: str | None = None,
+        additional_paths: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         """Read canonical events only. Incomplete coverage keeps net and ratio unknown."""
-        db = Path(path)
-        if not db.exists():
+        requested_paths = (path, *additional_paths)
+        distinct_paths: list[Path] = []
+        seen_paths: set[Path] = set()
+        for candidate in requested_paths:
+            candidate_path = Path(candidate)
+            try:
+                resolved = candidate_path.resolve()
+            except OSError:
+                continue
+            if resolved not in seen_paths:
+                seen_paths.add(resolved)
+                distinct_paths.append(resolved)
+
+        # The worker database is a replaceable replica. During startup or a
+        # snapshot gap it may be absent while the console sidecar still owns
+        # durable canonical evidence, so select the first readable canonical
+        # ledger from either location instead of making the primary path a gate.
+        required = {"provider", "currency", "amount", "reconciliation_state",
+                    "value_state", "capital_class", "confidence_state",
+                    "completeness_state"}
+        db: Path | None = None
+        for candidate in distinct_paths:
+            if not candidate.is_file():
+                continue
+            try:
+                with closing(sqlite3.connect(
+                    candidate.as_uri() + "?mode=ro", uri=True, timeout=2,
+                )) as probe:
+                    tables = {row[0] for row in probe.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )}
+                    if "economic_events" not in tables:
+                        continue
+                    columns = {row[1] for row in probe.execute(
+                        "PRAGMA table_info(economic_events)"
+                    )}
+                    if required <= columns:
+                        db = candidate
+                        break
+            except sqlite3.Error:
+                continue
+        if db is None:
             return _empty_event_projection("canonical ledger unavailable")
+        additional_paths = tuple(
+            str(candidate) for candidate in distinct_paths if candidate != db
+        )
         conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
         conn.row_factory = sqlite3.Row
         try:
@@ -526,9 +573,6 @@ class EconomicLedger:
             if "economic_events" not in tables:
                 return _empty_event_projection("canonical ledger unavailable")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}
-            required = {"provider", "currency", "amount", "reconciliation_state",
-                        "value_state", "capital_class", "confidence_state",
-                        "completeness_state"}
             if not required <= columns:
                 return _empty_event_projection("canonical schema not initialized")
             params: tuple[Any, ...] = ()
@@ -545,7 +589,75 @@ class EconomicLedger:
                 "WHERE (? IS NULL OR month_utc=?) ORDER BY id",
                 (month_utc, month_utc),
             ).fetchall() if "economic_provider_coverage" in tables else []
-            projection = _project_events(rows, coverage)
+            event_rows = list(rows)
+            coverage_rows = list(coverage)
+            event_hashes = {_economic_event_identity(row)[0] for row in rows}
+            main_event_id_by_hash = {
+                _economic_event_identity(row)[0]: int(row["id"])
+                for row in rows
+            }
+            coverage_hashes = {
+                hashlib.sha256(json.dumps(
+                    {key: value for key, value in dict(row).items() if key != "id"},
+                    sort_keys=True, default=str,
+                ).encode()).hexdigest()
+                for row in coverage
+            }
+            main_max_id = max((int(row["id"]) for row in rows), default=0)
+            for source_index, additional_path in enumerate(additional_paths):
+                additional_db = Path(additional_path)
+                if (not additional_db.is_file()
+                        or additional_db.resolve() == db.resolve()):
+                    continue
+                try:
+                    with closing(sqlite3.connect(
+                        additional_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=2,
+                    )) as additional:
+                        additional.row_factory = sqlite3.Row
+                        additional_tables = {row[0] for row in additional.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )}
+                        if "economic_events" in additional_tables:
+                            extra_rows = additional.execute(
+                                "SELECT * FROM economic_events WHERE provider IS NOT NULL"
+                                + month_clause + " ORDER BY id", params,
+                            ).fetchall()
+                            source_id_map: dict[int, int] = {}
+                            for index, row in enumerate(extra_rows):
+                                digest, _ = _economic_event_identity(row)
+                                source_id_map[int(row["id"])] = main_event_id_by_hash.get(
+                                    digest, main_max_id + 1 + source_index * 1_000_000_000 + index,
+                                )
+                            for index, row in enumerate(extra_rows):
+                                digest, _ = _economic_event_identity(row)
+                                if digest in event_hashes:
+                                    continue
+                                merged = dict(row)
+                                merged["id"] = source_id_map[int(row["id"])]
+                                related = merged.get("related_event_id")
+                                if related is not None and int(related) in source_id_map:
+                                    merged["related_event_id"] = source_id_map[int(related)]
+                                event_rows.append(merged)
+                                event_hashes.add(digest)
+                        if "economic_provider_coverage" in additional_tables:
+                            for index, row in enumerate(additional.execute(
+                                "SELECT * FROM economic_provider_coverage "
+                                "WHERE (? IS NULL OR month_utc=?) ORDER BY id",
+                                (month_utc, month_utc),
+                            ).fetchall()):
+                                identity = {key: value for key, value in dict(row).items() if key != "id"}
+                                digest = hashlib.sha256(json.dumps(
+                                    identity, sort_keys=True, default=str,
+                                ).encode()).hexdigest()
+                                if digest in coverage_hashes:
+                                    continue
+                                merged = dict(row)
+                                merged["id"] = main_max_id + 1 + source_index * 1_000_000_000 + index
+                                coverage_rows.append(merged)
+                                coverage_hashes.add(digest)
+                except sqlite3.Error:
+                    continue
+            projection = _project_events(event_rows, coverage_rows)
             projection["operating_reserve_usd"] = None
             projection["reserve_status"] = "UNKNOWN"
             projection["reserve_blockers"] = ["No complete, fresh treasury reserve attestation exists."]
@@ -894,6 +1006,24 @@ def _empty_event_projection(reason: str) -> dict[str, Any]:
         "model_cost_vs_measured_benefit": [], "unknowns": [reason],
         "counterfactual_comparisons": [],
     }
+
+
+def _economic_event_identity(row: Any) -> tuple[str, dict[str, Any]]:
+    """Build a polling-stable event key, preferring the provider's durable ID."""
+    values = dict(row)
+    if values.get("provider") and values.get("external_reference_id"):
+        identity = {
+            "provider": values["provider"],
+            "external_reference_id": values["external_reference_id"],
+            "event_type": values.get("event_type"),
+        }
+    else:
+        identity = {
+            key: value for key, value in values.items()
+            if key not in {"id", "created_at"}
+        }
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
+    return digest, identity
 
 
 def _project_events(rows: list[sqlite3.Row], coverage_rows: list[sqlite3.Row] | None = None) -> dict[str, Any]:

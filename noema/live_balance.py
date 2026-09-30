@@ -112,9 +112,10 @@ def balance_history(db_path: str, venues: dict, wallets: dict, *, window: str = 
     current = project_balance(venues, wallets, now, stripe)
     result = {"current": current, "window": window, "points": [], "sample_count": 0,
               "change_24h_usd": None, "history_status": "unavailable"}
-    if not Path(db_path).is_file():
+    if not Path(db_path).is_file() and current["status"] != "CACHED":
         return result
     try:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(db_path, timeout=1) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS live_balance_observations ("
                          "fingerprint TEXT PRIMARY KEY, observed_at TEXT NOT NULL, "
