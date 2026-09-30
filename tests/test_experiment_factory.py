@@ -81,6 +81,21 @@ def test_unsupported_challengers_are_deferred_then_admitted_when_worker_exists(
     )
 
     db_path = str(tmp_path / "trials.db")
+    generated = propose_challengers(profile, evidence, None)
+    legacy_calibration = next(
+        proposal for proposal in generated
+        if proposal.family == "prediction_markets_calibration"
+    )
+    trial_store = ResearchTrialStore(db_path)
+    legacy_id = trial_store.register(
+        family=legacy_calibration.family,
+        hypothesis=legacy_calibration.hypothesis,
+        params=legacy_calibration.params,
+        feature_set_version=legacy_calibration.feature_set_version,
+        status="registered",
+    )
+    trial_store.conn.close()
+
     proposals = register_challengers(
         db_path, profile=profile, evidence=evidence, decision=None,
     )
@@ -94,12 +109,27 @@ def test_unsupported_challengers_are_deferred_then_admitted_when_worker_exists(
     )
     deferred_trial = trial_store.get(deferred.trial_id)
     assert deferred_trial is not None
+    assert deferred_trial.trial_id == legacy_id
     assert deferred_trial.status == "deferred"
     assert deferred_trial.hypothesis == deferred.proposal.hypothesis
     assert deferred_trial.params_json
 
     assert admit_deferred_challengers(db_path) == ()
     assert trial_store.get(deferred_trial.trial_id).status == "deferred"
+
+    cost_trial = next(
+        item for item in proposals
+        if item.proposal.family == "prediction_markets_execution"
+    )
+    trial_store.set_status(cost_trial.trial_id, "rejected")
+    repeated = register_challengers(
+        db_path, profile=profile, evidence=evidence, decision=None,
+    )
+    reported_cost_trial = next(
+        item for item in repeated if item.trial_id == cost_trial.trial_id
+    )
+    assert reported_cost_trial.status == "rejected"
+    assert trial_store.get(cost_trial.trial_id).status == "rejected"
 
     def add_calibration_worker(family, feature_set_version, params):
         if (

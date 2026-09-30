@@ -131,6 +131,17 @@ class ResearchTrialStore:
             raise KeyError(trial_id)
         self.conn.commit()
 
+    def reconcile_admission_status(self, trial_id: str, status: str) -> None:
+        """Reconcile runnable/deferred state without reopening terminal trials."""
+        if status not in {"registered", "deferred"}:
+            raise ValueError("admission status must be registered or deferred")
+        self.conn.execute(
+            "UPDATE research_trials SET status=?,status_updated_at=? "
+            "WHERE trial_id=? AND status IN ('registered','deferred') AND status<>?",
+            (status, datetime.now(UTC).isoformat(), trial_id, status),
+        )
+        self.conn.commit()
+
     def count_family(self, family: str) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) FROM research_trials WHERE family = ?",
