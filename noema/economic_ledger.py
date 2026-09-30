@@ -24,6 +24,24 @@ CONFIDENCE_STATES = frozenset({
     "provider_confirmed", "operator_reported", "estimated", "derived", "unknown",
 })
 COMPLETENESS_STATES = frozenset({"complete", "incomplete", "unknown"})
+COUNTERFACTUAL_TYPES = frozenset({
+    "actual_action", "do_nothing", "baseline_strategy", "alternative_allocation",
+})
+COUNTERFACTUAL_BASES = frozenset({"hypothesis", "simulation", "paper", "realized"})
+PROVIDER_COVERAGE_STATES = frozenset({
+    "EXPECTED", "COMPLETE", "PARTIAL", "UNAVAILABLE", "NOT_APPLICABLE", "FAILED",
+    "DISPUTED", "INCOMPLETE",  # accepted as a legacy input and normalized to PARTIAL
+})
+DEFAULT_PROVIDER_PERIOD_MANIFEST = {
+    "stripe": ("captured_payments", "refunds", "disputes", "fees", "payouts"),
+    "openai": ("usage", "provider_costs"),
+    "cloudflare": ("workers_ai_usage", "provider_costs"),
+    "render": ("hosting_invoice_or_authoritative_billing",),
+    "wallets": ("confirmed_activity", "fees", "balances", "event_time_valuation"),
+    "kalshi": ("fills", "fees", "settlements", "refunds_voids"),
+    "polymarket_us": ("fills", "fees", "settlements", "refunds_voids"),
+    "operator_expenses": ("receipts", "expenses"),
+}
 
 
 @dataclass(frozen=True)
@@ -72,6 +90,55 @@ class EconomicEvent:
             raise ValueError("unsupported economic completeness state")
         if self.external_reference_id is not None and not self.external_reference_id.strip():
             raise ValueError("external reference ID cannot be empty")
+        # Atomic wallet units remain native-only unless an auditable event-time quote exists.
+        if (self.provider.startswith("wallet:") and self.amount_usd is not None
+                and self.currency.upper() != "USD"):
+            required = {"decimals", "price_source", "price_timestamp", "valuation_basis", "price_usd"}
+            if not required <= set(self.evidence):
+                raise ValueError("wallet USD valuation requires decimals, event-time price provenance, and basis")
+            if self.evidence.get("valuation_basis") != "event_time":
+                raise ValueError("wallet USD valuation must use event-time basis")
+            try:
+                price_time = datetime.fromisoformat(str(self.evidence["price_timestamp"]))
+                price = Decimal(str(self.evidence["price_usd"]))
+                decimals = int(self.evidence["decimals"])
+                converted = abs(self.amount) / (Decimal(10) ** decimals) * price
+            except (ValueError, TypeError, ArithmeticError):
+                raise ValueError("wallet valuation evidence is malformed") from None
+            if (price_time.tzinfo is None or price_time.astimezone(UTC) > self.occurred_at.astimezone(UTC)
+                    or not price.is_finite() or price < 0 or decimals < 0):
+                raise ValueError("wallet valuation must use a valid quote no later than the event")
+            if converted != abs(self.amount_usd):
+                raise ValueError("wallet USD valuation does not match native amount and price evidence")
+
+
+@dataclass(frozen=True)
+class EconomicCounterfactual:
+    """A mission comparison, kept outside cash/P&L and execution authority."""
+
+    scenario_id: str
+    mission_id: str
+    scenario_type: str
+    outcome_basis: str
+    recorded_at: datetime
+    currency: str = "USD"
+    amount: Decimal | None = None
+    amount_usd: Decimal | None = None
+    activity_id: str | None = None
+    strategy_id: str | None = None
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    def validate(self) -> None:
+        if not self.scenario_id.strip() or not self.mission_id.strip():
+            raise ValueError("counterfactual scenario and mission IDs are required")
+        if self.scenario_type not in COUNTERFACTUAL_TYPES:
+            raise ValueError("unsupported counterfactual scenario type")
+        if self.outcome_basis not in COUNTERFACTUAL_BASES:
+            raise ValueError("unsupported counterfactual outcome basis")
+        if self.recorded_at.tzinfo is None or not self.currency.strip() or len(self.currency) > 32:
+            raise ValueError("counterfactual timestamp and currency are required")
+        if any(value is not None and not value.is_finite() for value in (self.amount, self.amount_usd)):
+            raise ValueError("counterfactual amounts must be finite")
 
 
 class EconomicLedger:
@@ -101,6 +168,24 @@ class EconomicLedger:
             """
         )
         ensure_economic_event_schema(self.conn)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS economic_counterfactuals ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, recorded_at TEXT NOT NULL, scenario_id TEXT NOT NULL, "
+            "mission_id TEXT NOT NULL, activity_id TEXT, strategy_id TEXT, scenario_type TEXT NOT NULL, "
+            "outcome_basis TEXT NOT NULL, currency TEXT NOT NULL, amount TEXT, amount_usd TEXT, "
+            "evidence_json TEXT NOT NULL)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS economic_counterfactual_mission "
+            "ON economic_counterfactuals(mission_id,recorded_at)"
+        )
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS economic_reserve_attestations ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, month_utc TEXT NOT NULL, observed_at TEXT NOT NULL, "
+            "designated_accounts_json TEXT NOT NULL, balances_json TEXT NOT NULL, liabilities_usd TEXT, "
+            "reservations_usd TEXT, reserve_usd TEXT, state TEXT NOT NULL, blockers_json TEXT NOT NULL, "
+            "provenance_json TEXT NOT NULL)"
+        )
         self.conn.commit()
 
     def record_event(self, event: EconomicEvent) -> dict[str, Any]:
@@ -115,10 +200,53 @@ class EconomicLedger:
             self.conn.rollback()
             raise
 
+    def record_authoritative_billing_expense(
+        self, *, provider: str, external_reference_id: str, month_utc: str,
+        amount_usd: Decimal, occurred_at: datetime, service_scope: str,
+        source: str, document_reference: str, attribution_basis: str,
+        confidence_state: str = "provider_confirmed",
+        mission_id: str | None = None, activity_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an invoice/statement-backed expense without converting estimates.
+
+        `amount_usd` must already be attributed to the NOEMA service. Shared
+        workspace charges must be allocated from explicit source evidence before
+        they can be recorded here. The document itself stays in its secure source;
+        only its reference and provenance are retained in the ledger.
+        """
+        if (len(month_utc) != 7 or month_utc[4] != "-" or not month_utc[:4].isdigit()
+                or not month_utc[5:].isdigit() or not 1 <= int(month_utc[5:]) <= 12):
+            raise ValueError("billing period must be YYYY-MM")
+        if (not external_reference_id.strip() or not provider.strip()
+                or not source.strip() or not document_reference.strip()
+                or not attribution_basis.strip()):
+            raise ValueError("billing expense requires provider, invoice reference, source, and attribution")
+        if service_scope != "noema_service":
+            raise ValueError("only an explicitly attributed NOEMA service expense may be recorded")
+        if not amount_usd.is_finite() or amount_usd < 0:
+            raise ValueError("authoritative invoice amount must be finite and non-negative")
+        if occurred_at.tzinfo is None or occurred_at.astimezone(UTC).strftime("%Y-%m") != month_utc:
+            raise ValueError("expense event time must fall inside its billing period")
+        if confidence_state not in {"provider_confirmed", "operator_reported"}:
+            raise ValueError("invoice evidence confidence must be provider- or operator-reported")
+        return self.record_event(EconomicEvent(
+            provider=provider, external_reference_id=external_reference_id,
+            event_type="authoritative_billing_expense", occurred_at=occurred_at,
+            currency="USD", amount=amount_usd, amount_usd=amount_usd,
+            reconciliation_state="RECONCILED", value_state="realized",
+            capital_class="cost", confidence_state=confidence_state,
+            completeness_state="complete", mission_id=mission_id,
+            activity_id=activity_id, lane="infrastructure",
+            evidence={"month_utc": month_utc, "service_scope": service_scope,
+                      "source": source, "document_reference": document_reference,
+                      "attribution_basis": attribution_basis,
+                      "shared_workspace_cost_included": False},
+        ))
+
     def append_reconciliation(
         self, event_id: int, *, state: str, evidence: dict[str, Any],
         adjustment_amount: Decimal | None = None, amount_usd: Decimal | None = None,
-        occurred_at: datetime | None = None,
+        occurred_at: datetime | None = None, confidence_state: str = "derived",
     ) -> int:
         """Append a correction/reconciliation record without rewriting its source event."""
         if state not in RECONCILIATION_STATES:
@@ -139,7 +267,7 @@ class EconomicLedger:
             occurred_at=at, currency=str(source[1]), amount=amount,
             amount_usd=amount_usd, reconciliation_state=state,
             value_state="realized", capital_class=str(source[6]),
-            confidence_state="derived", completeness_state="complete",
+            confidence_state=confidence_state, completeness_state="complete",
             mission_id=source[2], strategy_id=source[3], activity_id=source[4],
             lane=source[5], related_event_id=event_id, evidence=evidence,
         )
@@ -153,9 +281,52 @@ class EconomicLedger:
             self.conn.rollback()
             raise
 
+    def reconcile_event_to_amount(
+        self, event_id: int, *, authoritative_amount: Decimal,
+        authoritative_amount_usd: Decimal | None, evidence: dict[str, Any],
+        occurred_at: datetime, confidence_state: str = "provider_confirmed",
+    ) -> list[int]:
+        """Reconcile an estimate against a bill/statement by appending the delta and state evidence."""
+        if not evidence or occurred_at.tzinfo is None or not authoritative_amount.is_finite():
+            raise ValueError("authoritative reconciliation needs finite amount, time, and provenance")
+        source = self.conn.execute(
+            "SELECT amount,amount_usd,currency,capital_class FROM economic_events "
+            "WHERE id=? AND provider IS NOT NULL", (event_id,),
+        ).fetchone()
+        if source is None:
+            raise ValueError("canonical economic event not found")
+        if source[3] not in {"cost", "revenue", "trading_pnl", "owner_capital"}:
+            raise ValueError("only classified financial events can be reconciled to an amount")
+        prior_amount = Decimal(str(source[0]))
+        prior_usd = Decimal(str(source[1])) if source[1] is not None else None
+        if prior_usd is not None and authoritative_amount_usd is None:
+            raise ValueError("reconciliation cannot confirm an estimated USD amount without authoritative USD evidence")
+        delta = authoritative_amount - prior_amount
+        delta_usd = (authoritative_amount_usd - prior_usd
+                     if authoritative_amount_usd is not None and prior_usd is not None
+                     else authoritative_amount_usd)
+        ids: list[int] = []
+        if delta != 0 or delta_usd not in (None, Decimal(0)):
+            ids.append(self.append_reconciliation(
+                event_id, state="RECONCILED", evidence={**evidence, "correction": "authoritative amount delta"},
+                adjustment_amount=delta, amount_usd=delta_usd, occurred_at=occurred_at,
+                confidence_state=confidence_state,
+            ))
+        ids.append(self.append_reconciliation(
+            event_id, state="RECONCILED", evidence=evidence, occurred_at=occurred_at,
+            confidence_state=confidence_state,
+        ))
+        return ids
+
     def attest_provider_coverage(
         self, *, provider: str, month_utc: str, state: str, expected: bool = True,
         evidence: dict[str, Any] | None = None,
+        expected_evidence_classes: tuple[str, ...] | list[str] = (),
+        actual_evidence_classes: tuple[str, ...] | list[str] = (),
+        observed_at: datetime | None = None,
+        provenance: dict[str, Any] | None = None,
+        unresolved_blockers: tuple[str, ...] | list[str] = (),
+        applicable_activity_detected: bool | None = None,
     ) -> int:
         """Append an explicit provider-period completeness declaration."""
         self.conn.execute("BEGIN IMMEDIATE")
@@ -163,12 +334,182 @@ class EconomicLedger:
             event_id = record_provider_coverage_on_connection(
                 self.conn, provider=provider, month_utc=month_utc, state=state,
                 expected=expected, evidence=evidence,
+                expected_evidence_classes=expected_evidence_classes,
+                actual_evidence_classes=actual_evidence_classes,
+                observed_at=observed_at, provenance=provenance,
+                unresolved_blockers=unresolved_blockers,
+                applicable_activity_detected=applicable_activity_detected,
             )
             self.conn.commit()
             return event_id
         except Exception:
             self.conn.rollback()
             raise
+
+    def declare_period_manifest(
+        self, *, month_utc: str, providers: dict[str, tuple[str, ...] | list[str]],
+        provenance: dict[str, Any],
+    ) -> list[int]:
+        """Append the expected source/evidence classes for a period; no source is inferred complete."""
+        if not providers or not provenance:
+            raise ValueError("period manifest requires providers and provenance")
+        ids = []
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            for provider, classes in sorted(providers.items()):
+                existing = self.conn.execute(
+                    "SELECT expected_classes_json FROM economic_provider_coverage "
+                    "WHERE provider=? AND month_utc=? AND expected=1 ORDER BY id DESC LIMIT 1",
+                    (provider, month_utc),
+                ).fetchone()
+                if existing is not None:
+                    try:
+                        if sorted(json.loads(existing[0])) == sorted(classes):
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                ids.append(record_provider_coverage_on_connection(
+                    self.conn, provider=provider, month_utc=month_utc, state="EXPECTED",
+                    expected=True, expected_evidence_classes=classes,
+                    provenance=provenance, evidence={"kind": "expected-provider-manifest"},
+                    unresolved_blockers=["provider has not attested this period"],
+                ))
+            self.conn.commit()
+            return ids
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def ensure_current_period_manifest(self, *, provenance: dict[str, Any]) -> list[int]:
+        """Idempotently declare core economic evidence sources for the current UTC month."""
+        month_utc = datetime.now(UTC).strftime("%Y-%m")
+        return self.declare_period_manifest(
+            month_utc=month_utc, providers=DEFAULT_PROVIDER_PERIOD_MANIFEST,
+            provenance={**provenance, "declared_at": datetime.now(UTC).isoformat()},
+        )
+
+    def append_counterfactual(self, scenario: EconomicCounterfactual) -> int:
+        """Append a comparison input; it never creates a financial event or permission."""
+        scenario.validate()
+        prior = self.conn.execute(
+            "SELECT recorded_at,outcome_basis FROM economic_counterfactuals "
+            "WHERE scenario_id=? ORDER BY id LIMIT 1", (scenario.scenario_id,),
+        ).fetchone()
+        if scenario.outcome_basis == "hypothesis":
+            if scenario.amount is not None or scenario.amount_usd is not None:
+                raise ValueError("predeclared counterfactual hypotheses cannot contain an outcome")
+        elif prior is None or prior["outcome_basis"] != "hypothesis":
+            raise ValueError("counterfactual outcome requires a predeclared hypothesis")
+        elif scenario.recorded_at.astimezone(UTC) < datetime.fromisoformat(prior["recorded_at"]):
+            raise ValueError("counterfactual result cannot predate its hypothesis")
+        cursor = self.conn.execute(
+            "INSERT INTO economic_counterfactuals "
+            "(recorded_at,scenario_id,mission_id,activity_id,strategy_id,scenario_type,"
+            "outcome_basis,currency,amount,amount_usd,evidence_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (scenario.recorded_at.astimezone(UTC).isoformat(), scenario.scenario_id,
+             scenario.mission_id, scenario.activity_id, scenario.strategy_id,
+             scenario.scenario_type, scenario.outcome_basis, scenario.currency.upper(),
+             None if scenario.amount is None else str(scenario.amount),
+             None if scenario.amount_usd is None else str(scenario.amount_usd),
+             json.dumps(scenario.evidence, sort_keys=True, default=str)),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def predeclare_mission_counterfactuals(
+        self, *, mission_id: str, declared_at: datetime, activity_id: str | None = None,
+        strategy_id: str | None = None, evidence: dict[str, Any],
+    ) -> list[int]:
+        """Lock mission alternatives before result evidence exists; later outcomes append to these IDs."""
+        if declared_at.tzinfo is None or not evidence:
+            raise ValueError("counterfactual predeclaration requires aware time and provenance")
+        ids = []
+        for scenario_type in ("actual_action", "do_nothing", "baseline_strategy", "alternative_allocation"):
+            ids.append(self.append_counterfactual(EconomicCounterfactual(
+                scenario_id=f"{mission_id}:{scenario_type}", mission_id=mission_id,
+                activity_id=activity_id, strategy_id=strategy_id, scenario_type=scenario_type,
+                outcome_basis="hypothesis", recorded_at=declared_at,
+                evidence={**evidence, "predeclared": True, "result_observed": False},
+            )))
+        return ids
+
+    def attest_operating_reserve(
+        self, *, month_utc: str, observed_at: datetime, designated_accounts: list[str],
+        balances: list[dict[str, Any]], liabilities_usd: Decimal | None,
+        reservations_usd: Decimal | None, liabilities_complete: bool,
+        reservations_complete: bool, provenance: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append a reserve snapshot only when all designated accounts are owned, fresh and valued."""
+        if observed_at.tzinfo is None or not designated_accounts or not provenance:
+            raise ValueError("reserve requires an observation time, designated accounts, and provenance")
+        ids = sorted(set(designated_accounts))
+        blockers: list[str] = []
+        by_id = {str(row.get("account_id")): row for row in balances}
+        if len(by_id) != len(balances) or sorted(by_id) != ids:
+            blockers.append("designated account balance set is incomplete or duplicated")
+        total = Decimal(0)
+        for account_id in ids:
+            row = by_id.get(account_id, {})
+            if row.get("owned") is not True:
+                blockers.append(f"ownership unverified: {account_id}")
+            try:
+                amount = Decimal(str(row["amount_usd"]))
+                at = datetime.fromisoformat(str(row["observed_at"]))
+                if not amount.is_finite() or amount < 0 or at.tzinfo is None:
+                    raise ValueError
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                blockers.append(f"balance valuation unavailable: {account_id}")
+                continue
+            balance_age = (observed_at.astimezone(UTC) - at.astimezone(UTC)).total_seconds()
+            if balance_age < 0 or balance_age > 600:
+                blockers.append(f"stale balance: {account_id}")
+            if str(row.get("currency", "")).upper() != "USD" and not {
+                "decimals", "price_source", "price_timestamp", "valuation_basis", "price_usd",
+            } <= set(row):
+                blockers.append(f"valuation provenance incomplete: {account_id}")
+            elif str(row.get("currency", "")).upper() != "USD":
+                try:
+                    price_at = datetime.fromisoformat(str(row["price_timestamp"]))
+                    price = Decimal(str(row["price_usd"]))
+                    native = Decimal(str(row["amount_native"]))
+                    decimals = int(row["decimals"])
+                    valuation = native / (Decimal(10) ** decimals) * price
+                    quote_age = (observed_at.astimezone(UTC) - price_at.astimezone(UTC)).total_seconds()
+                    if (price_at.tzinfo is None or row["valuation_basis"] != "event_time"
+                            or quote_age < 0 or quote_age > 600 or not price.is_finite()
+                            or price < 0 or decimals < 0 or valuation != amount):
+                        raise ValueError
+                except (KeyError, TypeError, ValueError, ArithmeticError):
+                    blockers.append(f"event-time valuation invalid: {account_id}")
+            total += amount
+        for name, amount, complete in (
+            ("liabilities", liabilities_usd, liabilities_complete),
+            ("reservations", reservations_usd, reservations_complete),
+        ):
+            if not complete or amount is None or not amount.is_finite() or amount < 0:
+                blockers.append(f"{name} are incomplete")
+        reserve = None
+        if not blockers:
+            assert liabilities_usd is not None and reservations_usd is not None
+            reserve = total - liabilities_usd - reservations_usd
+            if reserve < 0:
+                blockers.append("liabilities and reservations exceed designated balances")
+                reserve = None
+        self.conn.execute(
+            "INSERT INTO economic_reserve_attestations "
+            "(month_utc,observed_at,designated_accounts_json,balances_json,liabilities_usd,"
+            "reservations_usd,reserve_usd,state,blockers_json,provenance_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (month_utc, observed_at.astimezone(UTC).isoformat(), json.dumps(ids),
+             json.dumps(balances, sort_keys=True, default=str),
+             None if liabilities_usd is None else str(liabilities_usd),
+             None if reservations_usd is None else str(reservations_usd),
+             None if reserve is None else str(reserve), "RECONCILED" if reserve is not None else "INCOMPLETE",
+             json.dumps(blockers), json.dumps(provenance, sort_keys=True, default=str)),
+        )
+        self.conn.commit()
+        return {"state": "RECONCILED" if reserve is not None else "INCOMPLETE",
+                "operating_reserve_usd": None if reserve is None else str(reserve),
+                "unresolved_blockers": blockers}
 
     @staticmethod
     def read_projection(path: str = "data/noema.db", *, month_utc: str | None = None) -> dict[str, Any]:
@@ -200,11 +541,57 @@ class EconomicLedger:
                 + " ORDER BY id", params,
             ).fetchall()
             coverage = conn.execute(
-                "SELECT provider,month_utc,state,expected FROM economic_provider_coverage "
+                "SELECT * FROM economic_provider_coverage "
                 "WHERE (? IS NULL OR month_utc=?) ORDER BY id",
                 (month_utc, month_utc),
             ).fetchall() if "economic_provider_coverage" in tables else []
-            return _project_events(rows, coverage)
+            projection = _project_events(rows, coverage)
+            projection["operating_reserve_usd"] = None
+            projection["reserve_status"] = "UNKNOWN"
+            projection["reserve_blockers"] = ["No complete, fresh treasury reserve attestation exists."]
+            if "economic_reserve_attestations" in tables:
+                reserve_sql = "SELECT * FROM economic_reserve_attestations"
+                reserve_params: tuple[Any, ...] = ()
+                if month_utc:
+                    reserve_sql += " WHERE month_utc=?"
+                    reserve_params = (month_utc,)
+                reserve_row = conn.execute(reserve_sql + " ORDER BY id DESC LIMIT 1", reserve_params).fetchone()
+                if reserve_row is not None:
+                    blockers = json.loads(reserve_row["blockers_json"] or "[]")
+                    observed = datetime.fromisoformat(reserve_row["observed_at"])
+                    fresh = (datetime.now(UTC) - observed.astimezone(UTC)).total_seconds() <= 600
+                    if reserve_row["state"] == "RECONCILED" and fresh and not blockers:
+                        projection["operating_reserve_usd"] = reserve_row["reserve_usd"]
+                        projection["reserve_status"] = "RECONCILED"
+                        projection["reserve_blockers"] = []
+                    else:
+                        projection["reserve_status"] = "INCOMPLETE"
+                        projection["reserve_blockers"] = blockers or ["Treasury reserve snapshot is stale."]
+                    projection["reserve_observed_at"] = reserve_row["observed_at"]
+            if "economic_counterfactuals" in tables:
+                cf_params: tuple[Any, ...] = ()
+                cf_clause = ""
+                if month_utc:
+                    cf_clause = "WHERE substr(recorded_at,1,7)=?"
+                    cf_params = (month_utc,)
+                projection["counterfactual_comparisons"] = [
+                    {
+                        "scenario_id": row["scenario_id"], "mission_id": row["mission_id"],
+                        "activity_id": row["activity_id"], "strategy_id": row["strategy_id"],
+                        "scenario_type": row["scenario_type"], "outcome_basis": row["outcome_basis"],
+                        "currency": row["currency"], "amount": row["amount"],
+                        "amount_usd": row["amount_usd"], "recorded_at": row["recorded_at"],
+                    }
+                    for row in conn.execute(
+                        "SELECT * FROM economic_counterfactuals WHERE id IN ("
+                        "SELECT MAX(id) FROM economic_counterfactuals GROUP BY scenario_id) "
+                        + ("AND " + cf_clause.removeprefix("WHERE ") if cf_clause else "")
+                        + " ORDER BY id DESC LIMIT 100", cf_params,
+                    ).fetchall()
+                ]
+            else:
+                projection["counterfactual_comparisons"] = []
+            return projection
         except sqlite3.Error:
             return _empty_event_projection("canonical ledger unavailable")
         finally:
@@ -303,8 +690,20 @@ def ensure_economic_event_schema(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS economic_provider_coverage ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, provider TEXT NOT NULL, "
         "month_utc TEXT NOT NULL, state TEXT NOT NULL, expected INTEGER NOT NULL, "
-        "evidence_json TEXT NOT NULL)"
+        "evidence_json TEXT NOT NULL, expected_classes_json TEXT NOT NULL DEFAULT '[]', "
+        "actual_classes_json TEXT NOT NULL DEFAULT '[]', observed_at TEXT, "
+        "provenance_json TEXT NOT NULL DEFAULT '{}', blockers_json TEXT NOT NULL DEFAULT '[]', "
+        "activity_detected INTEGER)"
     )
+    coverage_columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_provider_coverage)")}
+    for name, declaration in {
+        "expected_classes_json": "TEXT NOT NULL DEFAULT '[]'",
+        "actual_classes_json": "TEXT NOT NULL DEFAULT '[]'", "observed_at": "TEXT",
+        "provenance_json": "TEXT NOT NULL DEFAULT '{}'", "blockers_json": "TEXT NOT NULL DEFAULT '[]'",
+        "activity_detected": "INTEGER",
+    }.items():
+        if name not in coverage_columns:
+            conn.execute(f"ALTER TABLE economic_provider_coverage ADD COLUMN {name} {declaration}")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS economic_provider_coverage_period "
         "ON economic_provider_coverage(month_utc,provider,id)"
@@ -314,19 +713,56 @@ def ensure_economic_event_schema(conn: sqlite3.Connection) -> None:
 def record_provider_coverage_on_connection(
     conn: sqlite3.Connection, *, provider: str, month_utc: str, state: str,
     expected: bool = True, evidence: dict[str, Any] | None = None,
+    expected_evidence_classes: tuple[str, ...] | list[str] = (),
+    actual_evidence_classes: tuple[str, ...] | list[str] = (),
+    observed_at: datetime | None = None,
+    provenance: dict[str, Any] | None = None,
+    unresolved_blockers: tuple[str, ...] | list[str] = (),
+    applicable_activity_detected: bool | None = None,
 ) -> int:
     """Append a provider-period coverage declaration/attestation."""
     if (not provider.strip() or len(month_utc) != 7 or month_utc[4] != "-"
             or not month_utc[:4].isdigit() or not month_utc[5:].isdigit()
             or not 1 <= int(month_utc[5:]) <= 12):
         raise ValueError("provider and YYYY-MM coverage period are required")
-    if state not in {"EXPECTED", "COMPLETE", "INCOMPLETE", "DISPUTED"}:
+    state = "PARTIAL" if state == "INCOMPLETE" else state
+    if state not in PROVIDER_COVERAGE_STATES:
         raise ValueError("unsupported provider coverage state")
+    previous = conn.execute(
+        "SELECT expected_classes_json FROM economic_provider_coverage "
+        "WHERE provider=? AND month_utc=? ORDER BY id DESC LIMIT 1", (provider, month_utc),
+    ).fetchone()
+    if previous is not None and not expected_evidence_classes:
+        try:
+            expected_evidence_classes = json.loads(previous[0])
+        except (ValueError, TypeError):
+            expected_evidence_classes = ()
+    expected_classes = tuple(sorted({str(value).strip() for value in expected_evidence_classes if str(value).strip()}))
+    actual_classes = tuple(sorted({str(value).strip() for value in actual_evidence_classes if str(value).strip()}))
+    if state == "COMPLETE" and not expected_classes:
+        raise ValueError("COMPLETE coverage requires an explicit expected evidence class set")
+    if state == "COMPLETE" and not (evidence or provenance):
+        raise ValueError("COMPLETE coverage requires provenance")
+    if state == "COMPLETE" and not set(expected_classes) <= set(actual_classes):
+        raise ValueError("COMPLETE coverage must include every expected evidence class")
+    if state == "NOT_APPLICABLE" and not (evidence or provenance):
+        raise ValueError("NOT_APPLICABLE coverage requires an auditable reason")
+    if observed_at is not None and observed_at.tzinfo is None:
+        raise ValueError("provider observation timestamp must be timezone-aware")
+    if applicable_activity_detected not in (True, False, None):
+        raise ValueError("activity-detected evidence must be true, false, or unknown")
+    observed = observed_at.astimezone(UTC).isoformat() if observed_at else datetime.now(UTC).isoformat()
     cursor = conn.execute(
         "INSERT INTO economic_provider_coverage "
-        "(created_at,provider,month_utc,state,expected,evidence_json) VALUES (?,?,?,?,?,?)",
+        "(created_at,provider,month_utc,state,expected,evidence_json,expected_classes_json,"
+        "actual_classes_json,observed_at,provenance_json,blockers_json,activity_detected) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (datetime.now(UTC).isoformat(), provider, month_utc, state, int(expected),
-         json.dumps(evidence or {}, sort_keys=True, default=str)),
+         json.dumps(evidence or {}, sort_keys=True, default=str),
+         json.dumps(expected_classes), json.dumps(actual_classes), observed,
+         json.dumps(provenance or {}, sort_keys=True, default=str),
+         json.dumps(sorted({str(value) for value in unresolved_blockers})),
+         None if applicable_activity_detected is None else int(applicable_activity_detected)),
     )
     return int(cursor.lastrowid)
 
@@ -456,6 +892,7 @@ def _empty_event_projection(reason: str) -> dict[str, Any]:
         "contribution_by_strategy": [], "contribution_by_lane": [],
         "contribution_by_provider": [], "top_cost_drivers": [],
         "model_cost_vs_measured_benefit": [], "unknowns": [reason],
+        "counterfactual_comparisons": [],
     }
 
 
@@ -566,8 +1003,103 @@ def _project_events(rows: list[sqlite3.Row], coverage_rows: list[sqlite3.Row] | 
     for coverage in coverage_rows or []:
         latest_coverage[(str(coverage["provider"]), str(coverage["month_utc"]))] = coverage
     expected_coverage = [item for item in latest_coverage.values() if item["expected"]]
-    coverage_complete = bool(expected_coverage) and all(
-        item["state"] == "COMPLETE" for item in expected_coverage
+    canonical_counts: dict[tuple[str, str], int] = {}
+    reconciled_by_provider: dict[tuple[str, str], Decimal] = {}
+    estimated_by_provider: dict[tuple[str, str], Decimal] = {}
+    for row in rows:
+        provider = str(row["provider"] or "unknown")
+        month = str(row["occurred_at"] or "")[:7]
+        key = (provider, month)
+        event_type = str(row["event_type"])
+        if not event_type.startswith("reconciliation_"):
+            canonical_counts[key] = canonical_counts.get(key, 0) + 1
+        if event_type == "reconciliation_state_update" or (
+            row["related_event_id"] is not None and event_type != "reconciliation_adjustment"
+        ):
+            continue
+        if row["capital_class"] not in {"revenue", "trading_pnl", "cost", "owner_capital", "unclassified_cash"}:
+            continue
+        usd = Decimal(str(row["amount_usd"])) if row["amount_usd"] is not None else None
+        row_id = int(row["id"])
+        state = row["reconciliation_state"] if event_type == "reconciliation_adjustment" else states.get(row_id, row["reconciliation_state"])
+        confidence = confidence_overrides.get(row_id, row["confidence_state"])
+        completeness = completeness_overrides.get(row_id, row["completeness_state"])
+        verified = (state == "RECONCILED" and completeness == "complete"
+                    and confidence in {"provider_confirmed", "derived"}
+                    and row["value_state"] == "realized" and usd is not None)
+        if verified and row["capital_class"] in {"revenue", "trading_pnl", "cost"}:
+            contribution = -usd if row["capital_class"] == "cost" else usd
+            reconciled_by_provider[key] = reconciled_by_provider.get(key, Decimal(0)) + contribution
+        elif (usd is not None and row["value_state"] not in {"paper", "reservation"}
+              and (row["reconciliation_state"] == "ESTIMATED"
+                   or row["confidence_state"] == "estimated")):
+            estimated_by_provider[key] = estimated_by_provider.get(key, Decimal(0)) + abs(usd)
+    provider_coverage: list[dict[str, Any]] = []
+    blocked_providers: list[str] = []
+    for item in sorted(expected_coverage, key=lambda row: (str(row["month_utc"]), str(row["provider"]))):
+        expected_classes = _json_list(item, "expected_classes_json")
+        actual_classes = _json_list(item, "actual_classes_json")
+        missing_classes = sorted(set(expected_classes) - set(actual_classes))
+        blockers = _json_list(item, "blockers_json")
+        state = "PARTIAL" if item["state"] == "INCOMPLETE" else str(item["state"])
+        if state == "COMPLETE" and missing_classes:
+            blockers = sorted(set(blockers + [f"missing evidence class: {value}" for value in missing_classes]))
+            state = "PARTIAL"
+        if state not in {"COMPLETE", "NOT_APPLICABLE"}:
+            blocked_providers.append(str(item["provider"]))
+        if state == "NOT_APPLICABLE" and not _json_object(item, "evidence_json") and not _json_object(item, "provenance_json"):
+            blockers = sorted(set(blockers + ["NOT_APPLICABLE lacks provenance"]))
+            blocked_providers.append(str(item["provider"]))
+        provider = str(item["provider"])
+        month = str(item["month_utc"])
+        provider_keys = ([key for key in canonical_counts
+                          if key[1] == month and (key[0] == provider
+                             or (provider == "wallets" and key[0].startswith("wallet:")))])
+        event_count = sum(canonical_counts[key] for key in provider_keys)
+        activity_value = _row_value(item, "activity_detected")
+        actual_activity_count = sum(
+            1 for row in rows
+            if str(row["occurred_at"] or "")[:7] == month
+            and (str(row["provider"] or "unknown") == provider
+                 or (provider == "wallets" and str(row["provider"] or "").startswith("wallet:")))
+            and not str(row["event_type"]).startswith("reconciliation_")
+            and row["reconciliation_state"] != "ESTIMATED"
+            and row["value_state"] != "reservation"
+        )
+        if activity_value is not None:
+            activity_detected = bool(activity_value)
+        else:
+            activity_detected = True if actual_activity_count else None
+        if state == "NOT_APPLICABLE" and activity_detected is None:
+            activity_detected = False
+        reconciled_amount = sum((amount for (key_provider, key_month), amount in reconciled_by_provider.items()
+                                 if key_month == month and (key_provider == provider
+                                     or (provider == "wallets" and key_provider.startswith("wallet:")))),
+                                Decimal(0)) if any(key_month == month and (key_provider == provider
+                                    or (provider == "wallets" and key_provider.startswith("wallet:")))
+                                    for key_provider, key_month in reconciled_by_provider) else None
+        if reconciled_amount is None and state in {"COMPLETE", "NOT_APPLICABLE"} and event_count == 0:
+            reconciled_amount = Decimal(0)
+        estimated_amount = sum((amount for (key_provider, key_month), amount in estimated_by_provider.items()
+                                if key_month == month and (key_provider == provider
+                                    or (provider == "wallets" and key_provider.startswith("wallet:")))),
+                               Decimal(0)) if any(key_month == month and (key_provider == provider
+                                   or (provider == "wallets" and key_provider.startswith("wallet:")))
+                                   for key_provider, key_month in estimated_by_provider) else None
+        provider_coverage.append({
+            "provider": provider, "month_utc": month,
+            "state": state, "expected": True, "expected_evidence_classes": expected_classes,
+            "actual_evidence_classes": actual_classes, "observed_at": _row_value(item, "observed_at"),
+            "provenance": _json_object(item, "provenance_json"),
+            "latest_evidence": _json_object(item, "evidence_json"),
+            "applicable_activity_detected": activity_detected,
+            "canonical_event_count": event_count,
+            "reconciled_amount_usd": None if reconciled_amount is None else str(reconciled_amount),
+            "estimated_amount_usd": None if estimated_amount is None else str(estimated_amount),
+            "unresolved_blockers": blockers,
+        })
+    coverage_complete = bool(expected_coverage) and not blocked_providers and all(
+        item["state"] in {"COMPLETE", "NOT_APPLICABLE"} for item in provider_coverage
     )
     revenue_complete = coverage_complete and unresolved_count == 0 and "revenue" not in unresolved_capital
     costs_complete = coverage_complete and unresolved_count == 0 and "cost" not in unresolved_capital
@@ -590,6 +1122,8 @@ def _project_events(rows: list[sqlite3.Row], coverage_rows: list[sqlite3.Row] | 
         unknowns.append("Attributable operating costs are incomplete or unreconciled.")
     if not coverage_complete:
         unknowns.append("Provider-period coverage is missing or incomplete; net contribution and self-funding ratio remain unknown.")
+        if blocked_providers:
+            unknowns.append("Blocking providers: " + ", ".join(sorted(set(blocked_providers))) + ".")
     return {
         "status": "incomplete" if unknowns else "reconciled",
         "event_count": len(rows),
@@ -611,12 +1145,11 @@ def _project_events(rows: list[sqlite3.Row], coverage_rows: list[sqlite3.Row] | 
         "net_verified_contribution_usd": None if net is None else str(net),
         "self_funding_ratio": None if ratio is None else str(ratio),
         "coverage_complete": coverage_complete,
+        "period_closure": "CLOSED" if coverage_complete and financial_events_complete else "OPEN",
+        "coverage_status": "COMPLETE" if coverage_complete else ("PARTIAL" if expected_coverage else "UNKNOWN"),
+        "blocking_providers": sorted(set(blocked_providers)),
         "financial_events_complete": financial_events_complete,
-        "provider_coverage": [
-            {"provider": provider, "month_utc": month, "state": row["state"],
-             "expected": bool(row["expected"])}
-            for (provider, month), row in sorted(latest_coverage.items())
-        ],
+        "provider_coverage": provider_coverage,
         "cost_per_useful_experiment_usd": None,
         "contribution_by_mission": grouped("mission"),
         "contribution_by_strategy": grouped("strategy"),
@@ -636,3 +1169,26 @@ def _project_events(rows: list[sqlite3.Row], coverage_rows: list[sqlite3.Row] | 
         ],
         "unknowns": unknowns or ["Economic coverage is incomplete."],
     }
+
+
+def _json_list(row: sqlite3.Row, key: str) -> list[str]:
+    try:
+        value = json.loads(row[key])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return []
+    return sorted({str(item) for item in value}) if isinstance(value, list) else []
+
+
+def _row_value(row: sqlite3.Row, key: str) -> Any:
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
+
+
+def _json_object(row: sqlite3.Row, key: str) -> dict[str, Any]:
+    try:
+        value = json.loads(row[key])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return {}
+    return value if isinstance(value, dict) else {}

@@ -2,7 +2,7 @@
 // the same bounded /api/operations snapshot rendered by the workstation.
 const esc = (value) => String(value ?? 'Unknown');
 const palette = { core: '#d7f8ff', mission: '#58f0ce', agent: '#70baff', provider: '#61e3ef', wallet: '#ffca73', tool: '#b2c8ff', experiment: '#cf9dff', lesson: '#b48cff', session: '#91a6bb', evidence: '#ffad76', market: '#5ce4d0', forecast: '#d1a6ff' };
-const statePalette = { healthy: '#58f0ce', degraded: '#ffc367', offline: '#ff637c', disabled: '#ffae62', unknown: '#7588a4', observed: '#73baff' };
+const statePalette = { healthy: '#58f0ce', degraded: '#ffc367', offline: '#ff637c', disabled: '#ffae62', stale: '#ff9c73', unknown: '#7588a4', observed: '#73baff' };
 
 function stamp(value) {
   const n = Date.parse(value ?? '');
@@ -18,6 +18,7 @@ function forecastStamp(value) {
 function stateForStatus(status) {
   const value = String(status ?? 'unknown').toLowerCase();
   if (value.includes('offline') || value === 'stopped') return 'offline';
+  if (value.includes('stale') || value.includes('delayed')) return 'stale';
   if (value.includes('degraded') || value.includes('failed') || value.includes('invalid')
       || value.includes('quarantined') || value.includes('unavailable')) return 'degraded';
   if (value.includes('disabled')) return 'disabled';
@@ -72,8 +73,15 @@ function buildModel(snapshot, cutoff = Infinity, capabilities = {}) {
     const marketKey = `market:${marketId}`;
     const forecastKey = `forecast:${decision.id}`;
     const at = forecastStamp(decision.created_at);
+    const liveMarket = (capabilities.radar ?? []).find(row => row.market_id === decision.market_id
+      && String(row.venue).toLowerCase().replaceAll(' ', '_') === String(decision.venue).toLowerCase().replaceAll(' ', '_'));
+    const marketFresh = liveMarket?.freshness_seconds != null && Number(liveMarket.freshness_seconds) <= 300;
     put({ id: marketKey, type: 'market', label: `${decision.venue} · ${decision.market_id.slice(-12)}`,
-      status: 'forecast ledger reference', created: at, record: { venue: decision.venue, market_id: decision.market_id, created_at: decision.created_at } });
+      status: liveMarket ? `${liveMarket.freshness_seconds == null ? 'quote age unknown' : marketFresh ? 'market data observed' : 'market data stale'} · reference ${liveMarket.market_probability ?? 'unknown'}` : 'no current market quote linked',
+      created: at, record: { venue: decision.venue, market_id: decision.market_id, created_at: decision.created_at,
+        reference_probability: liveMarket?.market_probability ?? null, yes_bid: liveMarket?.yes_bid ?? null,
+        yes_ask: liveMarket?.yes_ask ?? null, freshness_seconds: liveMarket?.freshness_seconds ?? null,
+        quote_observed_at: liveMarket?.observed_at ?? null } });
     put({ id: forecastKey, type: 'forecast', label: `${decision.decision?.toUpperCase() ?? 'RECORDED'} · ${decision.market_id.slice(-12)}`,
       status: decision.decision ?? 'recorded', created: at, record: decision });
     edges.push({ from: marketKey, to: forecastKey, type: 'venue + market id', at });
@@ -168,6 +176,10 @@ function buildModel(snapshot, cutoff = Infinity, capabilities = {}) {
       if (venue.market_data?.order_book_readable === true) can.push('Read observed order-book levels');
       if (!can.length) can.push('Venue status only; no current data access confirmed');
       const metadata = [venue.environment, `market data ${marketStatus}`, `account ${accountStatus}`,
+        venue.account?.cash_balance_usd == null ? 'cash balance unavailable' : `cash $${venue.account.cash_balance_usd}`,
+        venue.account?.capital?.reported_exposure_usd == null ? 'position exposure unavailable' : `reported exposure $${venue.account.capital.reported_exposure_usd}`,
+        venue.account?.fills == null ? null : `${venue.account.fills} account fill records`,
+        venue.account?.open_orders == null ? null : `${venue.account.open_orders} open orders`,
         freshness === 'stale' ? 'stale venue snapshot' : null].filter(Boolean).join(' · ');
       put({ id, type: 'provider', label: `${venue.venue ?? 'Prediction venue'} venue`,
         status: freshness === 'stale' ? 'degraded · stale venue status'
@@ -177,7 +189,9 @@ function buildModel(snapshot, cutoff = Infinity, capabilities = {}) {
         limits: ['Live execution disabled', 'Read status does not establish executable liquidity or strategy edge'],
         metadata, source: 'Official prediction venue status projection',
         observedAt: capabilities.venues?.as_of ?? capabilities.freshness?.venuesAt ?? null,
-        record: { venue: venue.venue, market_status: marketStatus, account_status: accountStatus } });
+        record: { venue: venue.venue, market_status: marketStatus, account_status: accountStatus,
+          cash_balance_usd: venue.account?.cash_balance_usd, observed_at: venue.account?.observed_at,
+          exposure_usd: venue.account?.capital?.reported_exposure_usd } });
       if (caps.connected === true || caps.authenticated === true) {
         edges.push({ from: 'agent:NOEMA', to: id,
           type: caps.authenticated === true ? 'read-only venue connection' : 'public market-data connection', at: 0 });
@@ -188,9 +202,9 @@ function buildModel(snapshot, cutoff = Infinity, capabilities = {}) {
       const connected = network.connected;
       const execution = network.live_execution_enabled === true;
       const sourceFreshness = capabilities.freshness?.wallets ?? 'unknown';
-      const state = sourceFreshness === 'stale' ? 'degraded' : connected === false ? 'offline' : connected === true ? (execution ? 'healthy' : 'disabled') : 'unknown';
+      const state = sourceFreshness === 'stale' ? 'degraded' : connected === false ? 'offline' : connected === true ? 'healthy' : 'unknown';
       const status = sourceFreshness === 'stale' ? 'degraded · stale wallet observation'
-        : connected === false ? 'offline' : connected === true ? (execution ? 'read-only' : 'execution disabled') : 'unknown';
+        : connected === false ? 'offline' : connected === true ? 'connected · read-only account state' : 'unknown';
       const capabilitiesList = [connected === true ? 'Public chain state observed' : 'Public chain state not confirmed'];
       if (network.readable === true) capabilitiesList.push('Read-only balance and token observations');
       const limits = ['Signing is disabled in this status projection'];
@@ -200,13 +214,18 @@ function buildModel(snapshot, cutoff = Infinity, capabilities = {}) {
         status, stateKind: state, rawStatus: connected === true ? 'connected' : connected === false ? 'disconnected' : 'unknown',
         created: 0, capabilities: capabilitiesList, limits,
         metadata: [sourceFreshness === 'stale' ? 'stale wallet snapshot' : sourceFreshness === 'unavailable' ? 'wallet check unavailable' : null,
+          (network.sol ?? network.native_balance ?? network.btc) != null ? `Native balance ${network.sol ?? network.native_balance ?? network.btc} ${String(network.chain ?? '').toUpperCase()}` : 'Native balance unavailable',
+          network.native_value_usd != null ? `Native assets $${Number(network.native_value_usd).toFixed(2)}` : 'USD valuation unavailable',
           'balance projection uses a cache up to 60 seconds',
           network.chain_id ? `chain ${network.chain_id}` : null,
           network.signer_configured === true ? 'signer configured' : 'signer not configured',
+          execution ? 'live execution flag enabled; per-action policy still applies' : 'live execution disabled',
           network.halted === true ? 'halted' : null].filter(Boolean).join(' · ') || 'Network metadata unavailable',
         source: 'Live wallet status and deterministic policy projection',
         retrievedAt: capabilities.freshness?.walletsAt ?? null,
-        record: { chain: key, connected, execution_enabled: execution } });
+        record: { chain: network.chain, connected, execution_enabled: execution,
+          native_value_usd: network.native_value_usd, observed_at: network.observed_at,
+          native_balance: network.sol ?? network.native_balance ?? network.btc } });
       edges.push({ from: 'agent:NOEMA', to: `wallet:${key}`,
         type: 'wallet network status observed', at: 0 });
     }
@@ -337,7 +356,7 @@ function project(node, width, height, camera) {
     y: height / 2 - y * scale * perspective + camera.panY, scale: scale * perspective, depth };
 }
 
-export function createNoemaWorld() {
+export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
   const canvas = document.getElementById('world-map-canvas');
   if (!canvas) return { update() {} };
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -347,46 +366,337 @@ export function createNoemaWorld() {
     list: document.getElementById('world-entity-list'),
     camera: { zoom: 1, panX: 0, panY: 0, orbitX: -.12, orbitY: .16 },
   };
-  let source = null, nodes = [], edges = [], timeline = [], selectedId = 'agent:NOEMA', focusNodeId = 'agent:NOEMA', replayIndex = null, dpr = 1;
+  let source = null, nodes = [], edges = [], timeline = [], selectedId = 'agent:NOEMA', focusNodeId = 'agent:NOEMA', selectedEdge = null, replayIndex = null, dpr = 1;
+  let navigation = [['agent:NOEMA']], navigationIndex = 0, viewMode = 'all';
+  const hiddenTypes = new Set(), hiddenStatuses = new Set(), pinnedIds = new Set();
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  const setInspector = (node) => {
+  const announceSelection = (node) => onSelect({ ...node, selectedAt: new Date().toISOString() });
+  const typeNames = { core: 'Core', agent: 'Agent', mission: 'Mission', market: 'Market', forecast: 'Forecast', provider: 'Provider', wallet: 'Wallet', tool: 'Tool', evidence: 'Evidence', session: 'Session', experiment: 'Experiment', lesson: 'Lesson' };
+  const statusNames = ['active', 'degraded', 'observed', 'healthy', 'stale', 'unknown', 'disabled'];
+  const currentRoot = () => navigation[navigationIndex]?.at(-1) ?? 'agent:NOEMA';
+  const nodeById = (id) => nodes.find((node) => node.id === id);
+  const labelFor = (id) => nodeById(id)?.label ?? id;
+  const edgeId = (edge) => edge.id ?? `${edge.from}|${edge.to}|${edge.type}|${edge.at ?? 0}|${edge.missionId ?? ''}`;
+  const relativeTime = (value) => { const n = Date.parse(value ?? ''); if (!Number.isFinite(n)) return 'Time unavailable'; const seconds = Math.max(0, Math.floor((Date.now() - n) / 1000)); return seconds < 60 ? `${seconds}s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86400)}d ago`; };
+  function visibleByPreset(node) {
+    const status = String(node.status ?? '').toLowerCase();
+    const active = ['running', 'claimed', 'waiting', 'active', 'in_progress'].some((word) => status.includes(word));
+    switch (viewMode) {
+      case 'active': return active;
+      case 'agents': return node.type === 'core' || node.type === 'agent';
+      case 'money': return node.type === 'wallet' || node.id.startsWith('provider:venue:');
+      case 'markets': return ['market', 'forecast'].includes(node.type);
+      case 'research': return ['mission', 'evidence', 'session', 'experiment', 'lesson', 'tool'].includes(node.type);
+      case 'degraded': return node.stateKind === 'degraded' || node.stateKind === 'offline';
+      case 'mission': return node.type === 'mission' && active;
+      default: return true;
+    }
+  }
+  function statusForFilter(node, wanted) {
+    const status = String(node.status ?? '').toLowerCase();
+    if (wanted === 'active') return ['running', 'claimed', 'waiting', 'active', 'in_progress'].some((word) => status.includes(word));
+    if (wanted === 'degraded') return ['degraded', 'offline'].includes(node.stateKind);
+    if (wanted === 'stale') return status.includes('stale') || status.includes('delayed');
+    return node.stateKind === wanted;
+  }
+  function localIds() {
+    if (navigationIndex === 0) return null;
+    const root = currentRoot();
+    const connected = edges.filter((edge) => edge.from === root || edge.to === root);
+    return new Set([root, ...connected.map((edge) => edge.from === root ? edge.to : edge.from)]);
+  }
+  function visibleNodes() {
+    const allowed = localIds();
+    return nodes.filter((node) => (!allowed || allowed.has(node.id))
+      && !hiddenTypes.has(node.type) && visibleByPreset(node)
+      && !statusNames.every((status) => hiddenStatuses.has(status))
+      && (hiddenStatuses.size === 0 || statusNames.some((status) => !hiddenStatuses.has(status) && statusForFilter(node, status))));
+  }
+  function visibleEdges(visible = visibleNodes()) {
+    const ids = new Set(visible.map((node) => node.id));
+    return edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
+  }
+  function updateNavigationControls() {
+    const back = document.getElementById('world-nav-back'), forward = document.getElementById('world-nav-forward');
+    back.disabled = navigationIndex <= 0; forward.disabled = navigationIndex >= navigation.length - 1;
+    const crumbs = document.getElementById('world-breadcrumbs'); crumbs.replaceChildren();
+    const path = navigation[navigationIndex] ?? ['agent:NOEMA'];
+    let priorCluster = null;
+    for (const [index, id] of path.entries()) {
+      if (index) { const slash = document.createElement('span'); slash.textContent = '/'; slash.setAttribute('aria-hidden', 'true'); crumbs.append(slash); }
+      const node = nodeById(id), cluster = node ? clusterKey(node) : null;
+      if (index && cluster && cluster !== priorCluster) {
+        const section = document.createElement('span'); section.className = 'world-breadcrumb-category';
+        section.textContent = ({ providers: 'Providers', agents: 'Agents', missions: 'Missions', markets: 'Markets', research: 'Research', resources: 'Resources' })[cluster] ?? cluster;
+        crumbs.append(section);
+        const slash = document.createElement('span'); slash.textContent = '/'; slash.setAttribute('aria-hidden', 'true'); crumbs.append(slash);
+      }
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = labelFor(id);
+      button.setAttribute('aria-current', String(index === path.length - 1));
+      button.onclick = () => { const next = path.slice(0, index + 1); pushNavigation(next); setInspector(nodeById(id) ?? nodeById('agent:NOEMA')); announceSelection(nodeById(id) ?? nodeById('agent:NOEMA')); };
+      crumbs.append(button);
+      priorCluster = cluster;
+    }
+  }
+  function pushNavigation(path) {
+    navigation = navigation.slice(0, navigationIndex + 1);
+    const previous = navigation.at(-1) ?? [];
+    if (previous.join('\u0000') !== path.join('\u0000')) navigation.push(path);
+    navigationIndex = navigation.length - 1;
+    selectedEdge = null;
+    updateNavigationControls(); renderEntityList(); draw();
+  }
+  function setPreset(name) {
+    viewMode = name;
+    for (const button of document.querySelectorAll('[data-topology-view]')) button.setAttribute('aria-pressed', String(button.dataset.topologyView === name));
+    renderEntityList(); draw();
+  }
+  function togglePin(node) {
+    if (pinnedIds.has(node.id)) pinnedIds.delete(node.id);
+    else { if (pinnedIds.size >= 4) pinnedIds.delete(pinnedIds.values().next().value); pinnedIds.add(node.id); }
+    renderCompare();
+  }
+  function renderCompare() {
+    const host = document.getElementById('world-pinned-entities'), table = document.getElementById('world-compare-table');
+    const pinCount = document.getElementById('world-pin-count');
+    if (!host || !table || !pinCount) return;
+    const pinned = [...pinnedIds].map(nodeById).filter(Boolean);
+    pinCount.textContent = String(pinned.length); host.replaceChildren(); table.replaceChildren();
+    for (const node of pinned) {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = `× ${node.label}`;
+      button.setAttribute('aria-label', `Unpin ${node.label}`); button.onclick = () => togglePin(node); host.append(button);
+    }
+    if (!pinned.length) { const empty = document.createElement('p'); empty.textContent = 'Shift-click up to four entities to compare their state, evidence and relationships.'; table.append(empty); return; }
+    const grid = document.createElement('div'); grid.className = 'world-compare-grid';
+    for (const node of pinned) {
+      const card = document.createElement('article');
+      const connected = edges.filter((edge) => edge.from === node.id || edge.to === node.id).length;
+      for (const [term, value] of [['TYPE', typeNames[node.type] ?? node.type], ['STATE', node.status ?? 'Unknown'], ['LAST ACTIVITY', node.observedAt ?? node.record?.updated_at ?? node.record?.created_at ?? 'Unknown'], ['LINKS', String(connected)], ['EVIDENCE', node.metadata ?? node.source ?? 'No summary recorded']]) {
+        const line = document.createElement('p'); const label = document.createElement('span'); label.textContent = term; const detail = document.createElement('strong'); detail.textContent = term === 'LAST ACTIVITY' ? relativeTime(value) : value; line.append(label, detail); card.append(line);
+      }
+      grid.append(card);
+    }
+    table.append(grid);
+  }
+  function renderEntityList() {
+    document.querySelectorAll('#world-type-filters input').forEach((input) => { input.checked = !hiddenTypes.has(input.dataset.filterValue); });
+    document.querySelectorAll('#world-status-filters input').forEach((input) => { input.checked = !hiddenStatuses.has(input.dataset.filterValue); });
+    controls.list.replaceChildren();
+    const shown = visibleNodes();
+    for (const node of shown) {
+      const button = document.createElement('button'); button.type = 'button'; button.dataset.nodeId = node.id;
+      button.setAttribute('aria-pressed', String(node.id === selectedId));
+      button.textContent = `${(typeNames[node.type] ?? node.type).toUpperCase()} · ${node.label} · ${node.status ?? 'unknown'}`;
+      button.onclick = (event) => { if (event.shiftKey) togglePin(node); selectNode(node); };
+      button.ondblclick = () => drillNode(node);
+      button.oncontextmenu = (event) => { event.preventDefault(); togglePin(node); };
+      controls.list.append(button);
+    }
+    if (!shown.length) { const empty = document.createElement('p'); empty.className = 'topology-empty'; empty.textContent = 'No canonical entities match this view and filter combination.'; controls.list.append(empty); }
+    renderCompare();
+  }
+  function initializeExplorerControls() {
+    const typeHost = document.getElementById('world-type-filters'), statusHost = document.getElementById('world-status-filters');
+    const allTypes = Object.keys(typeNames);
+    const appendCheck = (host, value, label, hiddenSet) => {
+      const wrapper = document.createElement('label'); wrapper.className = 'topology-filter-option';
+      const input = document.createElement('input'); input.type = 'checkbox'; input.checked = !hiddenSet.has(value);
+      input.dataset.filterValue = value;
+      const text = document.createElement('span'); text.textContent = label;
+      input.onchange = () => { if (input.checked) hiddenSet.delete(value); else hiddenSet.add(value); renderEntityList(); draw(); };
+      wrapper.append(input, text); host.append(wrapper);
+    };
+    typeHost.replaceChildren(); statusHost.replaceChildren();
+    for (const type of allTypes) appendCheck(typeHost, type, typeNames[type], hiddenTypes);
+    for (const status of statusNames) appendCheck(statusHost, status, status.replaceAll('_', ' ').toUpperCase(), hiddenStatuses);
+    document.querySelectorAll('[data-topology-view]').forEach((button) => button.addEventListener('click', () => setPreset(button.dataset.topologyView)));
+    document.getElementById('world-search').addEventListener('input', renderSearchResults);
+    document.getElementById('world-search').addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.currentTarget.value = ''; document.getElementById('world-search-results').hidden = true; }
+      if (event.key === 'Enter') document.getElementById('world-search-results').querySelector('button')?.click();
+    });
+    document.getElementById('world-nav-back').onclick = () => { if (navigationIndex > 0) { navigationIndex--; focusNodeId = currentRoot(); selectedEdge = null; selectedId = currentRoot(); selectNode(nodeById(currentRoot())); updateNavigationControls(); draw(); } };
+    document.getElementById('world-nav-forward').onclick = () => { if (navigationIndex < navigation.length - 1) { navigationIndex++; focusNodeId = currentRoot(); selectedEdge = null; selectedId = currentRoot(); selectNode(nodeById(currentRoot())); updateNavigationControls(); draw(); } };
+    document.getElementById('world-pinned-entities').replaceChildren();
+    renderCompare(); updateNavigationControls();
+  }
+  function showCluster(key) {
+    const clusterTypes = { providers: ['provider'], agents: ['core', 'agent'], missions: ['mission'], markets: ['market', 'forecast'], research: ['evidence', 'session', 'experiment', 'lesson'], resources: ['wallet', 'tool'] };
+    const allowed = new Set(clusterTypes[key] ?? []);
+    hiddenTypes.clear();
+    for (const type of Object.keys(typeNames)) if (!allowed.has(type)) hiddenTypes.add(type);
+    setPreset('all'); controls.camera.zoom = .9; renderEntityList(); draw();
+  }
+  function pointToSegmentDistance(point, start, end) {
+    const dx = end.x - start.x, dy = end.y - start.y;
+    const length = dx * dx + dy * dy;
+    const t = length ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / length)) : 0;
+    return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+  }
+  function hitTest(x, y) {
+    const nodeHit = (canvas._hitNodes ?? []).map((node) => ({ node, distance: Math.hypot(node.screen.x - x, node.screen.y - y) }))
+      .filter(({ node, distance }) => distance < Math.max(14, (node.screen.radius ?? 7) + 5))
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (nodeHit) return { kind: 'node', value: nodeHit.node };
+    const edgeHits = (canvas._hitEdges ?? []).map(({ edge, points }) => ({ edge,
+      distance: Math.min(...points.slice(1).map((point, index) => pointToSegmentDistance({ x, y }, points[index], point))) }))
+      .filter(({ distance }) => distance < 8).sort((a, b) => a.distance - b.distance);
+    if (edgeHits.length) return { kind: 'edge', value: edgeHits[0].edge };
+    const cluster = (canvas._hitClusters ?? []).find((item) => x >= item.x && x <= item.x + item.w && y >= item.y && y <= item.y + item.h);
+    return cluster ? { kind: 'cluster', value: cluster } : null;
+  }
+  function pushEdgeContext(edge) {
+    const from = nodeById(edge.from), to = nodeById(edge.to);
+    const relation = { ...edge, id: edgeId(edge), fromLabel: from?.label ?? edge.from, toLabel: to?.label ?? edge.to };
+    onSelectEdge(relation);
+  }
+  function selectNode(node, { notify = true } = {}) {
     if (!node) return;
-    selectedId = node.id;
-    focusNodeId = node.missionId ? `mission:${node.missionId}` : node.id;
-    document.getElementById('world-inspector-kind').textContent = node.type.toUpperCase();
+    selectedEdge = null; selectedId = node.id; focusNodeId = node.id;
+    document.querySelector('[data-inspector-tab="overview"]')?.click();
+    setInspector(node); renderEntityList();
+    if (notify) announceSelection(node);
+  }
+  function drillNode(node) {
+    if (!node) return;
+    selectedEdge = null; selectedId = node.id; focusNodeId = node.id;
+    const path = navigation[navigationIndex] ?? ['agent:NOEMA'];
+    const next = path.at(-1) === node.id ? path : [...path, node.id];
+    pushNavigation(next);
+    controls.camera.zoom = Math.max(controls.camera.zoom, 1.5); draw();
+    if (node.screen) { controls.camera.panX += canvas.clientWidth / 2 - node.screen.x; controls.camera.panY += canvas.clientHeight / 2 - node.screen.y; }
+    setInspector(node); announceSelection(node);
+  }
+  function inspectEdge(edge, { notify = true } = {}) {
+    if (!edge) return;
+    selectedEdge = edgeId(edge); focusNodeId = edge.from;
+    const from = nodeById(edge.from), to = nodeById(edge.to);
+    document.getElementById('world-inspector-kind').textContent = 'RELATIONSHIP';
+    document.getElementById('world-inspector-title').textContent = `${from?.label ?? edge.from} → ${to?.label ?? edge.to}`;
+    document.getElementById('world-inspector-detail').textContent = edge.type;
+    document.getElementById('world-inspector-drill').hidden = true;
+    const facts = document.getElementById('world-inspector-facts'); facts.replaceChildren();
+    const addFact = (term, detail) => { const dt = document.createElement('dt'); dt.textContent = term; const dd = document.createElement('dd'); dd.textContent = detail; facts.append(dt, dd); };
+    addFact('DIRECTION', `${from?.type ?? 'entity'} → ${to?.type ?? 'entity'}`);
+    addFact('RELATIONSHIP', edge.type);
+    if (edge.missionId) addFact('MISSION', edge.missionId);
+    addFact('RECORDED', edge.at ? new Date(edge.at).toLocaleString() : 'Current observed configuration');
+    const relationHost = document.getElementById('world-inspector-relationships'); relationHost.replaceChildren();
+    relationHost.append(makeRelationshipButton(edge, 'Selected relationship'));
+    addEndpointActions(relationHost, edge);
+    renderActivity(edge);
+    document.getElementById('world-inspector-raw').textContent = JSON.stringify(edge, null, 2);
+    selectedId = null; renderEntityList(); draw();
+    document.querySelector('[data-inspector-tab="relationships"]')?.click();
+    if (notify) pushEdgeContext(edge);
+  }
+  function makeRelationshipButton(edge, direction) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'topology-relationship';
+    const label = document.createElement('strong'); label.textContent = `${labelFor(edge.from)} → ${labelFor(edge.to)}`;
+    const detail = document.createElement('span'); detail.textContent = `${direction} · ${edge.type}`;
+    button.append(label, detail); button.setAttribute('aria-pressed', String(selectedEdge === edgeId(edge)));
+    button.onclick = () => inspectEdge(edge); return button;
+  }
+  function addEndpointActions(host, edge) {
+    const row = document.createElement('div'); row.className = 'topology-edge-endpoints';
+    for (const id of [edge.from, edge.to]) {
+      const node = nodeById(id); if (!node) continue;
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = `Explore ${node.label}`;
+      button.onclick = () => { drillNode(node); };
+      row.append(button);
+    }
+    host.append(row);
+  }
+  function renderNodeRelationships(node) {
+    const host = document.getElementById('world-inspector-relationships'); host.replaceChildren();
+    const linked = edges.filter((edge) => edge.from === node.id || edge.to === node.id);
+    const incoming = linked.filter((edge) => edge.to === node.id), outgoing = linked.filter((edge) => edge.from === node.id);
+    for (const [title, group] of [['Incoming', incoming], ['Outgoing', outgoing]]) {
+      if (!group.length) continue;
+      const heading = document.createElement('h3'); heading.textContent = `${title} · ${group.length}`; host.append(heading);
+      for (const edge of group) host.append(makeRelationshipButton(edge, `${title} · ${edge.type}`));
+    }
+    if (!linked.length) { const empty = document.createElement('p'); empty.textContent = 'No direct relationships are recorded for this entity.'; host.append(empty); }
+  }
+  function renderActivity(entity) {
+    const host = document.getElementById('world-inspector-activity'); if (!host) return;
+    host.replaceChildren();
+    const missionId = entity.missionId ?? entity.record?.mission_id;
+    const name = entity.type === 'agent' ? entity.label : null;
+    const marketId = entity.record?.market_id;
+    let matches = timeline.filter((event) => (missionId && event.missionId === missionId)
+      || (name && event.actor === name) || (marketId && event.source?.market_id === marketId));
+    if (entity.type === 'core') matches = timeline;
+    const recent = matches.slice(-20).reverse();
+    if (!recent.length) { const empty = document.createElement('p'); empty.textContent = 'No persisted activity is linked to this selection.'; host.append(empty); return; }
+    for (const event of recent) {
+      const item = document.createElement('article'); item.className = 'topology-activity-item';
+      const title = document.createElement('strong'); title.textContent = event.title;
+      const meta = document.createElement('span'); meta.textContent = `${event.kind} · ${event.actor ?? 'actor unknown'} · ${event.time ?? 'time unavailable'}`;
+      const detail = document.createElement('p'); detail.textContent = event.detail ?? event.status ?? 'No event detail recorded.';
+      item.append(title, meta, detail); host.append(item);
+    }
+  }
+  function renderSearchResults() {
+    const input = document.getElementById('world-search'), host = document.getElementById('world-search-results');
+    const query = String(input.value ?? '').trim().toLowerCase(); host.replaceChildren();
+    if (!query) { host.hidden = true; return; }
+    const terms = query.split(/\s+/).filter(Boolean);
+    const matches = nodes.filter((node) => {
+      const haystack = `${node.label} ${node.id} ${node.type} ${node.status ?? ''} ${node.record?.chain ?? ''} ${node.record?.venue ?? ''}`.toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    }).slice(0, 12);
+    if (!matches.length) { const empty = document.createElement('p'); empty.textContent = 'No matching entity in the current canonical graph.'; host.append(empty); }
+    for (const node of matches) {
+      const button = document.createElement('button'); button.type = 'button'; button.role = 'option';
+      button.append(Object.assign(document.createElement('strong'), { textContent: node.label }), Object.assign(document.createElement('span'), { textContent: `${typeNames[node.type] ?? node.type} · ${node.status ?? 'unknown'}` }));
+      button.onclick = () => {
+        hiddenTypes.clear(); hiddenStatuses.clear(); setPreset('all');
+        pushNavigation(node.id === 'agent:NOEMA' ? ['agent:NOEMA'] : ['agent:NOEMA', node.id]);
+        selectNode(node); controls.camera.zoom = Math.max(controls.camera.zoom, 1.5); draw();
+        const point = node.screen;
+        if (point) { controls.camera.panX += canvas.clientWidth / 2 - point.x; controls.camera.panY += canvas.clientHeight / 2 - point.y; }
+        input.value = ''; host.hidden = true; draw();
+      };
+      host.append(button);
+    }
+    host.hidden = false;
+  }
+  function setInspector(node) {
+    if (!node) return;
+    selectedId = node.id; selectedEdge = null;
+    focusNodeId = node.id;
+    document.getElementById('world-inspector-kind').textContent = (typeNames[node.type] ?? node.type).toUpperCase();
     document.getElementById('world-inspector-title').textContent = node.label;
+    document.getElementById('world-inspector-drill').hidden = !edges.some((edge) => edge.from === node.id || edge.to === node.id);
     const mission = node.record?.mission_id ?? node.missionId;
-    const time = node.record?.updated_at ?? node.record?.created_at;
+    const time = node.observedAt ?? node.retrievedAt ?? node.record?.updated_at ?? node.record?.created_at;
     const timeAt = ['market', 'forecast'].includes(node.type) ? forecastStamp(time) : stamp(time);
     document.getElementById('world-inspector-detail').textContent = [mission ? `Mission · ${mission}` : null,
-      timeAt ? `Recorded · ${new Date(timeAt).toLocaleString()}` : time ? 'Recorded · time unavailable' : null,
+      timeAt ? `Last activity · ${relativeTime(time)}` : time ? 'Recorded · time unavailable' : null,
       node.record?.evidence_hash ? `Evidence hash · ${node.record.evidence_hash}` : null,
     ].filter(Boolean).join(' · ') || 'Inspect the live status and evidence for this node.';
-    const facts = document.getElementById('world-inspector-facts');
-    facts.replaceChildren();
+    const facts = document.getElementById('world-inspector-facts'); facts.replaceChildren();
     const addFact = (term, detail) => {
-      if (!detail) return;
+      if (detail === null || detail === undefined || detail === '') return;
       const dt = document.createElement('dt'); dt.textContent = term;
-      const dd = document.createElement('dd'); dd.textContent = detail;
+      const dd = document.createElement('dd'); dd.textContent = String(detail);
       facts.append(dt, dd);
     };
-    addFact('STATUS', `${node.status ?? 'unknown'}${node.rawStatus ? ` · source: ${node.rawStatus}` : ''}`);
-    addFact('TYPE METADATA', node.metadata);
-    if (node.capabilities?.length) addFact('CAN', node.capabilities.join(' · '));
-    if (node.limits?.length) addFact('CANNOT / LIMITS', node.limits.join(' · '));
-    const relationships = edges.filter((edge) => edge.from === node.id || edge.to === node.id)
-      .map((edge) => {
-        const otherId = edge.from === node.id ? edge.to : edge.from;
-        const other = nodes.find((candidate) => candidate.id === otherId);
-        return `${edge.type} · ${other?.label ?? otherId}`;
-      }).slice(0, 12);
-    if (relationships.length) addFact('RELATIONSHIPS', relationships.join(' · '));
-    addFact('EVIDENCE SOURCE', node.source);
-    if (node.observedAt) addFact('OBSERVED', new Date(node.observedAt).toLocaleString());
-    if (node.retrievedAt) addFact('RESPONSE RETRIEVED', new Date(node.retrievedAt).toLocaleString());
+    addFact('STATE', `${node.status ?? 'unknown'}${node.rawStatus ? ` · raw: ${node.rawStatus}` : ''}`);
+    addFact('LAST ACTIVITY', time ? `${time} · ${relativeTime(time)}` : 'No timestamp recorded');
+    addFact('CURRENT MISSION', mission);
+    addFact('DESCRIPTION', node.metadata);
+    if (node.capabilities?.length) addFact('CAPABILITIES', node.capabilities.join(' · '));
+    if (node.limits?.length) addFact('LIMITS', node.limits.join(' · '));
+    addFact('ECONOMIC IMPACT', node.record?.native_value_usd != null ? `$${node.record.native_value_usd}` : node.record?.cash_balance_usd != null ? `$${node.record.cash_balance_usd}` : null);
+    addFact('DATA SOURCE', node.source);
+    if (node.observedAt) addFact('FRESHNESS', relativeTime(node.observedAt));
+    renderNodeRelationships(node); renderActivity(node);
+    document.getElementById('world-inspector-raw').textContent = JSON.stringify(node.record ?? node, null, 2);
     controls.list.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.nodeId === node.id)));
     draw();
-  };
+  }
   function resize() {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
@@ -395,75 +705,198 @@ export function createNoemaWorld() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     draw();
   }
+  const layoutSlots = new Map();
+  let hoveredId = null, hoveredEdge = null;
+  const clusters = {
+    providers: { x: -390, y: 120, z: -55, name: 'DATA & MODELS', color: '#72cfe2' },
+    agents: { x: -40, y: 205, z: -10, name: 'RESEARCH TEAM', color: '#94c5ff' },
+    missions: { x: 335, y: 155, z: 15, name: 'MISSIONS', color: '#76e0c2' },
+    markets: { x: 390, y: -160, z: 30, name: 'MARKETS & FORECASTS', color: '#c5a3f0' },
+    research: { x: -25, y: -190, z: 35, name: 'EVIDENCE & LEARNING', color: '#f1bd84' },
+    resources: { x: -395, y: -160, z: -25, name: 'RESOURCES & TOOLS', color: '#9cbadb' },
+  };
+  const farClusterLayout = {
+    providers: [.28, .20], agents: [.72, .20], missions: [.28, .50],
+    markets: [.72, .50], research: [.28, .80], resources: [.72, .80],
+  };
+  const clusterKey = (node) => ({ provider: 'providers', agent: 'agents', mission: 'missions',
+    market: 'markets', forecast: 'markets', wallet: 'resources', tool: 'resources' }[node.type] ?? 'research');
   function draw() {
     const rect = canvas.getBoundingClientRect(); if (!rect.width || !rect.height) return;
     const width = rect.width, height = rect.height;
     const core = nodes.find((node) => node.type === 'core');
-    const rest = nodes.filter((node) => node !== core);
-    for (let i = 0; i < rest.length; i++) {
-      const node = rest[i], ring = ({ agent: 140, provider: 205, wallet: 255, mission: 300, tool: 350, market: 390, experiment: 425,
-        session: 400, forecast: 445, evidence: 485, lesson: 520 }[node.type] ?? 350);
-      const same = rest.slice(0, i).filter((item) => item.type === node.type).length;
-      const typeCount = Math.max(1, rest.filter((item) => item.type === node.type).length);
-      const angle = same / typeCount * Math.PI * 2 - Math.PI / 2;
-      node.x = Math.cos(angle) * ring; node.y = Math.sin(angle) * ring * .48;
-      node.z = ({ agent: -105, provider: -145, wallet: -85, mission: 20, tool: 65, market: 100,
-        experiment: 145, session: 175, forecast: 205, evidence: 245, lesson: 275 }[node.type] ?? 0);
+    const groups = new Map(Object.keys(clusters).map((key) => [key, []]));
+    const ids = new Set(nodes.map((node) => node.id));
+    for (const id of layoutSlots.keys()) if (!ids.has(id)) layoutSlots.delete(id);
+    const layoutGroups = new Map(Object.keys(clusters).map((key) => [key, []]));
+    for (const node of nodes) if (node !== core) layoutGroups.get(clusterKey(node)).push(node);
+    const visible = visibleNodes();
+    for (const node of visible) if (node !== core) groups.get(clusterKey(node)).push(node);
+    const level = controls.camera.zoom < .76 ? 'far' : controls.camera.zoom > 1.45 ? 'close' : 'medium';
+    const zoomVisible = level === 'close' ? visible : level === 'medium'
+      ? visible.filter((node) => !['forecast', 'evidence', 'session', 'experiment', 'lesson', 'tool'].includes(node.type))
+      : visible.filter((node) => node.type === 'core');
+    const renderEdges = level === 'far' ? [] : visibleEdges(zoomVisible);
+    const currentRootId = navigationIndex > 0 ? currentRoot() : null;
+    const activeEdges = renderEdges.filter((edge) => edge.from === focusNodeId || edge.to === focusNodeId
+      || (currentRootId && (edge.from === currentRootId || edge.to === currentRootId)));
+    const neighborhood = new Set([focusNodeId, ...activeEdges.flatMap((edge) => [edge.from, edge.to])]);
+    const overview = navigationIndex === 0 && focusNodeId === 'agent:NOEMA';
+    for (const [key, group] of layoutGroups) {
+      const center = clusters[key];
+      const used = new Set(group.filter((node) => layoutSlots.has(node.id)).map((node) => layoutSlots.get(node.id)));
+      for (const node of group) {
+        if (!layoutSlots.has(node.id)) {
+          let slot = 0; while (used.has(slot)) slot++;
+          layoutSlots.set(node.id, slot); used.add(slot);
+        }
+        const slot = layoutSlots.get(node.id), angle = slot * 2.399963;
+        const radius = 29 * Math.sqrt(slot);
+        node.x = center.x + Math.cos(angle) * radius;
+        node.y = center.y + Math.sin(angle) * radius * .8;
+        node.z = center.z + (slot % 3) * 9;
+      }
     }
     if (core) { core.x = 0; core.y = 0; core.z = 0; }
     const positions = new Map(nodes.map((node) => [node.id, project(node, width, height, controls.camera)]));
-    const sorted = [...nodes].sort((a, b) => (positions.get(a.id)?.depth ?? 0) - (positions.get(b.id)?.depth ?? 0));
+    const sorted = [...zoomVisible].sort((a, b) => positions.get(a.id).depth - positions.get(b.id).depth);
     for (const node of sorted) node.screen = positions.get(node.id);
-    const activeEdges = edges.filter((edge) => edge.from === focusNodeId || edge.to === focusNodeId);
-    const neighborhood = new Set([focusNodeId, ...activeEdges.map((edge) => edge.from), ...activeEdges.map((edge) => edge.to)]);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#080d18'; ctx.fillRect(0, 0, width, height);
-    for (const edge of edges) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#0b1420'; ctx.fillRect(0, 0, width, height);
+    const atmosphere = ctx.createRadialGradient(width * .5, height * .45, 0, width * .5, height * .5, width * .65);
+    atmosphere.addColorStop(0, '#24466344'); atmosphere.addColorStop(1, '#0b142000');
+    ctx.fillStyle = atmosphere; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#abc2da18';
+    for (let x = 20; x < width; x += 26) for (let y = 18; y < height; y += 26) { ctx.beginPath(); ctx.arc(x, y, .6, 0, Math.PI * 2); ctx.fill(); }
+    const occupied = [];
+    const hitClusters = [];
+    for (const [key, group] of groups) {
+      if (!group.length) continue;
+      const c = clusters[key], farPosition = farClusterLayout[key];
+      const center = level === 'far'
+        ? { x: width * farPosition[0] + controls.camera.panX, y: height * farPosition[1] + controls.camera.panY, scale: 1 }
+        : project(c, width, height, controls.camera);
+      const radius = Math.max(52, 29 * Math.sqrt(group.length) + 32) * center.scale;
+      if (level === 'far') {
+        const compactName = ({ providers: 'DATA & MODELS', agents: 'AGENTS', missions: 'MISSIONS', markets: 'MARKETS', research: 'RESEARCH', resources: 'RESOURCES' })[key];
+        const title = `${compactName} · ${group.length}`;
+        ctx.font = '500 12px ui-monospace, monospace';
+        const pillWidth = Math.min(width * .44, Math.max(118, ctx.measureText(title).width + 24));
+        const pillHeight = 38, x = center.x - pillWidth / 2, y = center.y - pillHeight / 2;
+        ctx.beginPath(); ctx.roundRect(x, y, pillWidth, pillHeight, 8);
+        ctx.fillStyle = '#122235ed'; ctx.fill(); ctx.strokeStyle = `${c.color}a0`; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = c.color; ctx.textAlign = 'center'; ctx.fillText(title, center.x, center.y + 4); ctx.textAlign = 'left';
+        hitClusters.push({ key, x, y, w: pillWidth, h: pillHeight });
+        continue;
+      }
+      ctx.beginPath(); ctx.ellipse(center.x, center.y, radius + 15, radius * .8 + 15, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `${c.color}06`; ctx.fill();
+      ctx.strokeStyle = `${c.color}25`; ctx.lineWidth = 1; ctx.setLineDash([3, 5]); ctx.stroke(); ctx.setLineDash([]);
+      if (width > 500) {
+        const label = `${c.name}  ${group.length}`;
+        ctx.font = '10px ui-monospace, monospace'; ctx.fillStyle = c.color;
+        const w = ctx.measureText(label).width, x = center.x - w / 2, y = center.y - radius * .8 - 24;
+        if (x >= 8 && x + w < width - 8 && y > 56 && y < height - 12) {
+          ctx.fillText(label, x, y); occupied.push({ x: x - 3, y: y - 12, w: w + 6, h: 18 });
+        }
+      }
+    }
+    const edgeSegments = [];
+    for (const edge of renderEdges) {
       const from = positions.get(edge.from), to = positions.get(edge.to); if (!from || !to) continue;
-      ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y);
-      const active = activeEdges.includes(edge);
-      const perspective = Math.max(.12, ((from.scale + to.scale) / 2) / Math.max(.12, Math.min(from.scale, to.scale)));
-      ctx.strokeStyle = active ? (edge.type.startsWith('handoff') ? '#cf9dffed' : '#58f0cedd') : '#6778942d';
-      ctx.lineWidth = active ? 1.4 * perspective : .75; ctx.stroke();
+      const active = activeEdges.includes(edge), curve = Math.min(35, Math.abs(to.x - from.x) * .1);
+      const control1 = { x: from.x + (to.x - from.x) * .4, y: from.y - curve };
+      const control2 = { x: from.x + (to.x - from.x) * .6, y: to.y - curve };
+      ctx.beginPath(); ctx.moveTo(from.x, from.y);
+      ctx.bezierCurveTo(control1.x, control1.y, control2.x, control2.y, to.x, to.y);
+      const selected = selectedEdge === edgeId(edge), edgeHovered = hoveredEdge === edgeId(edge);
+      ctx.strokeStyle = selected ? '#f4d58c' : active ? (edge.type.startsWith('handoff') ? '#c5a3f0d0' : '#76e0c2cc') : '#7389a354';
+      ctx.lineWidth = selected ? 3.2 : active || edgeHovered ? 2 : 1.05; ctx.stroke();
+      const points = [];
+      for (let index = 0; index <= 20; index++) {
+        const t = index / 20, mt = 1 - t;
+        points.push({ x: mt ** 3 * from.x + 3 * mt ** 2 * t * control1.x + 3 * mt * t ** 2 * control2.x + t ** 3 * to.x,
+          y: mt ** 3 * from.y + 3 * mt ** 2 * t * control1.y + 3 * mt * t ** 2 * control2.y + t ** 3 * to.y });
+      }
+      edgeSegments.push({ edge, points });
+      if ((selected || edgeHovered || active) && width > 560 && level === 'close') {
+        const middle = points[Math.floor(points.length / 2)];
+        ctx.font = '10px ui-monospace, monospace'; ctx.fillStyle = selected ? '#f4d58c' : '#b9d5e8';
+        const shortType = String(edge.type).slice(0, 34);
+        ctx.fillText(shortType, middle.x + 4, middle.y - 5);
+      }
     }
     for (const node of sorted) {
-      const p = positions.get(node.id); if (!p || p.x < -30 || p.y < -30 || p.x > width + 30 || p.y > height + 30) continue;
-      const color = palette[node.type] ?? '#91a3aa', radius = (node.type === 'core' ? 14 : node.type === 'mission' ? 9 : 7) * Math.min(1.9, p.scale * 1.65);
-      const focused = focusNodeId === node.id;
-      const neighborhoodNode = neighborhood.has(node.id);
-      const earned = node.stateKind === 'healthy';
-      ctx.save();
-      ctx.globalAlpha = neighborhoodNode ? 1 : .2;
-      ctx.shadowColor = statePalette[node.stateKind] ?? '#7588a4';
-      ctx.shadowBlur = focused || earned ? (focused ? 16 : 9) : 0;
+      const p = node.screen; if (p.x < -30 || p.y < -30 || p.x > width + 30 || p.y > height + 30) continue;
+      const isCore = node.type === 'core', selected = node.id === selectedId || node.id === hoveredId;
+      const color = palette[node.type] ?? '#94b3cc';
+      const radius = isCore ? 20 : Math.max(5, Math.min(9, p.scale * 9));
+      node.screen.radius = radius;
+      ctx.save(); ctx.globalAlpha = overview || selected || neighborhood.has(node.id) ? 1 : .3;
+      if (isCore || selected) {
+        ctx.beginPath(); ctx.arc(p.x, p.y, radius + 10, 0, Math.PI * 2);
+        ctx.strokeStyle = `${color}38`; ctx.lineWidth = 1; ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x, p.y, radius + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = `${color}a0`; ctx.stroke();
+      }
       ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-      const sphere = ctx.createRadialGradient(p.x - radius * .34, p.y - radius * .4, radius * .08, p.x, p.y, radius * 1.05);
-      sphere.addColorStop(0, '#ffffff'); sphere.addColorStop(.18, color); sphere.addColorStop(1, '#111827');
-      ctx.fillStyle = sphere; ctx.fill(); ctx.shadowBlur = 0;
-      ctx.beginPath(); ctx.arc(p.x, p.y, radius + (focused ? 4 : 0), 0, Math.PI * 2);
-      ctx.strokeStyle = focused ? '#eafaff' : (statePalette[node.stateKind] ?? '#7588a4');
-      ctx.lineWidth = focused ? 1.6 : 1; ctx.stroke();
+      ctx.fillStyle = isCore ? '#182e3c' : `${color}25`; ctx.fill();
+      ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.lineWidth = selected ? 2 : 1.3; ctx.stroke();
+      if (isCore) {
+        ctx.fillStyle = '#ecfff9'; ctx.font = '500 19px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('N', p.x, p.y + 7); ctx.textAlign = 'left';
+      } else {
+        ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2, radius * .38), 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+      }
       ctx.restore();
-      if (!neighborhood.has(node.id)
-          || (width <= 520 && node.id !== selectedId && node.id !== 'agent:NOEMA')) continue;
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#e3edff'; ctx.font = `${node.type === 'core' ? '11px' : '9px'} ui-monospace, monospace`;
-      const label = node.label.length > 34 ? `${node.label.slice(0, 32)}…` : node.label; ctx.fillText(label, p.x + radius + 5, p.y + 3);
+    }
+    // Labels are screen-sized, collision-aware, and never shrunk to fit the graph.
+    const candidates = [...zoomVisible].sort((a, b) => {
+      const priority = (n) => n.id === hoveredId ? 0 : n.id === selectedId ? 1 : n.type === 'core' ? 2 : n.type === 'mission' ? 3 : 4;
+      return priority(a) - priority(b);
+    });
+    let labels = 0;
+    const maxLabels = width < 500 ? 3 : 10;
+    for (const node of candidates) {
+      if (labels >= maxLabels) break;
+      if (level !== 'close' && !overview && !neighborhood.has(node.id) && node.id !== hoveredId) continue;
+      const p = node.screen, active = node.id === selectedId || node.id === hoveredId;
+      ctx.font = `${active ? '500' : '400'} 12px sans-serif`;
+      let title = node.label, maxWidth = Math.min(190, width * .38);
+      while (ctx.measureText(title).width > maxWidth && title.length > 4) title = `${title.replace(/…$/, '').slice(0, -1)}…`;
+      const w = ctx.measureText(title).width + 18, h = 28, r = p.radius ?? 7;
+      const placements = [
+        { x: p.x + r + 10, y: p.y - h / 2, w, h },
+        { x: p.x - w / 2, y: p.y + r + 11, w, h },
+        { x: p.x - r - w - 10, y: p.y - h / 2, w, h },
+        { x: p.x - w / 2, y: p.y - r - h - 11, w, h },
+      ];
+      const overlaps = (a, b) => a.x < b.x + b.w + 4 && a.x + a.w + 4 > b.x && a.y < b.y + b.h + 4 && a.y + a.h + 4 > b.y;
+      const box = placements.find((b) => b.x >= 8 && b.y >= 66 && b.x + b.w <= width - 8 && b.y + b.h <= height - 12
+        && !occupied.some((old) => overlaps(b, old))
+        && !zoomVisible.some((other) => other.id !== node.id && overlaps(b, { x: other.screen.x - 8, y: other.screen.y - 8, w: 16, h: 16 })));
+      if (!box) continue;
+      ctx.beginPath(); ctx.roundRect(box.x, box.y, box.w, box.h, 4);
+      ctx.fillStyle = active ? '#20374cf5' : '#101e2cf5'; ctx.fill();
+      ctx.strokeStyle = active ? '#93c5ed' : '#304a61'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = active ? '#f0f7ff' : '#bcd0e0'; ctx.fillText(title, box.x + 9, box.y + 18);
+      occupied.push(box); labels++;
     }
     canvas._hitNodes = sorted;
-    const state = source?.runtime?.state ?? 'unknown';
-    const capabilityCount = nodes.filter((node) => ['provider', 'wallet', 'tool'].includes(node.type)).length;
-    const agentCount = nodes.filter((node) => node.type === 'agent').length;
+    canvas._hitEdges = edgeSegments;
+    canvas._hitClusters = hitClusters;
     const freshness = capabilitySources.freshness ?? {};
-    const sourceState = replayIndex === null
-      ? `checks · records ${freshness.operations ?? 'unknown'} · providers ${freshness.providers ?? 'unknown'} · venues ${freshness.venues ?? 'unknown'} · wallets ${freshness.wallets ?? 'unknown'} · gateway ${freshness.gateway ?? 'unknown'}`
-      : `historical replay · live-only checks hidden · records ${freshness.operations ?? 'unknown'}`;
-    document.getElementById('world-map-state').textContent = `${capabilityCount} capability nodes · ${agentCount} agents · ${edges.length} observed or persisted links · ${sourceState} · NOEMA ${state}`;
+    const state = document.getElementById('world-map-state');
+    state.textContent = level === 'far'
+      ? `${hitClusters.length} clusters · ${visible.length} entities · far detail · ${replayIndex === null ? 'current view' : 'historical replay'}`
+      : `${zoomVisible.length}/${nodes.length} entities · ${renderEdges.length} links · ${level} detail · ${replayIndex === null ? 'current view' : 'historical replay'}`;
+    state.title = `Records ${freshness.operations ?? 'unknown'} · providers ${freshness.providers ?? 'unknown'} · venues ${freshness.venues ?? 'unknown'} · wallets ${freshness.wallets ?? 'unknown'}`;
   }
   function setTime(index) {
     replayIndex = index;
     const cutoff = index === null || !timeline.length ? Infinity : timeline[index]?.at ?? Infinity;
-    const model = buildModel(source, cutoff, capabilitySources); nodes = model.nodes; edges = model.edges;
+    const model = buildModel(source, cutoff, capabilitySources); nodes = model.nodes;
+    edges = model.edges.map((edge) => ({ ...edge, id: edgeId(edge) }));
     document.getElementById('world-time-value').textContent = index === null ? 'Latest known state' : new Date(cutoff).toLocaleString();
     document.getElementById('world-time-count').textContent = `${timeline.length} loaded persisted events · ${index === null ? 'following live state' : `as of event ${index + 1}/${timeline.length}`}`;
     const eventList = document.getElementById('world-event-list'); eventList.replaceChildren();
@@ -473,23 +906,20 @@ export function createNoemaWorld() {
       button.setAttribute('aria-pressed', String(index === absoluteIndex));
       const time = new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       button.textContent = `${time} · ${event.actor} · ${event.title}`;
+      button.dataset.missionId = event.missionId ?? '';
+      button.dataset.marketId = event.source?.market_id ?? event.source?.payload?.market_id ?? '';
       button.onclick = () => {
         controls.range.value = String(absoluteIndex); setTime(absoluteIndex);
         const missionNode = nodes.find((node) => node.missionId === event.missionId);
         if (missionNode) selectedId = missionNode.id;
-        setInspector({ id: event.id, type: event.kind, label: event.title, status: event.status,
+        const eventNode = { id: event.id, type: event.kind, label: event.title, status: event.status,
           missionId: event.missionId, record: { created_at: event.time, detail: event.detail,
-            mission_id: event.missionId, actor: event.actor, status: event.status } });
+            mission_id: event.missionId, actor: event.actor, status: event.status } };
+        setInspector(eventNode); announceSelection(eventNode);
       };
       eventList.append(button);
     }
-    controls.list.replaceChildren();
-    for (const node of nodes) {
-      const button = document.createElement('button'); button.type = 'button'; button.dataset.nodeId = node.id;
-      button.setAttribute('aria-pressed', String(node.id === selectedId));
-      button.textContent = `${node.type.toUpperCase()} · ${node.label} · ${node.status ?? 'unknown'}`;
-      button.onclick = () => setInspector(node); controls.list.append(button);
-    }
+    renderEntityList();
     const legend = document.getElementById('world-type-legend');
     legend.replaceChildren();
     const typeHeading = document.createElement('strong'); typeHeading.textContent = 'TYPE'; legend.append(typeHeading);
@@ -510,8 +940,17 @@ export function createNoemaWorld() {
       const label = document.createElement('span'); label.textContent = state.toUpperCase();
       item.append(swatch, label); legend.append(item);
     }
+    const selectedLink = edges.find((edge) => edgeId(edge) === selectedEdge);
     const found = nodes.find((node) => node.id === selectedId);
-    setInspector(found ?? nodes[0]); draw();
+    if (selectedLink) inspectEdge(selectedLink, { notify: false });
+    else {
+      const edgeWasRemoved = Boolean(selectedEdge); selectedEdge = null;
+      if (edgeWasRemoved) document.querySelector('[data-inspector-tab="overview"]')?.click();
+      const fallback = found ?? nodeById('agent:NOEMA') ?? nodes[0];
+      setInspector(fallback);
+      if (edgeWasRemoved && fallback) announceSelection(fallback);
+    }
+    updateNavigationControls(); draw();
   }
   let capabilitySources = {};
   function update(snapshot, sources = capabilitySources) {
@@ -557,7 +996,26 @@ export function createNoemaWorld() {
         return;
       }
     }
-    if (!drag) return;
+    if (!drag) {
+      const rect = canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+      const hit = hitTest(x, y);
+      const tooltip = document.getElementById('topology-tooltip');
+      if (tooltip) {
+        tooltip.hidden = !hit;
+        if (hit) {
+          tooltip.textContent = hit.kind === 'node'
+            ? `${hit.value.label} · ${hit.value.status ?? 'unknown'} · ${edges.filter((edge) => edge.from === hit.value.id || edge.to === hit.value.id).length} direct relationships`
+            : hit.kind === 'edge' ? `${labelFor(hit.value.from)} → ${labelFor(hit.value.to)} · ${hit.value.type}${hit.value.missionId ? ` · mission ${hit.value.missionId}` : ''}`
+              : `${clusters[hit.value.key].name} · ${groupsCount(hit.value.key)} canonical entities · click to expand`;
+          tooltip.style.left = `${Math.max(8, Math.min(x + 16, rect.width - 300))}px`;
+          tooltip.style.top = `${Math.max(8, Math.min(y + 18, rect.height - 80))}px`;
+        }
+      }
+      const nextNode = hit?.kind === 'node' ? hit.value.id : null;
+      const nextEdge = hit?.kind === 'edge' ? edgeId(hit.value) : null;
+      if (hoveredId !== nextNode || hoveredEdge !== nextEdge) { hoveredId = nextNode; hoveredEdge = nextEdge; draw(); }
+      return;
+    }
     if (drag.pointerId !== event.pointerId) return;
     const dx = event.clientX - drag.x, dy = event.clientY - drag.y; drag.x = event.clientX; drag.y = event.clientY;
     if (drag.pan) { controls.camera.panX += dx; controls.camera.panY += dy; }
@@ -575,9 +1033,17 @@ export function createNoemaWorld() {
       const moved = Math.abs(event.clientX - completedDrag.startX) + Math.abs(event.clientY - completedDrag.startY);
       if (moved < 4 && event.button === 0) {
       const rect = canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
-      const hit = (canvas._hitNodes ?? []).map((node) => ({ node, p: node.screen }))
-        .filter(({ p }) => p && Math.hypot(p.x - x, p.y - y) < 22).sort((a, b) => Math.hypot(a.p.x - x, a.p.y - y) - Math.hypot(b.p.x - x, b.p.y - y))[0];
-      if (hit) setInspector(hit.node);
+      const hit = hitTest(x, y);
+      if (hit?.kind === 'node') {
+        if (event.shiftKey) togglePin(hit.value);
+        selectNode(hit.value);
+      } else if (hit?.kind === 'edge') inspectEdge(hit.value);
+      else if (hit?.kind === 'cluster') showCluster(hit.value.key);
+      else {
+        const root = nodeById('agent:NOEMA');
+        navigation = [['agent:NOEMA']]; navigationIndex = 0; selectedEdge = null; focusNodeId = 'agent:NOEMA';
+        selectNode(root); updateNavigationControls();
+      }
       }
     }
     drag = null;
@@ -586,18 +1052,49 @@ export function createNoemaWorld() {
       drag = { pointerId, x: point.x, y: point.y, startX: point.x, startY: point.y, button: 0, pan: false };
     }
   });
+  canvas.addEventListener('pointerleave', () => {
+    const tooltip = document.getElementById('topology-tooltip');
+    if (tooltip) tooltip.hidden = true;
+    if (hoveredId || hoveredEdge) { hoveredId = null; hoveredEdge = null; draw(); }
+  });
   canvas.addEventListener('pointercancel', (event) => {
     activeTouches.delete(event.pointerId);
     pinchDistance = null;
     drag = null;
   });
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-  canvas.addEventListener('wheel', (event) => { event.preventDefault(); controls.camera.zoom = Math.max(.55, Math.min(1.9, controls.camera.zoom * (event.deltaY > 0 ? .92 : 1.08))); draw(); }, { passive: false });
+  canvas.addEventListener('wheel', (event) => { event.preventDefault(); controls.camera.zoom = Math.max(.55, Math.min(3.2, controls.camera.zoom * (event.deltaY > 0 ? .92 : 1.08))); draw(); }, { passive: false });
+  canvas.addEventListener('dblclick', (event) => {
+    event.preventDefault(); const rect = canvas.getBoundingClientRect();
+    const hit = hitTest(event.clientX - rect.left, event.clientY - rect.top);
+    if (hit?.kind === 'node') drillNode(hit.value);
+  });
   controls.range.addEventListener('input', () => setTime(Number(controls.range.value)));
   document.getElementById('world-time-live').onclick = () => { replayIndex = null; update(source); };
   document.getElementById('world-reset').onclick = () => { Object.assign(controls.camera, { zoom: 1, panX: 0, panY: 0, orbitX: -.12, orbitY: .16 }); draw(); };
+  document.getElementById('world-inspector-drill').onclick = () => { const node = nodeById(selectedId); if (node) drillNode(node); };
+  initializeExplorerControls();
   new ResizeObserver(resize).observe(canvas);
   window.addEventListener('resize', resize);
   if (reducedMotion.matches) canvas.dataset.motion = 'reduced';
-  return { update };
+  function selectEntity(selector, notify = false) {
+    const node = nodes.find((candidate) => candidate.id === selector?.id
+      || (selector?.market_id && candidate.record?.market_id === selector.market_id
+        && (!selector.venue || candidate.record?.venue === selector.venue))
+      || (selector?.mission_id && (candidate.missionId === selector.mission_id
+        || candidate.record?.mission_id === selector.mission_id))
+      || (selector?.trial_id && candidate.record?.trial_id === selector.trial_id)
+      || (selector?.name && candidate.label === selector.name));
+    if (!node) return false;
+    hiddenTypes.clear(); hiddenStatuses.clear(); setPreset('all');
+    selectNode(node, { notify });
+    return true;
+  }
+  function groupsCount(key) { return visibleNodes().filter((node) => node.type !== 'core' && clusterKey(node) === key).length; }
+  return {
+    update,
+    selectEntity,
+    drillEntity: (selector) => { const found = nodes.find((node) => node.id === selector?.id); if (!found) return false; drillNode(found); return true; },
+    inspectRelationship: (selector) => { const found = edges.find((edge) => edgeId(edge) === selector?.id); if (!found) return false; inspectEdge(found); return true; },
+  };
 }

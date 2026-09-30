@@ -5,7 +5,13 @@ import stat
 
 from fastapi.testclient import TestClient
 
-from noema.dashboard_app import _runtime_change_stream, app
+from noema.dashboard_app import _capital_sample_sleep_seconds, _runtime_change_stream, app
+
+
+def test_capital_sampler_targets_start_to_start_interval() -> None:
+    assert _capital_sample_sleep_seconds(15, 100.0, now=102.5) == 12.5
+    assert _capital_sample_sleep_seconds(15, 100.0, now=115.0) == 0
+    assert _capital_sample_sleep_seconds(15, 100.0, now=117.0) == 0
 
 
 def test_dashboard_root_renders_console() -> None:
@@ -46,7 +52,7 @@ def test_execution_gateway_endpoint_is_read_only_and_fail_closed_without_databas
 
 
 def test_prediction_venues_endpoint_returns_read_only_status(monkeypatch) -> None:
-    async def fake_status():
+    async def fake_status(*, force=False):
         return {"execution_enabled": False, "venues": [], "cross_venue_comparison": {"matches": []}}
 
     monkeypatch.setattr("noema.dashboard_app.build_prediction_venue_status", fake_status)

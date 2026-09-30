@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime
 
 from noema.mission_store import MissionStore
 from noema.stripe_economy import (
@@ -96,6 +97,51 @@ def test_stripe_api_projection_does_not_create_a_missing_database(tmp_path):
     path = tmp_path / "missing.db"
     assert stripe_economy_overview(str(path))["status"] == "not_observed"
     assert not path.exists()
+
+
+def test_persisted_success_backfill_is_idempotent_and_keeps_cash_unclassified(tmp_path):
+    path = str(tmp_path / "noema.db")
+    store = StripeEconomyStore(path)
+    store.conn.execute(
+        "INSERT INTO stripe_payment_observations(payment_intent_id,charge_id,created_at,status,"
+        "amount_received_minor,currency,livemode,mission_id,attribution_json,first_seen_at,last_seen_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        ("pi_1234567890", "ch_1234567890", "2024-01-19T01:09:54+00:00", "succeeded", 200,
+         "usd", 1, None, "{}", "2026-09-29T00:00:00+00:00", "2026-09-29T00:00:00+00:00"),
+    )
+    store.conn.commit()
+    assert store.import_persisted_successes() == 1
+    assert store.import_persisted_successes() == 0
+    store.close()
+    from noema.economic_ledger import EconomicLedger
+    ledger = EconomicLedger.read_projection(path, month_utc="2024-01")
+    assert ledger["event_count"] == 1
+    assert ledger["unclassified_cash_subtotal_usd"] == "2"
+    assert ledger["verified_realized_revenue_usd"] is None
+
+
+def test_stripe_september_coverage_is_partial_when_only_payment_intents_are_available(tmp_path):
+    store = StripeEconomyStore(str(tmp_path / "noema.db"))
+    store.record(
+        status="connected", livemode=True, available=[], pending=[],
+        payments=[{
+            "id": "pi_1234567890", "status": "succeeded", "amount_received_minor": 200,
+            "currency": "usd", "created_at": "2024-01-19T01:09:54+00:00",
+            "charge_id": "ch_1234567890", "livemode": True, "mission_id": None, "attribution": {},
+        }], scan_limit=100,
+        capabilities={"available": ["list_payment_intents"], "not_exposed": ["fees", "refunds", "payouts"]},
+    )
+    status = store.attest_current_period(now=datetime(2026, 9, 29, 6, tzinfo=UTC))
+    assert status["state"] == "PARTIAL"
+    assert status["period_successful_payment_intents"] == 0
+    store.close()
+    from noema.economic_ledger import EconomicLedger
+    projection = EconomicLedger.read_projection(str(tmp_path / "noema.db"), month_utc="2026-09")
+    stripe = next(row for row in projection["provider_coverage"] if row["provider"] == "stripe")
+    assert stripe["applicable_activity_detected"] is False
+    assert stripe["canonical_event_count"] == 0
+    assert stripe["reconciled_amount_usd"] is None
+    assert stripe["unresolved_blockers"]
 
 
 def test_mission_observation_adds_history_without_changing_status(tmp_path):

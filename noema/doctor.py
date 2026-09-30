@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
 from .cognition_policy import CognitionPolicy
+from .config import kalshi_credential_presence
 from .economic_ledger import EconomicLedger
 from .foundry_config import FoundryConfig
 from .local_env import env_local_present
@@ -64,19 +64,21 @@ def doctor_report(db_path: str = "data/noema.db") -> dict[str, Any]:
             "positive daily budget and Foundry input/output token prices required",
         ))
 
-    kalshi_id = os.getenv("KALSHI_API_KEY_ID")
-    kalshi_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
-    if _configured(kalshi_id) and _configured(kalshi_path):
-        exists = Path(str(kalshi_path)).expanduser().is_file()
+    kalshi_id_present, kalshi_path_configured, kalshi_pem_present = kalshi_credential_presence()
+    if kalshi_id_present and kalshi_path_configured:
         checks.append(
             DoctorCheck(
                 "kalshi",
-                "ready" if exists else "error",
-                "API key ID configured; PEM exists"
-                if exists
-                else "API key ID configured but PEM path does not exist",
+                "ready" if kalshi_pem_present else "error",
+                "API key ID and PEM file available through configured sources"
+                if kalshi_pem_present
+                else "API key ID present but PEM path is not a file",
             )
         )
+    elif kalshi_id_present or kalshi_path_configured:
+        checks.append(DoctorCheck(
+            "kalshi", "error", "API key ID and PEM path must both be available",
+        ))
     else:
         checks.append(
             DoctorCheck(

@@ -62,7 +62,12 @@ def test_handoffs_reject_secret_or_live_authority_and_record_result(tmp_path):
         mission, from_specialist='quant', to_specialist='evidence-critic',
         objective='Check result integrity', capability_grants=['read_research_result'],
         resource_grant={'network': 'denied', 'inference': False, 'live_execution': False},
+        contract={'mission_id': mission, 'allowed_tools': ['exec'], 'timeout_seconds': 30},
     )
+    requested = store.conn.execute(
+        "SELECT payload_json FROM mission_events WHERE event_type='handoff_requested'"
+    ).fetchone()
+    assert '"allowed_tools": ["exec"]' in requested['payload_json']
     store.finish_handoff(handoff, status='completed', result={'verdict': 'PASS'})
     row = store.conn.execute('SELECT status,result_json FROM mission_handoffs').fetchone()
     assert row['status'] == 'completed' and 'PASS' in row['result_json']

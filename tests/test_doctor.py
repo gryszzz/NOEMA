@@ -1,3 +1,4 @@
+from noema import config
 from noema.doctor import doctor_report
 from noema.local_env import load_local_env
 from noema.setup_wizard import write_local_env
@@ -37,3 +38,18 @@ def test_doctor_never_returns_foundry_secret(tmp_path, monkeypatch) -> None:
         check["name"] == "model_budget" and check["status"] == "missing"
         for check in report["checks"]
     )
+
+
+def test_doctor_recognizes_keychain_key_id_without_reading_the_secret(tmp_path, monkeypatch) -> None:
+    pem = tmp_path / "kalshi.pem"
+    pem.write_text("test")
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.setenv("KALSHI_PRIVATE_KEY_PATH", str(pem))
+    monkeypatch.setattr(config, "kalshi_key_id_present", lambda: True)
+
+    report = doctor_report(str(tmp_path / "noema.db"))
+
+    kalshi = next(check for check in report["checks"] if check["name"] == "kalshi")
+    assert kalshi["status"] == "ready"
+    assert kalshi["detail"] == "API key ID and PEM file available through configured sources"
+    assert str(pem) not in str(report)

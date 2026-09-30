@@ -8,6 +8,16 @@ def test_trench_collector_is_disabled_by_default(monkeypatch) -> None:
     assert TrenchCollectorConfig.from_env().enabled is False
 
 
+def test_forward_collector_defaults_poll_faster_than_shortest_horizon(monkeypatch) -> None:
+    monkeypatch.delenv("NOEMA_TRENCH_DUE_LIMIT", raising=False)
+    monkeypatch.delenv("NOEMA_TRENCH_DISCOVERY_INTERVAL_SECONDS", raising=False)
+    config = TrenchCollectorConfig.from_env()
+    assert config.due_limit == 100
+    assert config.sample_interval_seconds == 10
+    assert config.discovery_interval_seconds == 15
+    config.validate()
+
+
 def test_trench_config_validates_limits() -> None:
     with pytest.raises(ValueError):
         TrenchCollectorConfig(due_limit=101).validate()

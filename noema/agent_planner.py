@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .agent_identity import MISSION_OPERATIONAL_GOALS
 from .cognition_models import CognitionResult
 from .opportunity_radar import RadarRow
 
@@ -10,6 +11,14 @@ from .opportunity_radar import RadarRow
 class AgentGoalSelection:
     goal: str
     reason: str
+
+    def __post_init__(self) -> None:
+        if self.goal not in MISSION_OPERATIONAL_GOALS:
+            raise ValueError("operational goal is not aligned with the NOEMA mission")
+
+    @property
+    def mission_objective(self) -> str:
+        return MISSION_OPERATIONAL_GOALS[self.goal]
 
 
 def choose_goal(

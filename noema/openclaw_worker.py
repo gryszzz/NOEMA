@@ -9,6 +9,7 @@ import re
 import shutil
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,35 @@ ALLOWED_PRIORITIES = {
     "validate_demand_and_all_in_costs", "investigate_resolution_rules",
     "repair_market_data", "require_forward_validation",
 }
+OPENCLAW_AUDIT_KINDS = frozenset({
+    "market_data_quality", "cost_threshold_sweep",
+    "trench_survival_logistic", "commercial_opportunity_scan",
+})
 SANDBOX_IMAGE = "openclaw-sandbox:bookworm-slim"
+
+
+def audit_warrants_openclaw(kind: str, result: dict[str, Any]) -> bool:
+    """Admit only evidence-rich audits with a concrete unresolved question."""
+    if kind not in OPENCLAW_AUDIT_KINDS:
+        return False
+    if kind == "market_data_quality":
+        observations = result.get("observations")
+        return (type(observations) is int and observations > 0 and (
+            result.get("valid_markets", observations) < observations
+            or result.get("markets_with_rules", observations) < observations
+            or result.get("markets_with_two_sided_quotes", observations) < observations
+        ))
+    if kind == "cost_threshold_sweep":
+        variants = result.get("variants")
+        return isinstance(variants, list) and max(
+            (item.get("events", 0) for item in variants if isinstance(item, dict)), default=0,
+        ) >= 10
+    if kind == "trench_survival_logistic":
+        return (type(result.get("walk_forward_tests")) is int
+                and result["walk_forward_tests"] >= 10
+                and result.get("model_brier") is not None)
+    return (type(result.get("visible_payment_signal_count")) is int
+            and result["visible_payment_signal_count"] > 0)
 
 
 @dataclass(frozen=True)
@@ -315,14 +344,23 @@ def runtime_status(db_path: str | None = None) -> dict[str, Any]:
     except ValueError:
         return {"state": "invalid_config", "enabled": policy.enabled, "agent_id": None}
     result: dict[str, Any] = {
-        "state": "unavailable", "enabled": policy.enabled,
+        "state": "unavailable" if policy.enabled else "disabled", "enabled": policy.enabled,
         "on_demand": True,
         "agent_id": policy.agent_id, "gateway": "unavailable",
         "sandbox": "unavailable", "sandbox_ready": False,
         "active_session": None, "last_session_status": None,
         "model": None, "input_tokens": None, "output_tokens": None,
-        "cost_usd": None, "reason": "OpenClaw Gateway unavailable",
+        "cost_usd": None,
+        "current_task": None, "elapsed_seconds": None, "resource_usage": None,
+        "latest_result": None, "last_mission": None, "latest_evidence": None,
+        "reason": ("OpenClaw is disabled by NOEMA_OPENCLAW_ENABLED" if not policy.enabled
+                   else "OpenClaw Gateway unavailable"),
     }
+    if not policy.enabled:
+        result["gateway"] = "not_started"
+        result["sandbox"] = "not_checked"
+        result["reason_idle"] = "configuration disabled"
+        return _with_mission_status(result, db_path)
     container = _gateway_id()
     if not container:
         configured, details = _gateway_container()
@@ -332,7 +370,8 @@ def runtime_status(db_path: str | None = None) -> dict[str, Any]:
             result["reason"] = "Gateway starts only for admitted NOEMA work"
         else:
             result["reason"] = "no unique healthy local OpenClaw Gateway"
-        return result
+        result["reason_idle"] = result["reason"]
+        return _with_mission_status(result, db_path)
     result["gateway"] = "healthy"
     _code, output = _exec_gateway(container, ["sh", "-lc", (
         "if command -v docker >/dev/null 2>&1; then printf docker_cli=available; "
@@ -393,6 +432,76 @@ def runtime_status(db_path: str | None = None) -> dict[str, Any]:
                     result["state"] = "working"
         except (OSError, sqlite3.Error):
             pass
+    result["reason_idle"] = (
+        "awaiting eligible mission" if result.get("state") == "idle"
+        else result.get("reason") if result.get("state") != "working" else None
+    )
+    return _with_mission_status(result, db_path)
+
+
+def _with_mission_status(result: dict[str, Any], db_path: str | None) -> dict[str, Any]:
+    """Attach the most recent persisted OpenClaw handoff without exposing prompt data."""
+    if not db_path:
+        return result
+    try:
+        import sqlite3
+
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT h.handoff_id,h.mission_id,h.objective,h.status,h.created_at,h.updated_at,"
+                "h.result_json,m.trial_id,m.evidence_hash,m.objective AS mission_objective "
+                "FROM mission_handoffs h JOIN missions m USING(mission_id) "
+                "WHERE h.to_specialist LIKE 'openclaw%' "
+                "ORDER BY h.created_at DESC LIMIT 1"
+            ).fetchone()
+            session = None
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cognitive_sessions'"
+            ).fetchone():
+                session = conn.execute(
+                    "SELECT status,input_tokens,output_tokens,estimated_model_cost_usd "
+                    "FROM cognitive_sessions WHERE provider='openclaw' AND objective=? "
+                    "ORDER BY created_at DESC LIMIT 1", (row["objective"],) if row else ("",),
+                ).fetchone()
+        if row is None:
+            return result
+        now = datetime.now(UTC)
+        created = datetime.fromisoformat(row["created_at"])
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        updated = datetime.fromisoformat(row["updated_at"])
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=UTC)
+        active = row["status"] in {"requested", "accepted", "running"}
+        result["current_task"] = row["objective"] if active else None
+        latest_result = json.loads(row["result_json"]) if row["result_json"] else None
+        reported_elapsed = (latest_result.get("elapsed_seconds")
+                            if isinstance(latest_result, dict) else None)
+        result["elapsed_seconds"] = (
+            max(0, int(reported_elapsed)) if isinstance(reported_elapsed, (int, float))
+            and math.isfinite(reported_elapsed) and reported_elapsed >= 0
+            else max(0, int((now - created).total_seconds())) if active
+            else max(0, int((updated - created).total_seconds()))
+        )
+        result["resource_usage"] = {
+            "input_tokens": session["input_tokens"] if session else None,
+            "output_tokens": session["output_tokens"] if session else None,
+            "model_cost_usd": session["estimated_model_cost_usd"] if session else None,
+        }
+        result["latest_result"] = latest_result
+        result["last_mission"] = {
+            "mission_id": row["mission_id"], "handoff_id": row["handoff_id"],
+            "trial_id": row["trial_id"], "status": row["status"],
+            "objective": row["mission_objective"],
+            "worker_status": session["status"] if session else None,
+        }
+        result["latest_evidence"] = row["evidence_hash"]
+        if active:
+            result["state"] = "working" if row["status"] == "running" else "queued"
+            result["reason_idle"] = None
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        result["mission_status"] = "unavailable"
     return result
 
 
@@ -437,6 +546,35 @@ def _validate_result(text: str) -> dict[str, Any]:
     ):
         raise ValueError("invalid worker metrics")
     return result
+
+
+def critic_worker_result(result: dict[str, Any], evidence: dict[str, Any], *,
+                         evidence_hash: str) -> dict[str, Any]:
+    """Check every worker metric against the supplied deterministic result."""
+    observed: set[tuple[str, int]] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if isinstance(key, str) and type(child) is int and child >= 0:
+                    observed.add((key, child))
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(evidence)
+    metrics = result.get("verified_metrics") if isinstance(result, dict) else None
+    unsupported = [key for key, value in (metrics or {}).items()
+                   if (key, value) not in observed]
+    return {
+        "verdict": "PASS" if not unsupported else "REJECT",
+        "result_accepted": not unsupported,
+        "unsupported_metrics": unsupported,
+        "evidence_hash": evidence_hash,
+        "conclusion": ("Worker metrics match the supplied deterministic result"
+                       if not unsupported else "Worker returned metrics absent from supplied evidence"),
+    }
 
 
 def _usage(document: dict[str, Any]) -> dict[str, Any]:

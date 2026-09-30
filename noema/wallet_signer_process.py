@@ -26,6 +26,9 @@ from .wallet_credentials import (
 
 EVM_CHAIN_IDS = {"ethereum": 1, "base": 8453, "polygon": 137}
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+# Deliberately false until the canonical mission-authority validator is wired
+# into this credential-isolated process. Environment flags cannot enable it.
+CANONICAL_LIVE_AUTHORITY_GATE_WIRED = False
 
 
 def _rpc(client: httpx.Client, endpoint: str, method: str, params: list[Any]) -> Any:
@@ -184,6 +187,8 @@ def simulate_bitcoin_transaction(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def execute_bitcoin_transaction(request: dict[str, Any]) -> dict[str, Any]:
+    if not CANONICAL_LIVE_AUTHORITY_GATE_WIRED:
+        raise RuntimeError("canonical wallet authority gate is not wired")
     if request.get("signer_enabled") is not True or request.get("master_halt") is not False:
         raise RuntimeError("Bitcoin signer disabled or owner master halt enabled")
     from embit.finalizer import finalize_psbt
@@ -422,6 +427,8 @@ def sign_dry_run_evm_transaction(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def execute_evm_transaction(request: dict[str, Any]) -> dict[str, Any]:
+    if not CANONICAL_LIVE_AUTHORITY_GATE_WIRED:
+        raise RuntimeError("canonical wallet authority gate is not wired")
     if request.get("signer_enabled") is not True or request.get("master_halt") is not False:
         raise RuntimeError("EVM signer disabled or owner master halt enabled")
     account = load_evm_account_in_signer_boundary()
@@ -640,6 +647,8 @@ def sign_dry_run_solana_transfer(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def execute_native_transfer(request: dict[str, Any]) -> dict[str, Any]:
+    if not CANONICAL_LIVE_AUTHORITY_GATE_WIRED:
+        raise RuntimeError("canonical wallet authority gate is not wired")
     from solders.pubkey import Pubkey
 
     if request.get("signer_enabled") is not True or request.get("master_halt") is not False:
@@ -809,6 +818,7 @@ def main() -> int:
             "broadcast transaction failed on chain",
             "broadcast transaction confirmation timed out",
             "broadcast transaction returned no signature",
+            "canonical wallet authority gate is not wired",
         }
         if message not in safe_messages:
             message = "signer operation failed"

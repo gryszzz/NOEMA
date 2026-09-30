@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -68,7 +69,10 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
                         return min(5.0, max(0.0, (until - datetime.now(UTC)).total_seconds()))
                 except (TypeError, ValueError, OverflowError):
                     pass
-    return min(2.0, 0.2 * (2 ** attempt))
+    # Small process-local jitter prevents synchronized retries from multiple
+    # read-only collectors while keeping the delay bounded and provider-safe.
+    base = min(2.0, 0.2 * (2 ** attempt))
+    return base * random.uniform(0.8, 1.2)
 
 
 def _http_error_class(status: int) -> tuple[str, bool]:
@@ -224,8 +228,10 @@ def jupiter_launch_tick(
         observed_at=observed_at.astimezone(UTC),
         price_usd=price,
         liquidity_usd=liquidity,
-        buy_volume_usd=max(0.0, _optional_float(stats.get("buyVolume")) or 0.0),
-        sell_volume_usd=max(0.0, _optional_float(stats.get("sellVolume")) or 0.0),
+        buy_volume_usd=(None if _optional_float(stats.get("buyVolume")) is None
+                        else max(0.0, _optional_float(stats.get("buyVolume")))),
+        sell_volume_usd=(None if _optional_float(stats.get("sellVolume")) is None
+                         else max(0.0, _optional_float(stats.get("sellVolume")))),
         organic_net_buyers=_optional_int(stats.get("numOrganicBuyers")),
         total_traders=_optional_int(stats.get("numTraders")),
         net_buyers=_optional_int(stats.get("numNetBuyers")),
@@ -261,6 +267,7 @@ class SolanaRpcResearchClient:
         self.last_context_slot: int | None = None
         self.last_attempt_provenance: dict[str, Any] | None = None
         self.last_request_elapsed_ms: int | None = None
+        self.provider_cooldowns: dict[str, datetime] = {}
 
     def providers(self) -> tuple[tuple[str, str], ...]:
         configured = [("primary", self.rpc_url)]
@@ -368,6 +375,10 @@ class SolanaRpcResearchClient:
         self.last_attempt_provenance = None
         self.last_context_slot = None
         for endpoint in self.providers():
+            cooldown = self.provider_cooldowns.get(endpoint[0])
+            if cooldown is not None and datetime.now(UTC) < cooldown:
+                errors.append(ProviderFailure(endpoint[0], "holder_enrichment", "backoff_active"))
+                continue
             try:
                 current_slot = await self._rpc(
                     "getSlot", [{"commitment": "confirmed"}], endpoint=endpoint,
@@ -540,3 +551,63 @@ class JupiterTrenchResearchClient:
             if isinstance(mint, str) and mint in clean:
                 result[mint] = item
         return result
+
+
+class DexScreenerTrenchPriceClient:
+    """Independent read-only fallback for current Solana token price/liquidity."""
+
+    def __init__(self, *, timeout_seconds: float = 8.0) -> None:
+        self.timeout = timeout_seconds
+        self.base_url = "https://api.dexscreener.com"
+
+    async def tokens_by_mint(self, mints: list[str] | tuple[str, ...]) -> dict[str, dict[str, Any]]:
+        clean = tuple(dict.fromkeys(mint.strip() for mint in mints if mint.strip()))
+        if not clean:
+            return {}
+        if len(clean) > 30:
+            raise ValueError("DexScreener token lookup supports at most 30 mints per request")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/tokens/v1/solana/{','.join(clean)}"
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            error_class, _ = _http_error_class(exc.response.status_code)
+            raise ProviderFailure("dexscreener", "tokens_by_mint", error_class,
+                                  http_status=exc.response.status_code) from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderFailure("dexscreener", "tokens_by_mint", "timeout") from exc
+        except httpx.TransportError as exc:
+            raise ProviderFailure("dexscreener", "tokens_by_mint", "transport_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise ProviderFailure("dexscreener", "tokens_by_mint", "malformed_json") from exc
+        if not isinstance(payload, list):
+            raise ProviderFailure("dexscreener", "tokens_by_mint", "invalid_response")
+
+        selected: dict[str, dict[str, Any]] = {}
+        for pair in payload:
+            if not isinstance(pair, dict) or pair.get("chainId") != "solana":
+                continue
+            base = pair.get("baseToken")
+            if not isinstance(base, dict):
+                continue
+            mint = base.get("address")
+            if not isinstance(mint, str) or mint not in clean:
+                continue
+            price = _optional_float(pair.get("priceUsd"))
+            liquidity_obj = pair.get("liquidity")
+            liquidity = (_optional_float(liquidity_obj.get("usd"))
+                         if isinstance(liquidity_obj, dict) else None)
+            transactions = pair.get("txns")
+            recent = transactions.get("m5") if isinstance(transactions, dict) else None
+            recent_trades = (int(recent.get("buys", 0) or 0) + int(recent.get("sells", 0) or 0)
+                             if isinstance(recent, dict) else 0)
+            if price is None or price <= 0 or liquidity is None or liquidity < 0 or recent_trades <= 0:
+                continue
+            prior = selected.get(mint)
+            prior_liquidity = (prior or {}).get("liquidity", {}).get("usd", -1)
+            if prior is None or liquidity > float(prior_liquidity):
+                selected[mint] = pair
+        return selected

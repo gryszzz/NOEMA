@@ -36,11 +36,16 @@ class ExecutionProposal:
     evidence_refs: tuple[str, ...]
     created_at: datetime
     expires_at: datetime
+    decision_id: str | None = None
+    strategy_id: str | None = None
+    experiment_id: str | None = None
 
     @classmethod
     def from_opportunity(
         cls, *, proposal_id: str, mission_id: str, opportunity: Opportunity,
         action: Action, evidence_refs: tuple[str, ...], expires_at: datetime,
+        decision_id: str | None = None, strategy_id: str | None = None,
+        experiment_id: str | None = None,
     ) -> ExecutionProposal:
         if action.decision is not Decision.LIVE_BUY_YES or action.max_price is None:
             raise ValueError("only a deterministic live YES order can form this proposal")
@@ -55,6 +60,8 @@ class ExecutionProposal:
             limit_price=Decimal(str(action.max_price)),
             expected_edge=Decimal(str(opportunity.robust_edge)),
             evidence_refs=tuple(evidence_refs), created_at=now, expires_at=expires_at,
+            decision_id=decision_id or proposal_id,
+            strategy_id=strategy_id, experiment_id=experiment_id,
         )
 
 
@@ -226,12 +233,17 @@ class ExecutionGateway:
                     "mission_id,provider_reference,result_json,request_json FROM execution_gateway_requests "
                     "ORDER BY created_at DESC LIMIT ?", (limit,),
                 ).fetchall()
+                execution_counts = {str(row[0]): int(row[1]) for row in conn.execute(
+                    "SELECT status,COUNT(*) FROM execution_gateway_requests "
+                    "WHERE route='prediction' AND tier='execution' GROUP BY status"
+                )}
                 transitions = conn.execute(
                     "SELECT proposal_id,occurred_at,from_status,to_status,source,evidence_json "
                     "FROM execution_gateway_transitions ORDER BY transition_id DESC LIMIT ?", (limit,),
                 ).fetchall()
         except sqlite3.Error:
             rows = []
+            execution_counts = None
             transitions = []
         enabled = os.getenv("NOEMA_EXECUTION_GATEWAY_ENABLED", "0") == "1"
         halted = os.getenv("NOEMA_MASTER_HALT", "0") == "1"
@@ -243,6 +255,7 @@ class ExecutionGateway:
                 enabled and not halted and os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") == "1"
                 and self.authority_resolver is not None
             ),
+            "prediction_execution_counts": execution_counts,
             "treasury_actions_enabled": os.getenv("NOEMA_TREASURY_ACTIONS_ENABLED", "0") == "1",
             "recent_requests": [dict(row) for row in rows],
             "recent_transitions": [dict(row) for row in transitions],
@@ -448,6 +461,15 @@ class ExecutionGateway:
             reasons.append("deterministic risk engine is not in live mode")
         if proposal.mission_id == "" or not proposal.evidence_refs:
             reasons.append("mission or evidence references are missing")
+        forecast_evidence = opportunity.forecast.evidence_ids
+        if (
+            not isinstance(proposal.evidence_refs, tuple)
+            or not proposal.evidence_refs
+            or any(not isinstance(ref, str) or not ref.strip()
+                   for ref in proposal.evidence_refs)
+            or proposal.evidence_refs != forecast_evidence
+        ):
+            reasons.append("proposal evidence does not match the immutable forecast evidence")
         if proposal.expires_at.tzinfo is None or proposal.expires_at <= now:
             reasons.append("proposal is expired")
         if not numeric_valid:
@@ -460,6 +482,16 @@ class ExecutionGateway:
         if (isinstance(proposal.expected_edge, Decimal) and proposal.expected_edge.is_finite()
                 and proposal.expected_edge <= 0):
             reasons.append("proposal has no positive deterministic expected edge")
+        try:
+            opportunity_edge = Decimal(str(opportunity.robust_edge))
+        except (InvalidOperation, ValueError, TypeError):
+            opportunity_edge = None
+        if (
+            opportunity_edge is None
+            or not opportunity_edge.is_finite()
+            or proposal.expected_edge != opportunity_edge
+        ):
+            reasons.append("proposal expected edge does not match the deterministic opportunity")
         if (action.decision is not Decision.LIVE_BUY_YES
                 or action.market_id != proposal.instrument or action.venue != proposal.venue
                 or Decimal(str(action.stake_usd)) != proposal.notional_usd

@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from noema.solana_research import (
+    DexScreenerTrenchPriceClient,
     JupiterTrenchResearchClient,
     ProviderFailure,
     SolanaRpcResearchClient,
@@ -180,6 +181,29 @@ async def test_jupiter_research_feeds_are_read_only_data() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dexscreener_fallback_requires_solana_base_identity_and_recent_activity(monkeypatch):
+    import noema.solana_research as module
+
+    rows = [
+        {"chainId": "ethereum", "baseToken": {"address": "mint-a"},
+         "priceUsd": "1", "liquidity": {"usd": 1000},
+         "txns": {"m5": {"buys": 2}}},
+        {"chainId": "solana", "baseToken": {"address": "mint-a"},
+         "priceUsd": "9", "liquidity": {"usd": 9000},
+         "txns": {"m5": {"buys": 0, "sells": 0}}},
+        {"chainId": "solana", "baseToken": {"address": "mint-a"},
+         "priceUsd": "0.25", "liquidity": {"usd": 5000},
+         "txns": {"m5": {"buys": 2, "sells": 1}}, "pairAddress": "active-pool"},
+    ]
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=rows))
+    monkeypatch.setattr(module.httpx, "AsyncClient",
+                        lambda **kw: real_client(transport=transport, **kw))
+    result = await DexScreenerTrenchPriceClient().tokens_by_mint(["mint-a"])
+    assert result["mint-a"]["pairAddress"] == "active-pool"
+
+
+@pytest.mark.asyncio
 async def test_jupiter_batch_search_uses_comma_separated_mints() -> None:
     client = FakeJupiterClient()
     result = await client.tokens_by_mint(["mint-a", "mint-b"])
@@ -224,3 +248,13 @@ def test_jupiter_normalization_preserves_audit_semantics() -> None:
     assert tick.total_traders == 80
     assert tick.creator_supply_fraction == pytest.approx(0.04)
     assert tick.holder_shares == (0.10, 0.05)
+
+
+def test_missing_optional_flow_metrics_remain_unknown():
+    first_pool = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    tick = jupiter_launch_tick({
+        "id": "mint-a", "firstPool": {"createdAt": first_pool.isoformat()},
+        "usdPrice": 0.01, "liquidity": 1000,
+    }, observed_at=first_pool + timedelta(seconds=30))
+    assert tick.buy_volume_usd is None
+    assert tick.sell_volume_usd is None

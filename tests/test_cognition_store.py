@@ -22,8 +22,14 @@ def test_cognition_packet_roundtrip(tmp_path) -> None:
         input_tokens=10,
         output_tokens=20,
         total_tokens=30,
+        decision_id="decision-1",
+        trace_id="trace_00000000000000000000000000000001",
+        trace_status="submitted",
     )
     latest = store.latest()
     assert latest is not None
     assert latest["packet"]["thesis"] == "inspect"
+    assert latest["decision_id"] == "decision-1"
+    assert latest["trace_id"].startswith("trace_")
+    assert latest["trace_status"] == "submitted"
     assert store.calls_last_hour() == 1

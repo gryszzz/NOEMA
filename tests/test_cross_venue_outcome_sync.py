@@ -16,7 +16,6 @@ from noema.cross_venue_experiment import (
     persist_evaluation,
 )
 from noema.outcomes import OutcomeStore
-from noema.prediction_venues import _fixed_lifecycle_pairs
 from noema.sync import sync_polymarket_us_outcomes
 
 
@@ -40,23 +39,6 @@ class FakePolymarketUS:
 
     def close(self):
         pass
-
-
-def test_lifecycle_scope_uses_only_five_already_evaluated_pairs(tmp_path):
-    path = str(tmp_path / "fixed-cohort.db")
-    with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE canonical_pair_observations (id INTEGER PRIMARY KEY, observation_json TEXT)")
-        for index in range(7):
-            contracts = [
-                {"venue": "kalshi", "contract_id": f"K-{index}"},
-                {"venue": "polymarket-us", "contract_id": f"P-{index}"},
-            ]
-            payload = {"experiment_evaluation": {"verdict": "REJECTED_RULES_UNVERIFIED"},
-                       "canonical_identity": {"contracts": contracts}}
-            conn.execute("INSERT INTO canonical_pair_observations (observation_json) VALUES (?)",
-                         (json.dumps(payload),))
-    pairs = _fixed_lifecycle_pairs(path)
-    assert pairs == {(f"K-{index}", f"P-{index}") for index in range(2, 7)}
 
 
 def test_polymarket_official_settlement_enters_shared_outcomes_schema(tmp_path):

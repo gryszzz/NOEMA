@@ -13,6 +13,7 @@ def build_telemetry_report(
     orders: list[ObservedOrder],
     fills: list[ObservedFill],
     positions: list[ObservedPosition],
+    settlements: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     by_order = {order.order_id: order for order in orders}
     execution_rows = []
@@ -33,6 +34,7 @@ def build_telemetry_report(
         "orders": len(orders),
         "fills": len(fills),
         "positions": len(positions),
+        "settlements": len(settlements or []),
         "realized_pnl": sum((position.realized_pnl for position in positions), start=0),
         "fees_paid": sum((position.fees_paid for position in positions), start=0),
         "open_exposure": sum((position.exposure for position in positions), start=0),

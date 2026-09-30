@@ -126,7 +126,10 @@ def assess_trench_candidate(
     acceleration = _cap01(
         (_neutral(features.buyer_acceleration, midpoint=0.0) + 1) / 2
     )
-    flow = _cap01((features.signed_flow_imbalance + 1) / 2)
+    # Missing provider flow stays unknown in the persisted feature vector; this
+    # bounded risk term uses a neutral contribution when the optional field is absent.
+    flow = (0.5 if features.signed_flow_imbalance is None
+            else _cap01((features.signed_flow_imbalance + 1) / 2))
     participation = _neutral(features.participation_balance)
     organic_buyers = _neutral(features.organic_buyer_share)
     organic_volume = _neutral(features.organic_volume_fraction)

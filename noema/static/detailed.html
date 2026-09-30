@@ -56,7 +56,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
       <div id="ladder-steps" class="small">Loading…</div>
     </div>
 
-    <div class="card span3"><div class="k">Realized P&L</div><div class="v mono" id="pnl">—</div><div class="small">Exchange-reported positions</div></div>
+    <div class="card span3"><div class="k">Venue-reported realized P&L</div><div class="v mono" id="pnl">UNRECONCILED</div><div class="small">Raw account report only · excluded from authoritative NET P&amp;L until fully reconciled</div></div>
     <div class="card span3"><div class="k">Fees Paid</div><div class="v mono" id="fees">—</div><div class="small">Observed account fees</div></div>
     <div class="card span3"><div class="k">Observed Fills</div><div class="v mono" id="fills">—</div><div class="small">Authenticated telemetry</div></div>
     <div class="card span3"><div class="k">Resolved Markets</div><div class="v mono" id="resolved">0</div><div class="small">Research dataset</div></div>
@@ -115,24 +115,6 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
     </div>
 
     <div class="card span12">
-      <h2>Economic OS</h2>
-      <div class="grid" style="grid-template-columns:repeat(12,1fr);gap:10px">
-        <div class="card span3" style="min-height:90px"><div class="k">Autonomy</div><div class="v" id="econ-level">NOT INITIALIZED</div><div class="small" id="econ-transition">No economic review yet.</div></div>
-        <div class="card span3" style="min-height:90px"><div class="k">Economic Equity</div><div class="v mono" id="econ-equity">—</div><div class="small">Internal economic snapshot</div></div>
-        <div class="card span3" style="min-height:90px"><div class="k">High-Water Mark</div><div class="v mono" id="econ-hwm">—</div><div class="small">Only new profit above this is allocatable</div></div>
-        <div class="card span3" style="min-height:90px"><div class="k">New Allocatable Profit</div><div class="v mono" id="econ-profit">—</div><div class="small">Reviewable plan, not an automatic transfer</div></div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:10px" id="econ-buckets">
-        <div class="row"><span>Reserve</span><b id="econ-reserve">—</b></div>
-        <div class="row"><span>Strategy</span><b id="econ-strategy">—</b></div>
-        <div class="row"><span>Research</span><b id="econ-research">—</b></div>
-        <div class="row"><span>Infrastructure</span><b id="econ-infra">—</b></div>
-        <div class="row"><span>Treasury sweep</span><b id="econ-sweep">—</b></div>
-      </div>
-      <div class="small" style="margin-top:10px">Survival capital, strategy capital, R&D, infrastructure and treasury sweep are accounted separately. Promotions are gradual; demotions are immediate.</div>
-    </div>
-
-    <div class="card span12">
       <h2>Operating Bill</h2>
       <div class="grid" style="grid-template-columns:repeat(12,1fr);gap:10px">
         <div class="card span3"><div class="k">Monthly estimate</div><div class="v mono" id="bill-estimate">—</div></div>
@@ -141,8 +123,7 @@ footer{margin:18px 0;color:#647286;font-size:11px}.refresh{border:1px solid var(
         <div class="card span3"><div class="k">Uncovered estimate</div><div class="v mono" id="bill-uncovered">—</div></div>
       </div>
       <div class="small" id="bill-status" style="margin-top:10px">Set the monthly estimate and owner limit with noema bill-config.</div>
-      <div class="small">Operator-reported cash entries only. Paper returns and internal capital do not pay invoices. This tracker does not stop provider billing or make payments.</div>
-      <div class="small" id="economic-measurement" style="margin-top:10px">Economic measurement unavailable.</div>
+      <div class="small">Operator-reported cash entries only. Internal allocations do not pay invoices. This tracker does not stop provider billing or make payments.</div>
     </div>
 
     <div class="card span12">
@@ -307,27 +288,6 @@ async function refreshAll(){
    }
   }catch(e){}
   try{
-   const econ=await getJSON('/api/economy');
-   const snap=econ.snapshot;
-   const review=econ.latest_review;
-   if(snap){
-    document.getElementById('econ-equity').textContent=money(snap.current_equity_usd);
-    document.getElementById('econ-hwm').textContent=money(snap.high_water_equity_usd);
-    document.getElementById('econ-reserve').textContent=money(snap.reserve_usd);
-    document.getElementById('econ-strategy').textContent=money(snap.strategy_capital_usd);
-    document.getElementById('econ-research').textContent=money(snap.research_budget_usd);
-    document.getElementById('econ-infra').textContent=money(snap.infrastructure_budget_usd);
-    document.getElementById('econ-sweep').textContent=money(snap.treasury_sweep_usd);
-   }
-   if(econ.profit_plan){
-    document.getElementById('econ-profit').textContent=money(econ.profit_plan.profit_above_high_water_usd);
-   }
-   if(review){
-    document.getElementById('econ-level').textContent=String(review.next_level||'unknown').toUpperCase();
-    document.getElementById('econ-transition').textContent=review.transition_reason||'Economic review recorded.';
-   }
-  }catch(e){}
-  try{
    const bill=await getJSON('/api/bill');
    if(bill.estimated_monthly_bill_usd!==null)document.getElementById('bill-estimate').textContent=money(bill.estimated_monthly_bill_usd);
    document.getElementById('bill-receipts').textContent=money(bill.recorded_receipts_usd);
@@ -336,10 +296,6 @@ async function refreshAll(){
    const messages={estimate_missing:'Monthly bill estimate missing',over_owner_limit:'Estimated owner exposure exceeds your limit',covered_by_reported_receipts:'Estimated bill covered by reported receipts; verify invoices',within_owner_limit:'Estimated owner exposure within your limit'};
    document.getElementById('bill-status').textContent=bill.month_utc+' UTC · '+(messages[bill.status]||bill.status)+' · owner limit '+(bill.owner_limit_usd===null?'unset':money(bill.owner_limit_usd));
   }catch(e){document.getElementById('bill-status').textContent='Bill tracking unavailable.'}
-  try{
-   const m=await getJSON('/api/economic-measurement');
-   document.getElementById('economic-measurement').textContent=m.month_utc+' UTC · Recorded net cash '+money(m.cash.net_cash_usd)+' · Model reservations '+money(m.operating_estimates.model_reserved_usd)+' (estimates, not additional expenses) · Paper result after execution costs '+money(m.paper.net_after_execution_costs_usd)+' (operating costs excluded) · Full economic profit unknown; self-funding unproven.'+(m.status==='records_invalid'?' Invalid records excluded; investigate before using totals.':'');
-  }catch(e){document.getElementById('economic-measurement').textContent='Economic measurement unavailable.'}
   try{renderRadar(await getJSON('/api/radar'))}catch(e){renderRadar([])}
   try{
    const c=await getJSON('/api/compare');

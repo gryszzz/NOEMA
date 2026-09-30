@@ -59,6 +59,33 @@ def test_openclaw_session_persists_result_usage_cost_and_activity(tmp_path):
     store.conn.close()
 
 
+def test_runtime_status_explains_disabled_state_and_projects_latest_mission(tmp_path, monkeypatch):
+    from noema.mission_store import MissionStore
+
+    path = str(tmp_path / "noema.db")
+    missions = MissionStore(path)
+    mission = missions.discover(
+        trial_id="trench-rate-limit-audit", evidence_hash="a" * 64,
+        objective="Investigate repeated Solana RPC rate limits", specialist="trench-1",
+    )
+    handoff = missions.request_handoff(
+        mission, from_specialist="trench-1", to_specialist="openclaw-reviewer",
+        objective="Audit frozen rate-limit evidence", capability_grants=["read_bounded_result"],
+        resource_grant={"network": "denied", "live_execution": False},
+        contract={"mission_id": mission, "timeout_seconds": 30},
+    )
+    missions.finish_handoff(handoff, status="blocked", result={"status": "blocked"})
+    missions.close()
+
+    monkeypatch.delenv("NOEMA_OPENCLAW_ENABLED", raising=False)
+    status = openclaw_worker.runtime_status(path)
+    assert status["state"] == "disabled"
+    assert "NOEMA_OPENCLAW_ENABLED" in status["reason"]
+    assert status["last_mission"]["mission_id"] == mission
+    assert status["latest_evidence"] == "a" * 64
+    assert status["latest_result"]["status"] == "blocked"
+
+
 def test_result_schema_never_allows_worker_to_grant_live_eligibility():
     document = {
         "status": "reviewed", "verified_metrics": {}, "limitation": "No new evidence.",
@@ -67,6 +94,19 @@ def test_result_schema_never_allows_worker_to_grant_live_eligibility():
     }
     with pytest.raises(ValueError, match="live eligibility"):
         openclaw_worker._validate_result(json.dumps(document))
+
+
+def test_noema_critic_rejects_openclaw_metrics_absent_from_frozen_result():
+    worker = {
+        "verified_metrics": {"observations": 18, "wins": 2},
+        "next_priority": "require_forward_validation",
+    }
+    review = openclaw_worker.critic_worker_result(
+        worker, {"observations": 18}, evidence_hash="a" * 64,
+    )
+    assert review["verdict"] == "REJECT"
+    assert review["unsupported_metrics"] == ["wins"]
+    assert review["evidence_hash"] == "a" * 64
 
 
 def test_missing_gateway_uses_runtime_compose_files_and_derived_project(tmp_path, monkeypatch):

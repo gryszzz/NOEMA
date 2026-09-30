@@ -9,6 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .cognition_models import CognitionPacket
+from .economic_ledger import EconomicEvent, ensure_economic_event_schema, record_event_on_connection
 
 
 def _next_month(day: str) -> str:
@@ -21,6 +22,7 @@ class CognitionStore:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db)
+        self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS cognition_packets (
@@ -50,6 +52,16 @@ class CognitionStore:
             """
         )
         self.conn.commit()
+        with self.conn:
+            packet_columns = {
+                row[1] for row in self.conn.execute("PRAGMA table_info(cognition_packets)")
+            }
+            if "decision_id" not in packet_columns:
+                self.conn.execute("ALTER TABLE cognition_packets ADD COLUMN decision_id TEXT")
+            if "trace_id" not in packet_columns:
+                self.conn.execute("ALTER TABLE cognition_packets ADD COLUMN trace_id TEXT")
+            if "trace_status" not in packet_columns:
+                self.conn.execute("ALTER TABLE cognition_packets ADD COLUMN trace_status TEXT")
         # Existing reservations remain unknown, never silently treated as zero
         # token usage. Serialize migration against other worker connections.
         with self.conn:
@@ -71,10 +83,19 @@ class CognitionStore:
                 self.conn.execute(
                     "ALTER TABLE cognition_budget_reservations ADD COLUMN activity_id TEXT"
                 )
+            if "provider" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE cognition_budget_reservations ADD COLUMN provider TEXT"
+                )
+            if "model" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE cognition_budget_reservations ADD COLUMN model TEXT"
+                )
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS cognition_reservations_activity_id "
                 "ON cognition_budget_reservations(activity_id)"
             )
+        ensure_economic_event_schema(self.conn)
 
     def reserve_estimated_cost(
         self, cost_usd: float, *, daily_limit_usd: float,
@@ -85,6 +106,8 @@ class CognitionStore:
         market_id: str | None = None,
         activity_id: str | None = None,
         cooldown_seconds: float = 0,
+        provider: str = "cognition",
+        model: str | None = None,
         now: datetime | None = None,
     ) -> bool:
         """Reserve call, token and cost estimates together, including failed attempts.
@@ -158,10 +181,23 @@ class CognitionStore:
                     return False
             self.conn.execute(
                 "INSERT INTO cognition_budget_reservations "
-                "(day_utc, estimated_usd, created_at, estimated_tokens, market_id, activity_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (day, cost_usd, now.isoformat(), estimated_tokens, market_id, activity_id),
+                "(day_utc, estimated_usd, created_at, estimated_tokens, market_id, activity_id,"
+                "provider,model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (day, cost_usd, now.isoformat(), estimated_tokens, market_id, activity_id,
+                 provider, model),
             )
+            reservation_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            reservation = EconomicEvent(
+                provider=provider, external_reference_id=f"cognition-reservation:{reservation_id}",
+                event_type="model_cost_reservation", occurred_at=now, currency="USD",
+                amount=Decimal(str(cost_usd)), amount_usd=Decimal(str(cost_usd)),
+                reconciliation_state="ESTIMATED", value_state="reservation",
+                capital_class="cost", confidence_state="estimated", completeness_state="incomplete",
+                activity_id=activity_id, lane="cognition",
+                evidence={"reservation_id": reservation_id, "model": model,
+                          "estimated_tokens": estimated_tokens, "market_id": market_id},
+            )
+            record_event_on_connection(self.conn, reservation)
             self.conn.commit()
             return True
         except Exception:
@@ -177,6 +213,9 @@ class CognitionStore:
         input_tokens: int,
         output_tokens: int,
         total_tokens: int,
+        decision_id: str | None = None,
+        trace_id: str | None = None,
+        trace_status: str | None = None,
     ) -> None:
         if (any(type(value) is not int or value < 0
                 for value in (input_tokens, output_tokens, total_tokens))
@@ -186,8 +225,8 @@ class CognitionStore:
             """
             INSERT INTO cognition_packets
             (created_at, market_id, deployment, response_id, packet_json,
-             input_tokens, output_tokens, total_tokens)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             input_tokens, output_tokens, total_tokens, decision_id, trace_id, trace_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now(UTC).isoformat(),
@@ -198,6 +237,9 @@ class CognitionStore:
                 input_tokens,
                 output_tokens,
                 total_tokens,
+                decision_id,
+                trace_id,
+                trace_status,
             ),
         )
         self.conn.commit()
@@ -260,7 +302,8 @@ class CognitionStore:
         row = self.conn.execute(
             """
             SELECT created_at, market_id, deployment, packet_json,
-                   input_tokens, output_tokens, total_tokens
+                   input_tokens, output_tokens, total_tokens, decision_id, trace_id,
+                   trace_status
             FROM cognition_packets
             ORDER BY id DESC
             LIMIT 1
@@ -276,6 +319,9 @@ class CognitionStore:
             "input_tokens": row[4],
             "output_tokens": row[5],
             "total_tokens": row[6],
+            "decision_id": row[7],
+            "trace_id": row[8],
+            "trace_status": row[9],
         }
 
 

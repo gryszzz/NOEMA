@@ -20,6 +20,49 @@ def test_missing_database_is_not_created(tmp_path):
     assert all(s["status"] == "not_recorded" for s in result["sections"].values())
 
 
+def test_experiment_projection_links_persisted_runs_evidence_decisions_and_critic(tmp_path):
+    path = tmp_path / "experiment-projection.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE research_trials(
+                trial_id,family,hypothesis,feature_set_version,status,created_at,parent_trial_id,params_json
+            );
+            CREATE TABLE autonomous_research_runs(
+                id,trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,
+                completed_at,elapsed_seconds,compute_cost_usd,result_json,evidence_path,mission_id
+            );
+            CREATE TABLE forecast_ledger(id,created_at,venue,market_id,forecast_json,action_json);
+        """)
+        conn.execute("INSERT INTO research_trials VALUES(?,?,?,?,?,?,?,?)", (
+            "trial-a", "kalshi-history", "Check live history", "v1", "completed",
+            NOW.isoformat(), None, json.dumps({"strategy_id": "strat-a", "market_id": "MKT-A"}),
+        ))
+        conn.executemany("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            (1, "trial-a", "critic", "history", "hash-a", "v1", "completed",
+             NOW.isoformat(), NOW.isoformat(), 1.0, None,
+             json.dumps({"observations": 7, "critic_review": {"verdict": "PASS"}}), None, None),
+            (2, "trial-a", "critic", "history", "", "v1", "completed",
+             NOW.isoformat(), NOW.isoformat(), 1.0, None, json.dumps({"observations": 3}), None, None),
+        ])
+        conn.execute("INSERT INTO forecast_ledger VALUES(?,?,?,?,?,?)", (
+            1, NOW.isoformat(), "kalshi", "MKT-A",
+            json.dumps({"trial_id": "trial-a", "strategy_id": "strat-a"}),
+            json.dumps({"decision": "pass"}),
+        ))
+
+    sections = build_operations(str(path), now=NOW)["sections"]
+    experiment = sections["experiments"]["rows"][0]
+    run = next(item for item in sections["research_runs"]["rows"] if item["id"] == 1)
+    assert experiment["strategy_id"] == "strat-a"
+    assert experiment["market_id"] == "MKT-A"
+    assert experiment["run_count"] == 2
+    assert experiment["evidence_count"] == 1
+    assert experiment["decision_count"] == 1
+    assert experiment["strategy_decision_count"] == 1
+    assert run["observations"] == 7
+    assert json.loads(run["result"])["critic_review"]["result_accepted"] is True
+
+
 def test_bounded_read_only_records_and_private_json_excluded(tmp_path):
     path = tmp_path / "work.db"
     with sqlite3.connect(path) as conn:
@@ -73,7 +116,7 @@ def test_runtime_requires_recent_nonfuture_heartbeat(tmp_path):
     path = tmp_path / "runtime.db"
     with sqlite3.connect(path) as conn:
         conn.execute("CREATE TABLE agent_runtime(agent_id,status_json)")
-        for age, expected in ((10, "running"), (200, "stale"), (-10, "unknown")):
+        for age, expected in ((10, "unknown"), (200, "stale"), (-10, "unknown")):
             conn.execute("DELETE FROM agent_runtime")
             conn.execute("INSERT INTO agent_runtime VALUES(?,?)", ("noema", json.dumps({
                 "running": True, "last_heartbeat_at": (NOW-timedelta(seconds=age)).isoformat(),
@@ -222,8 +265,44 @@ def test_recent_heartbeat_exposes_degraded_cycle_health(tmp_path):
             "last_cycle": {"health": "degraded", "active_goal": "bounded research"},
         })))
     runtime = build_operations(str(path), now=NOW)["runtime"]
-    assert runtime["state"] == "running"
+    assert runtime["state"] == "unknown"
+    assert runtime["liveness"] == "UNKNOWN"
     assert runtime["health"] == "degraded"
+
+
+def test_runtime_exposes_persisted_cycle_stage_timings(tmp_path):
+    path = tmp_path / "runtime.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE agent_runtime(agent_id,status_json)")
+        conn.execute("INSERT INTO agent_runtime VALUES(?,?)", ("noema", json.dumps({
+            "running": True,
+            "last_heartbeat_at": NOW.isoformat(),
+            "last_cycle": {"cycle_id": 374, "health": "healthy", "active_goal": "research", "cadence_seconds": 120},
+        })))
+        conn.execute("CREATE TABLE agent_cycle_timings(cycle_id,duration_seconds,stage_timings_json)")
+        conn.execute("INSERT INTO agent_cycle_timings VALUES(?,?,?)", (
+            374, 147.2, json.dumps({"market_collection": 121.3, "state_persistence": 0.2}),
+        ))
+    runtime = build_operations(str(path), now=NOW)["runtime"]
+    assert runtime["cycle"]["duration_seconds"] == 147.2
+    assert runtime["cycle"]["cadence_seconds"] == 120
+    assert runtime["cycle"]["stage_timings"]["market_collection"] == 121.3
+
+
+def test_stopped_agent_is_offline_even_with_a_recent_heartbeat(tmp_path):
+    path = tmp_path / "runtime.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE agent_runtime(agent_id,status_json)")
+        conn.execute("INSERT INTO agent_runtime VALUES(?,?)", ("noema", json.dumps({
+            "running": False,
+            "last_heartbeat_at": NOW.isoformat(),
+            "last_cycle": {"health": "degraded"},
+        })))
+
+    runtime = build_operations(str(path), now=NOW)["runtime"]
+
+    assert runtime["state"] == "stopped"
+    assert runtime["liveness"] == "STOPPED"
 
 
 def test_corrupt_database_fails_explicitly(tmp_path):

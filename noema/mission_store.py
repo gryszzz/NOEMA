@@ -13,7 +13,9 @@ MISSION_STATES = frozenset({
     "discovered", "queued", "claimed", "running", "waiting", "passed",
     "completed", "failed", "interrupted", "quarantined", "superseded",
 })
-HANDOFF_STATES = frozenset({"requested", "accepted", "running", "completed", "failed", "declined"})
+HANDOFF_STATES = frozenset({
+    "requested", "accepted", "running", "completed", "blocked", "failed", "declined",
+})
 CAPABILITIES = frozenset({
     "execute_allowlisted_research_handler", "read_research_result", "read_evidence_digest",
     "read_bounded_result", "return_structured_critique",
@@ -298,11 +300,18 @@ class MissionStore:
             self._event(mission_id, actor[:80], event_type, "observed", detail, payload)
 
     def request_handoff(self, mission_id: str, *, from_specialist: str, to_specialist: str,
-                        objective: str, capability_grants: list[str], resource_grant: dict[str, Any]) -> str:
+                        objective: str, capability_grants: list[str], resource_grant: dict[str, Any],
+                        contract: dict[str, Any] | None = None) -> str:
         if not from_specialist.strip() or not to_specialist.strip() or not objective.strip():
             raise ValueError("handoff requires source, recipient and bounded objective")
         capability_payload = _grants(capability_grants)
         resource_payload = _resources(resource_grant)
+        contract_payload = contract or {}
+        if not isinstance(contract_payload, dict) or len(contract_payload) > 12:
+            raise ValueError("handoff contract exceeds its shape bound")
+        encoded_contract = json.dumps(contract_payload, sort_keys=True, allow_nan=False)
+        if len(encoded_contract.encode("utf-8")) > 4096:
+            raise ValueError("handoff contract exceeds its size bound")
         handoff_id, now = str(uuid.uuid4()), _now()
         with self.conn:
             exists = self.conn.execute("SELECT 1 FROM missions WHERE mission_id=?", (mission_id,)).fetchone()
@@ -318,7 +327,9 @@ class MissionStore:
                 "AND status IN ('claimed','running')", (now, mission_id),
             )
             self._event(mission_id, from_specialist, "handoff_requested", "waiting",
-                        f"Handoff requested from {to_specialist}", {"handoff_id": handoff_id})
+                        f"Handoff requested from {to_specialist}", {
+                            "handoff_id": handoff_id, "contract": contract_payload,
+                        })
         return handoff_id
 
     def finish_handoff(self, handoff_id: str, *, status: str, result: dict[str, Any] | None = None) -> None:

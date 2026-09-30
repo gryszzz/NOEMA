@@ -27,6 +27,10 @@ from .local_env import load_local_env
 from .outcomes import OutcomeStore
 from .paired_evaluation import compare_history_to_market
 from .paper_research import PaperResearchStore, collect_paper_quote
+from .polymarket_owner_evidence import (
+    ingest_polymarket_owner_export,
+    inspect_polymarket_owner_export,
+)
 from .setup_wizard import run_setup_wizard
 from .soak import SoakStore
 from .soak_report import build_soak_quality_report
@@ -363,6 +367,18 @@ def main() -> None:
     bill_show = sub.add_parser("bill-show")
     bill_show.add_argument("--db", default="data/noema.db")
 
+    pm_import = sub.add_parser("polymarket-owner-import")
+    pm_import.add_argument("--db", default="data/noema.db")
+    pm_import.add_argument("--input", required=True,
+                           help="owner-controlled local CSV/JSON statement or activity export")
+    pm_import.add_argument("--source-reference", default=None,
+                           help="optional owner-chosen reference; original source file is never modified")
+    pm_import.add_argument("--month", default="2026-09")
+
+    pm_inspect = sub.add_parser("polymarket-owner-inspect")
+    pm_inspect.add_argument("--input", required=True,
+                            help="owner-controlled local export; schema metadata only is printed")
+
     sync = sub.add_parser("sync-outcomes")
     sync.add_argument("--db", default="data/noema.db")
     sync.add_argument("--limit", type=int, default=None)
@@ -446,6 +462,13 @@ def main() -> None:
         print(json.dumps(tracker.overview(), sort_keys=True))
     elif args.command == "bill-show":
         print(json.dumps(BillTracker(args.db).overview(), sort_keys=True))
+    elif args.command == "polymarket-owner-import":
+        print(json.dumps(ingest_polymarket_owner_export(
+            args.input, db_path=args.db, source_reference=args.source_reference,
+            month_utc=args.month,
+        ), sort_keys=True, allow_nan=False))
+    elif args.command == "polymarket-owner-inspect":
+        print(json.dumps(inspect_polymarket_owner_export(args.input), sort_keys=True, allow_nan=False))
     elif args.command == "check-config":
         print(json.dumps(diagnostic_dict(), sort_keys=True))
     else:

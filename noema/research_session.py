@@ -10,17 +10,19 @@ import sqlite3
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from .agent_identity import AgentIdentity
+from .agent_identity import MISSION_OPERATIONAL_GOALS, AgentIdentity
 from .bill_tracker import BillTracker
 from .cloudflare_client import CloudflareCognitionClient
 from .cloudflare_config import CloudflareConfig
 from .cognition_policy import CognitionPolicy
 from .cognition_store import CognitionStore
+from .economic_ledger import EconomicEvent, EconomicLedger
 from .knowledge import KnowledgeStore
 from .local_cognition import LocalCognitionClient
 from .openai_client import OpenAICognitionClient, _completed_text
@@ -527,6 +529,8 @@ async def _cloudflare_triage(
                 hourly_token_limit=policy.max_tokens_per_hour,
                 market_id="economic-research-session",
                 activity_id=session_id,
+                provider="cloudflare",
+                model=config.model,
             )
         finally:
             bills.conn.close()
@@ -585,6 +589,7 @@ async def _openai_triage(
     }
     if config.supports_reasoning_effort:
         body["reasoning"] = {"effort": config.reasoning_effort}
+    decision_id = str(uuid.uuid4())
     estimate = len(json.dumps(body).encode()) + 256
     try:
         bound = policy.estimated_max_call_usd(
@@ -606,6 +611,8 @@ async def _openai_triage(
                 hourly_token_limit=policy.max_tokens_per_hour,
                 market_id="economic-research-session",
                 activity_id=session_id,
+                provider="openai",
+                model=config.model,
             )
         finally:
             bills.conn.close()
@@ -618,9 +625,22 @@ async def _openai_triage(
     store.event(session_id, "cognition", "started", "Budget-reserved hosted triage", tool="openai")
     client = OpenAICognitionClient(config)
     try:
-        payload = await client.structured_research(body)
+        payload = await client.structured_research(body, trace_metadata={
+            "mission_id": "unassigned",
+            "decision_id": decision_id,
+            "specialist": "research-allocator",
+            "research_experiment": "research-selection",
+            "provider": "openai",
+            "financial_mode": "research-only",
+            "authority_state": "no-execution-authority",
+        })
     finally:
         await client.close()
+        store.event(
+            session_id, "openai_trace", client.last_trace_status,
+            f"Decision {decision_id}; trace {client.last_trace_id or 'unavailable'}",
+            tool="openai_agents_tracing",
+        )
     selection = json.loads(_completed_text(payload))
     usage = payload.get("usage")
     if not isinstance(usage, dict):
@@ -702,19 +722,11 @@ async def choose_research(
         "compute_cost_usd": None,
         "expected_net_profit_usd": None,
     }
-    goal_labels = {
-        "investigate_high_attention_market": "investigate a high-attention market",
-        "develop_specialist": "develop the currently evidence-favored specialist",
-        "calibrate_and_collect": "improve forecasting calibration and collect current evidence",
-        "collect_world_state": "collect missing current world-state evidence",
-        "model_guided_investigation": "investigate the supplied market cognition request",
-        "collect_requested_research": "collect the requested research evidence",
-        "execute_registered_research": "execute one eligible registered research experiment",
-    }
     if selected_goal is not None:
-        if selected_goal not in goal_labels:
+        mission_objective = MISSION_OPERATIONAL_GOALS.get(selected_goal)
+        if mission_objective is None:
             return "idle"
-        inputs["selected_operational_goal"] = goal_labels[selected_goal]
+        inputs["selected_operational_goal"] = mission_objective
     if evidence_id:
         evidence = EvidenceStore(store.path)
         try:
@@ -735,7 +747,10 @@ async def choose_research(
         "mechanics only; it is not evidence of demand, profitability, or empirical edge. "
         "Separate documented facts from NOEMA hypotheses and measured beliefs, and cite "
         "source IDs/versions when relying on mechanics. "
-        "Return only JSON with trial_id, rationale and unknowns. Never invent observations."
+        "Return only JSON with trial_id, rationale and unknowns. Never invent observations. "
+        "The master mission optimizes for verified realized economic value after all "
+        "attributable costs and risk; do not claim profit from owner funding, paper or "
+        "unrealized results, gross receipts, or unknown cost coverage."
     )
     if selected_goal is not None:
         instructions += (
@@ -745,7 +760,15 @@ async def choose_research(
             "create activity."
         )
     schema = _schema(trial_ids)
-    local = os.getenv("NOEMA_LOCAL_COGNITION_ENABLED", "0") == "1"
+    preferred_provider = os.getenv("NOEMA_COGNITION_PROVIDER", "auto").strip().lower()
+    # An explicit provider is authoritative for this cognition request. In
+    # particular, selecting OpenAI must not silently route strategic work to a
+    # ready Cloudflare account (or a local model). Automatic fallback remains
+    # unavailable until it has its own auditable provider-budget contract.
+    local = (
+        preferred_provider == "auto"
+        and os.getenv("NOEMA_LOCAL_COGNITION_ENABLED", "0") == "1"
+    )
     local_lease = None
     local_client = None
     if local:
@@ -820,7 +843,30 @@ async def choose_research(
             await client.close()
             local_lease.release()
             local_lease = None
-    if not local and cloudflare.ready:
+    if not local and preferred_provider == "openai" and hosted.ready:
+        try:
+            hosted_result = await _openai_triage(
+                store,
+                session_id,
+                instructions,
+                inputs,
+                schema,
+                hosted,
+            )
+        except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError):
+            hosted_result = None
+        if hosted_result is not None:
+            provider, model = "openai", str(hosted.model)
+            selection, usage, model_cost = hosted_result
+        else:
+            store.event(
+                session_id,
+                "cognition",
+                "idle",
+                "Hosted cognition unavailable or outside its owner-approved budget",
+                tool="openai",
+            )
+    elif not local and preferred_provider in {"cloudflare", "auto"} and cloudflare.ready:
         try:
             hosted_result = await _cloudflare_triage(
                 store,
@@ -843,7 +889,7 @@ async def choose_research(
                 "Hosted cognition unavailable or outside its owner-approved budget",
                 tool="cloudflare_workers_ai",
             )
-    elif not local and hosted.ready:
+    elif not local and preferred_provider == "auto" and hosted.ready:
         try:
             hosted_result = await _openai_triage(
                 store,
@@ -901,6 +947,25 @@ async def choose_research(
                 session_id,
             ),
         )
+    if model_cost is not None and provider in {"openai", "cloudflare"}:
+        economics = EconomicLedger(store.path)
+        try:
+            usage_cost = Decimal(str(model_cost))
+            economics.record_event(EconomicEvent(
+                provider=provider, external_reference_id=f"{session_id}:usage",
+                event_type="model_usage_cost_estimate", occurred_at=datetime.now(UTC),
+                currency="USD", amount=usage_cost, amount_usd=usage_cost,
+                reconciliation_state="ESTIMATED", value_state="realized",
+                capital_class="cost", confidence_state="estimated",
+                completeness_state="incomplete", activity_id=selection["trial_id"],
+                lane="cognition", evidence={"session_id": session_id, "model": model,
+                                             "input_tokens": input_tokens,
+                                             "output_tokens": output_tokens,
+                                             "cached_tokens": cached_tokens,
+                                             "price_source": "configured model rate; invoice not reconciled"},
+            ))
+        finally:
+            economics.conn.close()
     store.event(
         session_id,
         "prioritize",

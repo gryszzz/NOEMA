@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from .economic_investigations import latest_current_period_investigation
+from .economic_ledger import EconomicLedger
 from .history_forecaster import MODEL_VERSION
 from .paper_execution import parse_aware_time
 from .paper_settlements import load_paper_settlements
@@ -25,8 +27,8 @@ def build_economic_measurement(
 ) -> dict[str, object]:
     """Current UTC month through `now`; does not create or migrate a database.
 
-    Receipt/expense classification is operator-reported. There is no reconciliation
-    or full-cost coverage attestation yet, so net economic profit stays unknown.
+    Receipt/expense classification is operator-reported. Without reconciled events
+    and complete provider-period coverage attestations, net economic profit stays unknown.
     Model reservations are exposure estimates, never additional booked expenses.
     """
     now = now or datetime.now(UTC)
@@ -191,6 +193,21 @@ def build_economic_measurement(
 
     paper = load_paper_settlements(path, now=now)
     monthly_paper = [item for item in paper.settlements if start <= item.observed_at <= now]
+    paper_pnl = Decimal(0)
+    paper_pnl_series = []
+    series_stride = max(1, (len(monthly_paper) + 179) // 180)
+    for index, item in enumerate(monthly_paper):
+        paper_pnl += item.net_pnl_usd
+        if index % series_stride == 0 or index == len(monthly_paper) - 1:
+            paper_pnl_series.append({
+                "observed_at": item.observed_at.isoformat(),
+                "venue": item.venue,
+                "market_id": item.market_id,
+                "realized_net_usd": str(item.net_pnl_usd),
+                "cumulative_net_usd": str(paper_pnl),
+            })
+    canonical = EconomicLedger.read_projection(path, month_utc=start.strftime("%Y-%m"))
+    canonical["investigation_decision"] = latest_current_period_investigation(path, now=now)
     net_cash = receipts - expenses
     return {
         "as_of": now.isoformat(), "month_utc": start.strftime("%Y-%m"),
@@ -246,13 +263,32 @@ def build_economic_measurement(
             "model_version": MODEL_VERSION,
             "settled_markets_this_month": len(monthly_paper),
             "settled_events_this_month": len({item.event_id for item in monthly_paper}),
-            "net_after_execution_costs_usd": str(sum(
-                (item.net_pnl_usd for item in monthly_paper), Decimal(0),
-            )),
+            "net_after_execution_costs_usd": str(paper_pnl),
+            "pnl_series": paper_pnl_series,
             "pending_markets": paper.pending_quote_count,
             "invalid_quotes": paper.invalid_quote_count,
             "duplicate_quotes": paper.duplicate_quote_count,
             "basis": "hypothetical fills; operating costs and capital opportunity cost excluded",
+        },
+        "canonical_ledger": canonical,
+        "mission_progress": {
+            "optimization_target": "verified realized economic value after attributable costs and risk",
+            "status": "verified" if canonical.get("self_funding_ratio") is not None else "unproven",
+            "verified_realized_revenue_usd": canonical.get("verified_realized_revenue_usd"),
+            "complete_attributable_costs_usd": canonical.get("verified_attributable_costs_usd"),
+            "verified_cost_adjusted_value_usd": canonical.get("net_verified_contribution_usd"),
+            "reserve_balance_usd": canonical.get("operating_reserve_usd"),
+            "self_funding_ratio": canonical.get("self_funding_ratio"),
+            "known_operator_reported_cash_receipts_usd": str(receipts),
+            "known_operator_reported_cash_expenses_usd": str(expenses),
+            "monthly_operating_estimate_usd": str(estimate) if estimate is not None else None,
+            "owner_funded_reconciled_subtotal_usd": canonical.get("owner_funded_subtotal_usd"),
+            "unreconciled_amount_usd": canonical.get("unreconciled_amount_usd"),
+            "unknowns": canonical.get("unknowns", []),
+            "basis": (
+                "reconciled provider revenue, complete attributable costs, and audited reserves "
+                "are not yet available; reported cash, estimates, and paper outcomes stay separate"
+            ),
         },
         "invalid_accounting_records": invalid,
         "net_economic_profit_usd": None,

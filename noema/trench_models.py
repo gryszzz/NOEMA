@@ -36,8 +36,8 @@ class LaunchTick:
     observed_at: datetime
     price_usd: float
     liquidity_usd: float
-    buy_volume_usd: float
-    sell_volume_usd: float
+    buy_volume_usd: float | None = None
+    sell_volume_usd: float | None = None
     unique_buyers: int | None = None
     unique_sellers: int | None = None
     organic_net_buyers: int | None = None
@@ -55,7 +55,8 @@ class LaunchTick:
             raise ValueError("observed_at must be timezone-aware")
         if self.price_usd < 0 or self.liquidity_usd < 0:
             raise ValueError("price and liquidity must be non-negative")
-        if self.buy_volume_usd < 0 or self.sell_volume_usd < 0:
+        if ((self.buy_volume_usd is not None and self.buy_volume_usd < 0)
+                or (self.sell_volume_usd is not None and self.sell_volume_usd < 0)):
             raise ValueError("volumes must be non-negative")
         for name in (
             "organic_buy_volume_usd",
@@ -91,7 +92,7 @@ class TrenchFeatures:
     return_fraction: float
     max_drawdown_fraction: float
     liquidity_growth_fraction: float
-    signed_flow_imbalance: float
+    signed_flow_imbalance: float | None
     buyer_growth_fraction: float | None
     buyer_acceleration: float | None
     participation_balance: float | None

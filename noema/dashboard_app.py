@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import logging
 import os
 import secrets
 import sqlite3
@@ -9,12 +10,13 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .account_capital import value_native_wallets
 from .agent_dashboard import build_agent_overview
 from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview, build_provider_health
@@ -33,10 +35,17 @@ from .execution_gateway import ExecutionGateway
 from .kalshi_telemetry import KalshiTelemetry
 from .knowledge import build_knowledge_overview
 from .ladder import build_ladder_report
+from .live_balance import balance_history
+from .market_qualification import build_market_data_qualification
 from .operations_dashboard import build_operations
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
-from .prediction_venues import build_prediction_venue_status
+from .polymarket_account_stream import run_polymarket_account_stream
+from .prediction_venues import (
+    apply_polymarket_stream_projection,
+    build_prediction_venue_status,
+    cached_prediction_venue_status,
+)
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
@@ -46,6 +55,11 @@ app = FastAPI(title="NOEMA Ops Console", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 _wallet_status_cache: dict[str, Any] = {"fetched_at": 0.0, "networks": []}
 _wallet_status_lock = asyncio.Lock()
+_capital_sampler_task: asyncio.Task | None = None
+_polymarket_stream_task: asyncio.Task | None = None
+_log = logging.getLogger(__name__)
+
+
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 _MAX_DATABASE_BYTES = 512 * 1024 * 1024
 
@@ -93,6 +107,72 @@ async def protect_console(request: Request, call_next):
                 headers={"WWW-Authenticate": 'Basic realm="NOEMA Operations", charset="UTF-8"'},
             )
     return await call_next(request)
+
+
+
+def _capital_sample_interval() -> int:
+    try:
+        return max(15, min(300, int(os.getenv("NOEMA_CAPITAL_SAMPLE_INTERVAL_SECONDS", "15"))))
+    except ValueError:
+        return 15
+
+
+def _capital_sample_sleep_seconds(interval: int, cycle_started: float,
+                                 now: float | None = None) -> float:
+    """Keep the sampler start-to-start cadence bounded by its target interval."""
+    elapsed = max(0.0, (time.monotonic() if now is None else now) - cycle_started)
+    return max(0.0, interval - elapsed)
+
+
+async def _sample_capital_history() -> None:
+    """Persist observed account marks on a bounded cadence, independent of page clients."""
+    while True:
+        cycle_started = time.monotonic()
+        if not Path(_db_path()).is_file():
+            await asyncio.sleep(_capital_sample_sleep_seconds(
+                _capital_sample_interval(), cycle_started,
+            ))
+            continue
+        try:
+            # Bypass request caches: this sampler owns the collection cadence,
+            # so each runtime cycle must perform a new authenticated read.
+            wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
+            stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
+            await asyncio.to_thread(
+                balance_history, _db_path(), venues,
+                {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
+                window="24H", stripe=stripe,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error, TimeoutError):
+            _log.warning("Capital history sampler could not complete an observation")
+        await asyncio.sleep(_capital_sample_sleep_seconds(
+            _capital_sample_interval(), cycle_started,
+        ))
+
+
+@app.on_event("startup")
+async def start_capital_sampler() -> None:
+    global _capital_sampler_task, _polymarket_stream_task
+    if os.getenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+        _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
+    _polymarket_stream_task = asyncio.create_task(
+        run_polymarket_account_stream(_db_path, apply_polymarket_stream_projection),
+        name="noema-polymarket-account-stream",
+    )
+
+
+@app.on_event("shutdown")
+async def stop_capital_sampler() -> None:
+    global _capital_sampler_task, _polymarket_stream_task
+    for task in (_capital_sampler_task, _polymarket_stream_task):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    _capital_sampler_task = None
+    _polymarket_stream_task = None
 
 
 def _db_path() -> str:
@@ -315,6 +395,12 @@ async def compare() -> dict[str, Any]:
     return compare_history_to_market(_db_path()).as_dict()
 
 
+@app.get("/api/market-data-qualification")
+def market_data_qualification() -> dict[str, Any]:
+    """Current research/data readiness, kept separate from execution authority."""
+    return build_market_data_qualification(_db_path())
+
+
 @app.get("/api/cognition")
 async def cognition() -> dict[str, Any]:
     replica = os.getenv("NOEMA_RUNTIME_SOURCE") == "worker-sqlite-replica"
@@ -398,19 +484,22 @@ async def execution_gateway_status() -> dict[str, Any]:
 
 
 @app.get("/api/wallet-status")
-async def wallet_status() -> dict[str, Any]:
+async def wallet_status(*, force: bool = False) -> dict[str, Any]:
     now = time.monotonic()
-    if now - float(_wallet_status_cache["fetched_at"]) > 60:
+    if force or now - float(_wallet_status_cache["fetched_at"]) > 15:
         async with _wallet_status_lock:
             now = time.monotonic()
-            if now - float(_wallet_status_cache["fetched_at"]) > 60:
-                _wallet_status_cache["networks"] = await live_wallet_networks()
+            if force or now - float(_wallet_status_cache["fetched_at"]) > 15:
+                networks = await live_wallet_networks()
+                _wallet_status_cache["networks"] = await value_native_wallets(networks)
                 _wallet_status_cache["fetched_at"] = time.monotonic()
+                _wallet_status_cache["observed_at"] = datetime.now(UTC).isoformat()
     policy = public_wallet_policy()
     policy_by_chain = {row["chain"]: row for row in policy.get("wallet_networks", [])}
     networks = []
     for cached in _wallet_status_cache["networks"]:
         row = dict(cached)
+        row["observed_at"] = _wallet_status_cache.get("observed_at")
         current = policy_by_chain.get(row.get("chain"), {})
         # Balance/connection evidence is briefly cached; authority/configuration
         # flags are recomputed on every request so stale settings cannot appear live.
@@ -424,6 +513,8 @@ async def wallet_status() -> dict[str, Any]:
         networks.append(row)
     return {
         "as_of_monotonic": _wallet_status_cache["fetched_at"],
+        "observed_at": _wallet_status_cache.get("observed_at"),
+        "refresh_interval_seconds": 15,
         "control_plane": {
             "live_execution_enabled": False,
             "mission_authority_present": False,
@@ -433,6 +524,14 @@ async def wallet_status() -> dict[str, Any]:
         },
         "networks": networks,
     }
+
+
+@app.get("/api/capital-history")
+async def capital_history(window: Literal["1H", "24H", "7D", "30D", "ALL"] = "24H") -> dict:
+    wallets = {"networks": _wallet_status_cache["networks"],
+               "observed_at": _wallet_status_cache.get("observed_at")}
+    return await asyncio.to_thread(balance_history, _db_path(), cached_prediction_venue_status(),
+                                   wallets, window=window, stripe=stripe_economy_overview(_db_path()))
 
 
 @app.get("/api/live-account")
@@ -451,16 +550,27 @@ async def live_account() -> dict[str, Any]:
             telemetry.fills(),
             telemetry.positions(),
         )
-        return build_telemetry_report(
+        try:
+            settlements = await telemetry.settlements()
+        except Exception as exc:  # noqa: BLE001 - retain partial account coverage on provider errors
+            settlements = []
+            telemetry.coverage["settlements"] = {
+                "complete": False, "pages": 0, "records": 0,
+                "error_type": type(exc).__name__,
+            }
+        report = build_telemetry_report(
             orders=orders,
             fills=fills,
             positions=positions,
+            settlements=settlements,
         )
+        report["history_coverage"] = dict(telemetry.coverage)
+        return report
     finally:
         await telemetry.close()
 
 
 @app.get("/api/prediction-venues")
-async def prediction_venues() -> dict[str, Any]:
+async def prediction_venues(*, force: bool = False) -> dict[str, Any]:
     """Current official read-only status for supported prediction venues."""
-    return await build_prediction_venue_status()
+    return await build_prediction_venue_status(force=force)

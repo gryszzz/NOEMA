@@ -46,6 +46,19 @@ class TrenchResearchStore:
             )
             """
         )
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS trench_candidate_maturities (
+                candidate_id TEXT PRIMARY KEY,
+                target_at TEXT NOT NULL,
+                state TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                next_retry_at TEXT,
+                detail TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(candidate_id) REFERENCES trench_candidates(candidate_id)
+            )"""
+        )
         self.conn.commit()
 
     @staticmethod
@@ -93,8 +106,39 @@ class TrenchResearchStore:
                 payload,
             ),
         )
+        launch_table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='trench_launches'"
+        ).fetchone()
+        launch = (self.conn.execute(
+            "SELECT first_pool_at FROM trench_launches WHERE mint=?", (token_mint.strip(),)
+        ).fetchone() if launch_table else None)
+        if launch:
+            from datetime import timedelta
+            target_at = datetime.fromisoformat(str(launch[0])).astimezone(UTC) + timedelta(seconds=3600)
+            self.conn.execute(
+                """INSERT OR IGNORE INTO trench_candidate_maturities
+                   (candidate_id,target_at,state,updated_at) VALUES (?,?,?,?)""",
+                (candidate_id, target_at.isoformat(), "PENDING", datetime.now(UTC).isoformat()),
+            )
         self.conn.commit()
         return candidate_id
+
+    def update_maturity(
+        self, candidate_id: str, *, state: str, attempted_at: datetime | None = None,
+        next_retry_at: str | None = None, detail: str | None = None,
+    ) -> None:
+        if state not in {"PENDING", "DUE", "RETRYABLE", "RETRYING", "RECORDED", "MISSED"}:
+            raise ValueError("invalid candidate maturity state")
+        attempted_raw = attempted_at
+        self.conn.execute(
+            """UPDATE trench_candidate_maturities SET state=?,
+                 attempts=attempts + ?,last_attempt_at=COALESCE(?,last_attempt_at),
+                 next_retry_at=?,detail=?,updated_at=? WHERE candidate_id=?""",
+            (state, 1 if attempted_raw is not None and state in {"RETRYABLE", "RETRYING", "RECORDED", "MISSED"} else 0,
+             None if attempted_raw is None else attempted_raw.astimezone(UTC).isoformat(),
+             next_retry_at, detail, datetime.now(UTC).isoformat(), candidate_id),
+        )
+        self.conn.commit()
 
     def record_counterfactual(
         self,

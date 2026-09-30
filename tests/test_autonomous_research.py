@@ -36,6 +36,29 @@ def observed_database(tmp_path):
     return path
 
 
+def test_openclaw_audit_route_requires_material_evidence_or_unresolved_gap():
+    assert not autonomous_research.audit_warrants_openclaw(
+        'market_data_quality', {'observations': 20, 'valid_markets': 20,
+                                'markets_with_rules': 20, 'markets_with_two_sided_quotes': 20},
+    )
+    assert autonomous_research.audit_warrants_openclaw(
+        'market_data_quality', {'observations': 20, 'valid_markets': 18,
+                                'markets_with_rules': 20, 'markets_with_two_sided_quotes': 20},
+    )
+    assert autonomous_research.audit_warrants_openclaw(
+        'cost_threshold_sweep', {'variants': [{'events': 11}]},
+    )
+    assert autonomous_research.audit_warrants_openclaw(
+        'trench_survival_logistic', {'walk_forward_tests': 10, 'model_brier': 0.18},
+    )
+    assert autonomous_research.audit_warrants_openclaw(
+        'commercial_opportunity_scan', {'visible_payment_signal_count': 1},
+    )
+    assert not autonomous_research.audit_warrants_openclaw(
+        'commercial_opportunity_scan', {'visible_payment_signal_count': 0},
+    )
+
+
 @pytest.fixture(autouse=True)
 def no_external_requests(monkeypatch, tmp_path):
     for key in ('NOEMA_MCP_ENABLED', 'NOEMA_LOCAL_COGNITION_ENABLED', 'NOEMA_OPENAI_ENABLED'):
@@ -47,8 +70,21 @@ def no_external_requests(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_real_subprocess_records_immutable_result_learning_and_unknown_cost(tmp_path):
+async def test_real_subprocess_openclaw_handoff_is_critic_checked_and_learned(tmp_path, monkeypatch):
     path = observed_database(tmp_path)
+    monkeypatch.setenv('NOEMA_OPENCLAW_ENABLED', '1')
+    async def review(**_kwargs):
+        return {
+            'status': 'completed', 'cleanup_status': 'removed', 'input_tokens': 17,
+            'output_tokens': 4, 'cost_usd': 0.001, 'model': 'fixture-openclaw',
+            'result': {
+                'status': 'reviewed', 'verified_metrics': {'observations': 1},
+                'limitation': 'The sample contains one frozen observation.',
+                'falsification_test': 'Repeat with a larger forward sample.',
+                'next_priority': 'require_forward_validation', 'live_eligible': False,
+            },
+        }
+    monkeypatch.setattr(autonomous_research, 'run_review', review)
     plan = review_research_ecosystem(path)
     with sqlite3.connect(path) as conn:
         conn.execute('UPDATE market_snapshots SET valid=0')
@@ -60,7 +96,7 @@ async def test_real_subprocess_records_immutable_result_learning_and_unknown_cos
         payload = json.loads(row[2])
         assert payload['live_eligible'] is False
         assert payload['observations'] == 1
-        assert conn.execute('SELECT COUNT(*) FROM research_lessons').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM research_lessons').fetchone()[0] == 2
         assert conn.execute('SELECT name FROM cognitive_identities').fetchone()[0] == 'NOEMA'
         mission = conn.execute(
             'SELECT mission_id,status,specialist,capability_grants_json,resource_grant_json,lesson_id '
@@ -76,11 +112,30 @@ async def test_real_subprocess_records_immutable_result_learning_and_unknown_cos
         ).fetchone()
         assert handoff[0:3] == ('kalshi-history', 'evidence-critic', 'completed')
         assert json.loads(handoff[3])['verdict'] == 'PASS'
+        openclaw_handoff = conn.execute(
+            "SELECT status,result_json FROM mission_handoffs WHERE to_specialist='openclaw-reviewer'"
+        ).fetchone()
+        assert openclaw_handoff[0] == 'completed'
+        openclaw_result = json.loads(openclaw_handoff[1])
+        assert openclaw_result['result']['critic_review']['verdict'] == 'PASS'
+        assert openclaw_result['elapsed_seconds'] is not None
+        assert openclaw_result['tools_used'] == ['openclaw-agent', 'openclaw-sandbox']
+        assert conn.execute(
+            "SELECT status,input_tokens,output_tokens,estimated_model_cost_usd FROM cognitive_sessions "
+            "WHERE provider='openclaw'"
+        ).fetchone() == ('completed', 17, 4, 0.001)
+        worker_lesson = conn.execute(
+            "SELECT mission_id,next_priority FROM research_lessons WHERE session_id=("
+            "SELECT session_id FROM cognitive_sessions WHERE provider='openclaw')"
+        ).fetchone()
+        assert worker_lesson == (mission[0], 'require_forward_validation')
         events = [row[0] for row in conn.execute(
             'SELECT event_type FROM mission_events WHERE mission_id=? ORDER BY id', (mission[0],)
         )]
         assert events == ['opportunity_discovered', 'claimed', 'work_started',
-                          'handoff_requested', 'handoff_completed', 'critic_evaluation']
+                          'handoff_requested', 'handoff_completed', 'critic_evaluation',
+                          'handoff_requested', 'handoff_accepted', 'handoff_running',
+                          'openclaw_lesson_persisted', 'handoff_completed']
         assert conn.execute('SELECT mission_id FROM research_lessons').fetchone()[0] == mission[0]
     updated_plan = review_research_ecosystem(path)
     before_share = next(item.attention_fraction for item in plan.allocations
@@ -100,7 +155,7 @@ async def test_real_subprocess_records_immutable_result_learning_and_unknown_cos
     assert len(operations['sections']['research_runs']['rows']) == 1
     assert operations['sections']['missions']['rows'][0]['status'] == 'completed'
     assert operations['sections']['mission_events']['status'] == 'recorded'
-    assert operations['sections']['handoffs']['rows'][0]['to_specialist'] == 'evidence-critic'
+    assert operations['sections']['handoffs']['rows'][0]['to_specialist'] == 'openclaw-reviewer'
     review = operations['attention_allocations']['mission_review']
     assert review['outcome'] == 'DECREASE'
     assert review['specialist'] == 'kalshi-history'
@@ -168,6 +223,34 @@ def test_claims_are_atomic_and_failed_attempts_consume_daily_budget(tmp_path):
     assert second.claim(trial, 'kalshi-history', 'market_data_quality', 'new', policy) is None
     first.finish(run_id, 'failed', .1, {'reason': 'test'})
     assert second.claim(trial, 'kalshi-history', 'market_data_quality', 'new', policy) is None
+
+
+def test_cross_venue_paper_records_do_not_consume_local_worker_quota(tmp_path):
+    path = observed_database(tmp_path)
+    store = ResearchWorkStore(path)
+    now = datetime.now(UTC).isoformat()
+    for index in range(6):
+        store.conn.execute(
+            "INSERT INTO autonomous_research_runs "
+            "(trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,"
+            "completed_at,deadline_at) VALUES(?,?,?,?,?,'completed',?,?,?)",
+            (f'paper-{index}', 'kalshi-history', 'cross_venue_paper_experiment',
+             f'paper-digest-{index}', 'cross-venue-paper-v1', now, now, now),
+        )
+    store.conn.commit()
+    trials = ResearchTrialStore(path)
+    trial_id = trials.register(family='test', hypothesis='bounded worker fixture',
+                               params={}, feature_set_version='v1')
+    policy = ResearchWorkPolicy(enabled=True, max_runs_per_day=1)
+    run_id = store.claim(trials.get(trial_id), 'kalshi-history',
+                         'market_data_quality', 'worker-digest', policy)
+    assert run_id is not None
+    store.finish(run_id, 'failed', .1, {'reason': 'fixture consumes reservation'})
+    another_id = trials.register(family='test', hypothesis='daily cap fixture',
+                                 params={}, feature_set_version='v1')
+    assert store.claim(trials.get(another_id), 'kalshi-history',
+                       'market_data_quality', 'worker-digest-2', policy) is None
+    store.conn.close()
 
 
 def test_session_cooldown_covers_failed_cognition(tmp_path):
