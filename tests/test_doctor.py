@@ -8,6 +8,7 @@ def test_doctor_never_returns_foundry_secret(tmp_path, monkeypatch) -> None:
     env_path = tmp_path / ".env.local"
     pem = tmp_path / "kalshi.pem"
     pem.write_text("test")
+    pem.chmod(0o600)
     write_local_env(
         {
             "NOEMA_FOUNDRY_ENDPOINT": "https://example.openai.azure.com",
@@ -43,6 +44,7 @@ def test_doctor_never_returns_foundry_secret(tmp_path, monkeypatch) -> None:
 def test_doctor_recognizes_keychain_key_id_without_reading_the_secret(tmp_path, monkeypatch) -> None:
     pem = tmp_path / "kalshi.pem"
     pem.write_text("test")
+    pem.chmod(0o600)
     monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
     monkeypatch.setenv("KALSHI_PRIVATE_KEY_PATH", str(pem))
     monkeypatch.setattr(config, "kalshi_key_id_present", lambda: True)

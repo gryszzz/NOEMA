@@ -33,6 +33,48 @@ def test_bill_tracker_keeps_paper_capital_out_and_catches_duplicate_entries(tmp_
     assert TestClient(app).get("/api/bill").status_code == 200
 
 
+def test_hosted_budget_bootstrap_requires_complete_owner_values_and_only_initializes_once(
+    tmp_path, monkeypatch,
+):
+    names = BillTracker.HOSTED_BOOTSTRAP_ENV
+    values = {
+        "hosting_usd": "20.00", "other_usd": "5.00",
+        "model_budget_usd": "1.00", "owner_limit_usd": "30.00",
+    }
+    tracker = BillTracker(str(tmp_path / "hosted.db"))
+    for variable in names.values():
+        monkeypatch.delenv(variable, raising=False)
+    assert tracker.bootstrap_hosted_budget_from_env() == "not_configured"
+    assert tracker.overview()["status"] == "estimate_missing"
+
+    for field, variable in names.items():
+        monkeypatch.setenv(variable, values[field])
+    assert tracker.bootstrap_hosted_budget_from_env() == "initialized"
+    assert tracker.overview()["hosting_estimate_usd"] == "20.00"
+
+    tracker.configure(
+        hosting_usd=Decimal("25.00"), other_usd=Decimal("8.00"),
+        model_budget_usd=Decimal("2.00"), owner_limit_usd=Decimal("35.00"),
+    )
+    for field, variable in names.items():
+        monkeypatch.setenv(variable, "999.00")
+    assert tracker.bootstrap_hosted_budget_from_env() == "persisted_budget_retained"
+    assert tracker.overview()["hosting_estimate_usd"] == "25.00"
+    assert tracker.overview()["model_budget_usd"] == "2.00"
+
+
+def test_hosted_budget_bootstrap_rejects_invalid_or_unbounded_configuration(tmp_path, monkeypatch):
+    tracker = BillTracker(str(tmp_path / "hosted.db"))
+    values = {
+        "hosting_usd": "20.00", "other_usd": "1.00",
+        "model_budget_usd": "2.00", "owner_limit_usd": "30.00",
+    }
+    for field, variable in BillTracker.HOSTED_BOOTSTRAP_ENV.items():
+        monkeypatch.setenv(variable, values[field])
+    assert tracker.bootstrap_hosted_budget_from_env() == "invalid_configuration"
+    assert tracker.overview()["status"] == "estimate_missing"
+
+
 def test_model_reservation_respects_monthly_budget_across_days(tmp_path):
     store = CognitionStore(str(tmp_path / "noema.db"))
     for day in (1, 2):

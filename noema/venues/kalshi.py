@@ -48,10 +48,24 @@ def _estimated_top_book_liquidity(market: dict[str, Any]) -> float | None:
 
 
 class KalshiSigner:
-    def __init__(self, key_id: str, private_key_path: str) -> None:
+    def __init__(
+        self, key_id: str, private_key_path: str | None = None, *,
+        private_key_pem: bytes | None = None,
+        private_key_pem_b64: str | None = None,
+    ) -> None:
+        if private_key_pem is None and private_key_pem_b64 is None and private_key_path is None:
+            raise RuntimeError("Kalshi signing key is unavailable")
         self.key_id = key_id
-        pem = Path(private_key_path).read_bytes()
-        self.private_key = serialization.load_pem_private_key(pem, password=None)
+        try:
+            if private_key_pem is not None:
+                pem = private_key_pem
+            elif private_key_pem_b64 is not None:
+                pem = base64.b64decode(private_key_pem_b64, validate=True)
+            else:
+                pem = Path(private_key_path).read_bytes()
+            self.private_key = serialization.load_pem_private_key(pem, password=None)
+        except Exception:  # noqa: BLE001 - signing boundary suppresses all secret-bearing details
+            raise RuntimeError("Kalshi private key could not be parsed") from None
 
     def headers(self, method: str, request_path: str) -> dict[str, str]:
         timestamp = str(int(time.time() * 1000))
@@ -93,11 +107,22 @@ class KalshiVenue(VenueAdapter):
             timeout=httpx.Timeout(15.0),
             headers={"User-Agent": "NOEMA/0.1"},
         )
-        self.signer = (
-            KalshiSigner(self.config.key_id, self.config.private_key_path)
-            if self.config.key_id and self.config.private_key_path
-            else None
-        )
+        self.signer = None
+        if self.config.key_id and (
+            self.config.private_key_path or self.config.private_key_pem
+            or self.config.private_key_pem_b64
+        ):
+            try:
+                self.signer = KalshiSigner(
+                self.config.key_id,
+                self.config.private_key_path,
+                private_key_pem=self.config.private_key_pem,
+                private_key_pem_b64=self.config.private_key_pem_b64,
+                )
+            except RuntimeError:
+                # Public market data remains readable; private account access
+                # remains fail-closed when the configured key is malformed.
+                self.signer = None
 
     @property
     def supports_live_execution(self) -> bool:

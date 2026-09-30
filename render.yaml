@@ -32,6 +32,89 @@ services:
         value: 3600
       - key: NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC
         value: 500
+      # Read-only venue credentials are shared with the console through matching
+      # Render-managed service secrets. Values never belong in this Blueprint.
+      - key: KALSHI_API_KEY_ID
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_PEM_B64
+        sync: false
+      - key: POLYMARKET_US_KEY_ID
+        sync: false
+      - key: POLYMARKET_US_SECRET_KEY
+        sync: false
+      # Public address observation does not require wallet signing credentials.
+      - key: NOEMA_SOLANA_WALLET_ADDRESS
+        sync: false
+      - key: NOEMA_EVM_ADDRESS
+        sync: false
+      - key: NOEMA_BITCOIN_ADDRESS
+        sync: false
+      - key: NOEMA_SOLANA_RPC_URL
+        sync: false
+      - key: NOEMA_EVM_RPC_URL
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_ETHEREUM
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_BASE
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_POLYGON
+        sync: false
+      - key: NOEMA_BITCOIN_EXPLORER_URL
+        sync: false
+      # Cognition remains disabled until an owner supplies an explicit model,
+      # credential, and bounded persistent budget configuration.
+      - key: NOEMA_COGNITION_PROVIDER
+        sync: false
+      - key: NOEMA_COGNITION_ENABLED
+        sync: false
+      - key: NOEMA_OPENAI_ENABLED
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NOEMA_OPENAI_MODEL
+        sync: false
+      - key: NOEMA_OPENAI_PROJECT_ID
+        sync: false
+      - key: NOEMA_OPENAI_TRACING
+        sync: false
+      - key: NOEMA_OPENAI_TIMEOUT_SECONDS
+        sync: false
+      - key: NOEMA_OPENAI_REASONING_EFFORT
+        sync: false
+      - key: NOEMA_OPENAI_MAX_OUTPUT_TOKENS
+        sync: false
+      - key: NOEMA_COGNITION_MIN_ATTENTION
+        sync: false
+      - key: NOEMA_COGNITION_MIN_ROBUST_EDGE
+        sync: false
+      - key: NOEMA_COGNITION_MAX_FRESHNESS_SECONDS
+        sync: false
+      - key: NOEMA_COGNITION_MAX_UNCERTAINTY
+        sync: false
+      - key: NOEMA_COGNITION_COOLDOWN_SECONDS
+        sync: false
+      - key: NOEMA_COGNITION_MAX_CALLS_PER_HOUR
+        sync: false
+      - key: NOEMA_COGNITION_MAX_TOKENS_PER_HOUR
+        sync: false
+      - key: NOEMA_COGNITION_MAX_ESTIMATED_USD_PER_DAY
+        sync: false
+      - key: NOEMA_OPENAI_INPUT_USD_PER_MILLION
+        sync: false
+      - key: NOEMA_OPENAI_OUTPUT_USD_PER_MILLION
+        sync: false
+      - key: NOEMA_OPENAI_PRICING_MODEL
+        sync: false
+      # Optional owner-entered bootstrap budget; applied only if the durable DB
+      # has no bill_budget row. Missing settings never create a budget.
+      - key: NOEMA_HOSTED_BILL_BUDGET_HOSTING_USD
+        sync: false
+      - key: NOEMA_HOSTED_BILL_BUDGET_OTHER_USD
+        sync: false
+      - key: NOEMA_HOSTED_BILL_BUDGET_MODEL_USD
+        sync: false
+      - key: NOEMA_HOSTED_BILL_BUDGET_OWNER_LIMIT_USD
+        sync: false
       - key: NOEMA_CONSOLE_INTERNAL_ADDRESS
         fromService:
           name: noema-operations-console
@@ -63,5 +146,31 @@ services:
       - key: NOEMA_CONSOLE_USERNAME
         value: noema-owner
       - key: NOEMA_CONSOLE_PASSWORD
+        sync: false
+      - key: KALSHI_API_KEY_ID
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_PEM_B64
+        sync: false
+      - key: POLYMARKET_US_KEY_ID
+        sync: false
+      - key: POLYMARKET_US_SECRET_KEY
+        sync: false
+      - key: NOEMA_SOLANA_WALLET_ADDRESS
+        sync: false
+      - key: NOEMA_EVM_ADDRESS
+        sync: false
+      - key: NOEMA_BITCOIN_ADDRESS
+        sync: false
+      - key: NOEMA_SOLANA_RPC_URL
+        sync: false
+      - key: NOEMA_EVM_RPC_URL
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_ETHEREUM
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_BASE
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_POLYGON
+        sync: false
+      - key: NOEMA_BITCOIN_EXPLORER_URL
         sync: false
       - fromGroup: noema-console-replication

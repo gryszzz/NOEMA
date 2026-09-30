@@ -16,6 +16,57 @@ def test_capital_sampler_targets_start_to_start_interval() -> None:
     assert _capital_sample_sleep_seconds(15, 100.0, now=117.0) == 0
 
 
+def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatch, tmp_path) -> None:
+    from noema import dashboard_app
+
+    database = tmp_path / "worker.db"
+    database.touch()
+    state_path = tmp_path / "console-state.db"
+    calls = []
+
+    monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(database))
+    monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(state_path))
+
+    async def wallets(*, force=False):
+        calls.append(("wallets", force))
+        return {"networks": [], "observed_at": "wallet-observed-at"}
+
+    async def venues(*, force=False):
+        calls.append(("venues", force))
+        return {"venues": []}
+
+    monkeypatch.setattr(dashboard_app, "wallet_status", wallets)
+    monkeypatch.setattr(dashboard_app, "prediction_venues", venues)
+    monkeypatch.setattr(dashboard_app, "stripe_economy_overview", lambda path: {"status": "not_observed"})
+
+    def persist(path, venue_state, wallet_state, *, window, stripe):
+        calls.append(("persist", path, venue_state, wallet_state, window, stripe))
+
+    monkeypatch.setattr(dashboard_app, "balance_history", persist)
+
+    async def inline_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    async def stop_after_cycle(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(dashboard_app.asyncio, "to_thread", inline_to_thread)
+    monkeypatch.setattr(dashboard_app.asyncio, "sleep", stop_after_cycle)
+
+    try:
+        asyncio.run(dashboard_app._sample_capital_history())
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("sampler should have been cancelled after one completed cycle")
+
+    assert calls[:2] == [("wallets", True), ("venues", True)]
+    persisted = calls[2]
+    assert persisted[0:2] == ("persist", str(state_path))
+    assert persisted[4] == "24H"
+    assert persisted[3]["observed_at"] == "wallet-observed-at"
+
+
 def test_dashboard_root_renders_console() -> None:
     client = TestClient(app)
     response = client.get("/")
