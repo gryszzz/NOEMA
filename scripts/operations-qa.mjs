@@ -225,7 +225,8 @@ try {
   document.querySelector(`#live-feed [data-event-key="${key}"]`)));
  assert.equal(await streamPage.locator('#refresh').isDisabled(),true,'optional provider still pending while activity is usable');
  const fixtureSnapshot = await (await fetch(`${url}/api/operations`)).json();
- fixtureSnapshot.sections.mission_events.rows.push({id:999,mission_id:'mission-fixture',actor:'qa-fixture',event_type:'fixture_update',status:'completed',detail:'<img src=x onerror=alert(1)> Full recorded update',created_at:'2026-09-29T12:00:00Z'});
+ const fixtureMissionId = Math.max(0,...fixtureSnapshot.sections.mission_events.rows.map(row=>Number(row.id)||0))+1;
+ fixtureSnapshot.sections.mission_events.rows.push({id:fixtureMissionId,mission_id:'mission-fixture',actor:'qa-fixture',event_type:'fixture_update',status:'completed',detail:'<img src=x onerror=alert(1)> Full recorded update',created_at:'2026-09-29T12:00:00Z'});
  let releaseOperating, operatingStarted;
  const operatingWait = new Promise(resolve=>{releaseOperating=resolve;});
  const requestStarted = new Promise(resolve=>{operatingStarted=resolve;});
@@ -239,12 +240,12 @@ try {
  await streamPage.locator('#pause-updates').click();
  releaseOperating();
  await streamPage.waitForFunction(()=>document.getElementById('display-status').textContent.includes('updates waiting'));
- assert.equal(await streamPage.locator('[data-event-key="mission:999"]').count(),0,'an in-flight response cannot change a paused view');
+ assert.equal(await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).count(),0,'an in-flight response cannot change a paused view');
  delayOperating=false;
  await streamPage.locator('#pause-updates').click();
- await streamPage.locator('[data-event-key="mission:999"]').waitFor();
+ await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).waitFor();
  assert.equal(await streamPage.locator('#brief-delta').innerText(),'+1 new');
- await streamPage.locator('[data-event-key="mission:999"]').click();
+ await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).click();
  assert.equal(await streamPage.locator('#selection-reader-text').innerText(),'<img src=x onerror=alert(1)> Full recorded update');
  assert.equal(await streamPage.locator('#selection-reader img').count(),0,'event text cannot create HTML');
  await streamPage.evaluate(()=>window.qaRuntimeStream.dispatchEvent(new Event('error')));
