@@ -417,6 +417,16 @@ def test_console_research_migration_advances_mutable_trial_status(tmp_path):
     _merge_account_history_into_console_state(str(source), str(state))
     with sqlite3.connect(state) as conn:
         assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "promoted"
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE research_trials SET status='retired' WHERE trial_id='trial-a'")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "retired"
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE research_trials SET status='promoted' WHERE trial_id='trial-a'")
+    _merge_account_history_into_console_state(str(source), str(state))
+    with sqlite3.connect(state) as conn:
+        assert conn.execute("SELECT status FROM research_trials WHERE trial_id='trial-a'").fetchone()[0] == "retired"
 
 
 def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None:

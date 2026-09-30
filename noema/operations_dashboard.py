@@ -208,6 +208,48 @@ def _project_experiment_record(
     return record
 
 
+def _combined_research_run_counts(
+    connections: tuple[sqlite3.Connection, ...], trial_id: str,
+) -> dict[str, int | None]:
+    """Count deduplicated run/evidence identities across worker and sidecar files."""
+    run_keys: set[tuple[Any, ...]] = set()
+    evidence_keys: set[tuple[str, str]] = set()
+    table_available = False
+    for conn in connections:
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "autonomous_research_runs" not in tables:
+            continue
+        table_available = True
+        columns = {row[1] for row in conn.execute(
+            "PRAGMA table_info(autonomous_research_runs)")}
+        if "trial_id" not in columns:
+            continue
+        fields = [field for field in (
+            "id", "trial_id", "evidence_hash", "evidence_path", "worker_version",
+        ) if field in columns]
+        for row in conn.execute(
+            f"SELECT {','.join(fields)} FROM autonomous_research_runs WHERE trial_id=?",
+            (trial_id,),
+        ):
+            item = dict(zip(fields, row, strict=True))
+            digest, version = item.get("evidence_hash"), item.get("worker_version")
+            if digest:
+                run_keys.add(("evidence", str(digest), str(version or "")))
+                evidence_keys.add(("hash", str(digest)))
+            else:
+                path = item.get("evidence_path")
+                if path:
+                    run_keys.add(("path", str(path), str(version or "")))
+                    evidence_keys.add(("path", str(path)))
+                else:
+                    run_keys.add(("row", str(item.get("id"))))
+    return {
+        "run_count": len(run_keys) if table_available else None,
+        "evidence_count": len(evidence_keys) if table_available else None,
+    }
+
+
 def _economic_lane_projection(conn: sqlite3.Connection, tables: set[str]) -> dict[str, Any]:
     """Classify persisted work into desks; financial results remain unmeasured."""
     lanes = {
@@ -1019,6 +1061,8 @@ def _append_additional_console_records(
                             row, conn, tables, decision_conn=decision_conn,
                             decision_tables=decision_tables,
                         )
+                        run_count_sources = (conn,) if decision_conn is None else (conn, decision_conn)
+                        record.update(_combined_research_run_counts(run_count_sources, trial_id))
                         existing_index = seen_experiments.get(trial_id)
                         if existing_index is None:
                             seen_experiments[trial_id] = len(result["sections"]["experiments"]["rows"])
@@ -1034,7 +1078,9 @@ def _append_additional_console_records(
                                 }
                             else:
                                 for key, value in record.items():
-                                    if existing_record.get(key) is None and value is not None:
+                                    if ((key in {"run_count", "evidence_count"}
+                                         and value is not None)
+                                            or (existing_record.get(key) is None and value is not None)):
                                         existing_record[key] = value
             if "economic_events" in tables:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(economic_events)")}

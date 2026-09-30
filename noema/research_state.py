@@ -11,7 +11,10 @@ _TRIAL_STATUS_RANK = {
     "running": 1,
     "rejected": 2,
     "promoted": 2,
-    "retired": 2,
+    # Retirement is an explicit later lifecycle decision when reading legacy
+    # snapshots that predate status_updated_at. Timestamped states still use
+    # their actual recency below.
+    "retired": 3,
     "completed": 2,
     "failed": 2,
     "cancelled": 2,
@@ -40,11 +43,15 @@ def research_trial_update_is_newer(
     """Compare mutable trial state without replacing immutable trial identity."""
     incoming = str(incoming_status or "").casefold()
     current = str(current_status or "").casefold()
+    incoming_time, current_time = _timestamp(incoming_at), _timestamp(current_at)
+    incoming_terminal = incoming in _TRIAL_STATUS_RANK and _TRIAL_STATUS_RANK[incoming] >= 2
+    current_terminal = current in _TRIAL_STATUS_RANK and _TRIAL_STATUS_RANK[current] >= 2
+    if incoming_terminal and current_terminal and incoming_time and current_time:
+        return incoming_time > current_time
     incoming_rank = _TRIAL_STATUS_RANK.get(incoming, -1)
     current_rank = _TRIAL_STATUS_RANK.get(current, -1)
     if incoming_rank != current_rank:
         return incoming_rank > current_rank
-    incoming_time, current_time = _timestamp(incoming_at), _timestamp(current_at)
     return incoming_time is not None and (current_time is None or incoming_time > current_time)
 
 
