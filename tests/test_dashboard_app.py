@@ -169,7 +169,7 @@ def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tm
     )
     assert accepted.status_code == 200
     replica = tmp_path / "console-replica.db"
-    assert stat.S_IMODE(replica.stat().st_mode) == 0o600
+    assert stat.S_IMODE(replica.stat().st_mode) == 0o444
     with sqlite3.connect(replica) as conn:
         assert conn.execute("SELECT market_id FROM worker_observation").fetchone()[0] == "real-market-record"
 
@@ -183,21 +183,38 @@ def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
 
     replica = tmp_path / "console-replica.db"
     old_console_record = [{"venue": "kalshi", "fills": [{
-        "fill_id": "existing-fill", "ticker": "KXTEST", "created_time": "2026-09-30T12:00:00Z",
-    }]}]
+        "fill_id": "shared-fill", "ticker": "KX-OLD", "created_time": "2026-09-30T12:00:00Z",
+    }], "sync_state": {"activity": {
+        "success": True, "complete": True, "high_water_at": "2026-09-30T12:00:00Z",
+        "high_water_id": "cursor-old",
+    }}}]
     persist_prediction_account_records(str(replica), old_console_record,
                                        observed_at="2026-09-30T12:00:01Z")
+    source_records = [{"venue": "kalshi", "fills": [
+        {"fill_id": "shared-fill", "ticker": "KX-WORKER-NEW", "created_time": "2026-09-30T12:01:00Z"},
+        {"fill_id": "worker-fill", "ticker": "KXWORKER", "created_time": "2026-09-30T12:01:00Z"},
+        {"fill_id": "state-newer-fill", "ticker": "KX-SNAPSHOT-OLD", "created_time": "2026-09-30T12:02:00Z"},
+    ], "sync_state": {"activity": {
+        "success": True, "complete": True, "high_water_at": "2026-09-30T12:01:00Z",
+        "high_water_id": "cursor-worker",
+    }}}]
     source = tmp_path / "worker-source.db"
     with sqlite3.connect(source) as conn:
         conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
         conn.execute("INSERT INTO worker_observation VALUES ('fresh-worker-record')")
-    persist_prediction_account_records(str(source), [{"venue": "kalshi", "fills": [{
-        "fill_id": "worker-fill", "ticker": "KXWORKER", "created_time": "2026-09-30T12:01:00Z",
-    }]}], observed_at="2026-09-30T12:01:01Z")
+    persist_prediction_account_records(str(source), source_records,
+                                       observed_at="2026-09-30T12:01:01Z")
     monkeypatch.setenv("NOEMA_DB_PATH", str(replica))
     monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
     state_path = console_state_db_path(replica)
     _merge_account_history_into_console_state(str(replica), state_path)
+    persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{
+        "fill_id": "state-newer-fill", "ticker": "KX-CONSOLE-NEWER",
+        "created_time": "2026-09-30T12:03:00Z",
+    }], "sync_state": {"activity": {
+        "success": True, "complete": True, "high_water_at": "2026-09-30T12:03:00Z",
+        "high_water_id": "cursor-console-newer",
+    }}}], observed_at="2026-09-30T12:03:01Z")
     real_replace = os.replace
     interleaved: list[str] = []
 
@@ -224,7 +241,19 @@ def test_snapshot_replacement_cannot_lose_concurrent_console_account_write(
         stored = {row[0] for row in conn.execute(
             "SELECT external_id FROM prediction_account_records WHERE venue='kalshi' AND record_type='fill'"
         )}
-        assert stored == {"existing-fill", "worker-fill", "concurrent-fill"}
+        assert stored == {"shared-fill", "worker-fill", "state-newer-fill", "concurrent-fill"}
+        shared_payload = conn.execute(
+            "SELECT payload_json FROM prediction_account_records WHERE external_id='shared-fill'"
+        ).fetchone()[0]
+        newer_payload = conn.execute(
+            "SELECT payload_json FROM prediction_account_records WHERE external_id='state-newer-fill'"
+        ).fetchone()[0]
+        assert 'KX-WORKER-NEW' in shared_payload
+        assert 'KX-CONSOLE-NEWER' in newer_payload
+        assert conn.execute(
+            "SELECT high_water_at,high_water_id FROM prediction_account_sync_state "
+            "WHERE venue='kalshi' AND stream='activity'"
+        ).fetchone() == ("2026-09-30T12:03:00Z", "cursor-console-newer")
         assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
     # Repeated polling of the same provider event remains idempotent.
     persist_prediction_account_records(state_path, [{"venue": "kalshi", "fills": [{

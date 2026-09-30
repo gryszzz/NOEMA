@@ -106,10 +106,59 @@ def _copy_account_history_tables(
         if table not in source_tables:
             continue
         rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
-        placeholders = ",".join("?" for _ in columns.split(","))
-        target.executemany(
-            f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})", rows,
-        )
+        if table == "prediction_account_records":
+            for row in rows:
+                key = row[:3]
+                current = target.execute(
+                    "SELECT first_observed_at,last_observed_at FROM prediction_account_records "
+                    "WHERE venue=? AND record_type=? AND external_id=?", key,
+                ).fetchone()
+                first_seen = _earliest_timestamp(row[6], current[0] if current else None)
+                if current and not _timestamp_is_newer(row[7], current[1]):
+                    if first_seen != current[0]:
+                        target.execute(
+                            "UPDATE prediction_account_records SET first_observed_at=? "
+                            "WHERE venue=? AND record_type=? AND external_id=?",
+                            (first_seen, *key),
+                        )
+                    continue
+                target.execute(
+                    "INSERT INTO prediction_account_records "
+                    f"({columns}) VALUES ({','.join('?' for _ in columns.split(','))}) "
+                    "ON CONFLICT(venue,record_type,external_id) DO UPDATE SET "
+                    "market_id=excluded.market_id, related_order_id=excluded.related_order_id, "
+                    "occurred_at=excluded.occurred_at, first_observed_at=excluded.first_observed_at, "
+                    "last_observed_at=excluded.last_observed_at, state=excluded.state, "
+                    "payload_json=excluded.payload_json",
+                    (*row[:6], first_seen, *row[7:]),
+                )
+        elif table == "prediction_account_sync_state":
+            for row in rows:
+                key = row[:2]
+                current = target.execute(
+                    "SELECT last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type "
+                    "FROM prediction_account_sync_state WHERE venue=? AND stream=?", key,
+                ).fetchone()
+                if current is None:
+                    target.execute(
+                        f"INSERT INTO {table} ({columns}) VALUES "
+                        f"({','.join('?' for _ in columns.split(','))})", row,
+                    )
+                    continue
+                success = _later_timestamp(row[2], current[0])
+                audit = _later_timestamp(row[3], current[1])
+                incoming_high_water_is_newer = _timestamp_is_newer(row[4], current[2])
+                high_water_at = row[4] if incoming_high_water_is_newer else current[2]
+                high_water_id = row[5] if incoming_high_water_is_newer else current[3]
+                incoming_state_at = _latest_sync_timestamp(row[2:4], row[4])
+                existing_state_at = _latest_sync_timestamp(current[:2], current[2])
+                error = row[6] if _timestamp_is_newer(incoming_state_at, existing_state_at) else current[4]
+                target.execute(
+                    "UPDATE prediction_account_sync_state SET last_success_at=?, "
+                    "last_full_audit_at=?, high_water_at=?, high_water_id=?, last_error_type=? "
+                    "WHERE venue=? AND stream=?",
+                    (success, audit, high_water_at, high_water_id, error, *key),
+                )
     if "prediction_account_baselines" in source_tables:
         target.execute("""CREATE TABLE IF NOT EXISTS prediction_account_baselines (
                 venue TEXT PRIMARY KEY, observed_at TEXT NOT NULL, cash_usd TEXT NOT NULL,
@@ -127,6 +176,45 @@ def _copy_account_history_tables(
             source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
                            "FROM live_balance_observations").fetchall())
     target.commit()
+
+
+def _parsed_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _timestamp_is_newer(candidate: Any, current: Any) -> bool:
+    candidate_at = _parsed_timestamp(candidate)
+    current_at = _parsed_timestamp(current)
+    return candidate_at is not None and (current_at is None or candidate_at > current_at)
+
+
+def _later_timestamp(left: Any, right: Any) -> Any:
+    return left if _timestamp_is_newer(left, right) else right
+
+
+def _earliest_timestamp(left: Any, right: Any) -> Any:
+    left_at, right_at = _parsed_timestamp(left), _parsed_timestamp(right)
+    if left_at is None:
+        return right
+    if right_at is None or left_at < right_at:
+        return left
+    return right
+
+
+def _latest_sync_timestamp(success_fields: Any, high_water: Any) -> datetime | None:
+    candidates = [*success_fields, high_water]
+    parsed = [_parsed_timestamp(item) for item in candidates]
+    valid = [item for item in parsed if item is not None]
+    return max(valid) if valid else None
 
 
 def _constant_time_equal(left: str, right: str) -> bool:
@@ -373,7 +461,9 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         # console-owned sidecar. Live console writers target that same file,
         # which this atomic worker replacement never touches.
         _merge_account_history_into_console_state(temporary_path, _console_state_db_path())
-        os.chmod(temporary_path, 0o600)
+        # The replica is an immutable worker-provided snapshot. Console-owned
+        # state is persisted in the sidecar, never in this replaceable file.
+        os.chmod(temporary_path, 0o444)
         os.replace(temporary_path, destination)
         temporary_path = None
         if worker_metadata is not None:

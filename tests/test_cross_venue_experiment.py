@@ -296,6 +296,53 @@ def test_paper_pair_matures_only_from_prospective_matching_venue_outcomes(tmp_pa
     assert history[0]["paper_settlement"]["evidence_hash"] == persisted["evidence_hash"]
 
 
+def test_console_maturation_reads_worker_outcomes_but_writes_only_durable_console_state(tmp_path):
+    import os
+    import stat
+
+    decision_at = datetime.now(UTC)
+    candidate = _candidate(decision_at)
+    state_path = str(tmp_path / "console-state.db")
+    worker_path = tmp_path / "worker-snapshot.db"
+    persisted = persist_evaluation(state_path, candidate, evaluate_candidate(candidate, now=decision_at))
+    outcomes = OutcomeStore(str(worker_path))
+    resolved_at = (decision_at + timedelta(seconds=10)).isoformat()
+    seen_at = decision_at + timedelta(seconds=11)
+    outcomes.upsert(venue="kalshi", market_id="K-FIXTURE", outcome_yes=1,
+                    resolved_at=resolved_at, raw={"result": "yes", "settlement_ts": resolved_at,
+                                                   "finality": "official_kalshi_settlement"},
+                    source="kalshi_official_market_api",
+                    canonical_proposition_id="fixture:event:1:yes", seen_at=seen_at)
+    outcomes.upsert(venue="polymarket-us", market_id="P-FIXTURE", outcome_yes=1,
+                    resolved_at=None, raw={"finality": "official_closed_market_and_settlement_endpoint",
+                                           "market": {"closed": True},
+                                           "settlement": {"slug": "P-FIXTURE", "settlement": 1},
+                                           "venue_resolved_at_available": False},
+                    source="polymarket_us_official_settlement_endpoint",
+                    canonical_proposition_id="fixture:event:1:yes", seen_at=seen_at)
+    outcomes.conn.close()
+    os.chmod(worker_path, 0o444)
+    snapshot_before = worker_path.read_bytes()
+
+    maturity = mature_paper_pairs(
+        state_path, outcome_path=str(worker_path), now=decision_at + timedelta(seconds=12),
+    )
+    history = recent_evaluations(state_path)
+
+    assert maturity["matured"] == 1
+    assert history[0]["paper_settlement"]["evidence_hash"] == persisted["evidence_hash"]
+    assert worker_path.read_bytes() == snapshot_before
+    assert stat.S_IMODE(worker_path.stat().st_mode) == 0o444
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
+        ).fetchone()[0] == 1
+    with sqlite3.connect(worker_path.as_uri() + "?mode=ro", uri=True) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='economic_events'"
+        ).fetchone()[0] == 0
+
+
 def test_outcomes_resolved_before_observation_do_not_backfill_paper_results(tmp_path):
     decision_at = datetime.now(UTC)
     candidate = _candidate(decision_at)
