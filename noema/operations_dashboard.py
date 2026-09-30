@@ -636,6 +636,12 @@ def build_operations(
     for name in SECTIONS:
         result["sections"][name] = {"status": "not_recorded", "rows": [], "has_more": False}
     if not result["database_present"]:
+        # A missing worker replica must not hide durable console-owned state.
+        # The sidecar projector opens its sources read-only and records only
+        # sections backed by rows it can actually read; worker runtime and
+        # other worker-owned sections remain unknown/not-recorded here.
+        _append_additional_console_records(result, path, additional_paths)
+        result["openclaw_worker"] = openclaw_runtime_status(path)
         return result
     conn = None
     try:
