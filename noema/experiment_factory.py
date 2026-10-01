@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
 from .research_trials import ResearchTrialStore
 from .specialist_evolution import EvolutionDecision, SpecialistEvidence
 from .specialists import SpecialistProfile, SpecialistState
+from .trench_survival_model import MIN_TEST_LABELS, MIN_TRAIN_LABELS
 
 
 @dataclass(frozen=True)
@@ -23,10 +25,54 @@ class ExperimentProposal:
 class RegisteredExperiment:
     trial_id: str
     proposal: ExperimentProposal
+    status: str = "registered"
 
 
 def _bounded_priority(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def handler_for_contract(
+    family: str, feature_set_version: str, params: dict[str, Any]
+) -> tuple[str, str] | None:
+    """Return the exact allowlisted worker for a persisted experiment contract."""
+
+    if (
+        family == "agent_services_opportunity_qualification"
+        and feature_set_version == "commercial-qualification-v1"
+        and params == {"experiment": "commercial_opportunity_scan", "version": "v1"}
+    ):
+        return "NOEMA", "commercial_opportunity_scan"
+    if (
+        family == "prediction_markets_data_quality"
+        and feature_set_version == "market-data-v1"
+        and params == {"experiment": "market_data_quality", "version": "v1"}
+    ):
+        return "kalshi-history", "market_data_quality"
+    if (
+        family == "prediction_markets_execution"
+        and feature_set_version == "execution-v1"
+        and params == {
+            "experiment": "cost_threshold_sweep",
+            "search": "predeclared_grid",
+            "objective": "after_cost_return",
+            "must_record_all_variants": True,
+        }
+    ):
+        return "kalshi-history", "cost_threshold_sweep"
+    if (
+        family == "trench_survival"
+        and feature_set_version == "trench-v1"
+        and params == {
+            "model": "logistic_baseline",
+            "target": "survival_1h",
+            "feature_set": "trench-v1",
+            "validation": "purged_expanding_walk_forward",
+            "calibration": "none",
+        }
+    ):
+        return "trench-1", "trench_survival_logistic"
+    return None
 
 
 def propose_challengers(
@@ -44,7 +90,11 @@ def propose_challengers(
     reasons = () if decision is None else decision.reasons
     reason_text = "; ".join(reasons)
 
-    if profile.name == "trench-1" and evidence.resolved >= 30 and evidence.brier is None:
+    if (
+        profile.name == "trench-1"
+        and evidence.resolved >= MIN_TRAIN_LABELS + MIN_TEST_LABELS
+        and evidence.brier is None
+    ):
         proposals.append(
             ExperimentProposal(
                 specialist=profile.name,
@@ -65,27 +115,6 @@ def propose_challengers(
                 reason="enough forward labels to establish the simplest survival baseline",
             )
         )
-        proposals.append(
-            ExperimentProposal(
-                specialist=profile.name,
-                family="trench_survival",
-                hypothesis=(
-                    "A shallow nonlinear tree challenger improves one-hour survival "
-                    "classification without excessive search complexity."
-                ),
-                params={
-                    "model": "shallow_tree_challenger",
-                    "target": "survival_1h",
-                    "feature_set": "trench-v1",
-                    "max_depth": 3,
-                    "validation": "purged_expanding_walk_forward",
-                },
-                feature_set_version="trench-v1",
-                priority=0.75,
-                reason="champion-challenger comparison after a transparent baseline",
-            )
-        )
-
     if evidence.calibration_error is not None and evidence.calibration_error > 0.10:
         proposals.append(
             ExperimentProposal(
@@ -212,12 +241,53 @@ def register_challengers(
 ) -> tuple[RegisteredExperiment, ...]:
     store = ResearchTrialStore(db_path)
     registered: list[RegisteredExperiment] = []
-    for proposal in propose_challengers(profile, evidence, decision):
-        trial_id = store.register(
-            family=proposal.family,
-            hypothesis=proposal.hypothesis,
-            params=proposal.params,
-            feature_set_version=proposal.feature_set_version,
-        )
-        registered.append(RegisteredExperiment(trial_id, proposal))
+    try:
+        for proposal in propose_challengers(profile, evidence, decision):
+            # Preserve the measured hypothesis durably, but keep unsupported contracts
+            # out of the runnable queue until their exact worker exists.
+            supported = handler_for_contract(
+                proposal.family, proposal.feature_set_version, proposal.params,
+            ) is not None
+            status = "registered" if supported else "deferred"
+            trial_id = store.register(
+                family=proposal.family,
+                hypothesis=proposal.hypothesis,
+                params=proposal.params,
+                feature_set_version=proposal.feature_set_version,
+                status=status,
+            )
+            # Existing trial IDs survive identical registrations. Reconcile only
+            # admission states so terminal (or otherwise advanced) state is kept.
+            store.reconcile_admission_status(trial_id, status)
+            persisted = store.get(trial_id)
+            if persisted is None:
+                raise RuntimeError("registered research trial was not persisted")
+            registered.append(RegisteredExperiment(trial_id, proposal, persisted.status))
+    finally:
+        store.conn.close()
     return tuple(registered)
+
+
+def admit_deferred_challengers(db_path: str) -> tuple[str, ...]:
+    """Promote deferred hypotheses once their exact allowlisted workers exist.
+
+    Called from the normal evolution cycle, independently of whether new evidence
+    was reviewed, so implementation support arriving later does not require another
+    evidence change or owner-triggered registration.
+    """
+
+    store = ResearchTrialStore(db_path)
+    admitted: list[str] = []
+    try:
+        for trial in store.deferred():
+            try:
+                params = json.loads(trial.params_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if handler_for_contract(trial.family, trial.feature_set_version, params) is None:
+                continue
+            store.set_status(trial.trial_id, "registered")
+            admitted.append(trial.trial_id)
+    finally:
+        store.conn.close()
+    return tuple(admitted)

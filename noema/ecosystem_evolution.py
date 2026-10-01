@@ -4,7 +4,11 @@ from dataclasses import dataclass
 
 from .ecosystem_controller import ensure_default_specialists
 from .evolution_controller import SpecialistReviewResult, review_specialist
-from .experiment_factory import RegisteredExperiment, register_challengers
+from .experiment_factory import (
+    RegisteredExperiment,
+    admit_deferred_challengers,
+    register_challengers,
+)
 from .specialist_evidence_sources import kalshi_history_evidence, trench1_evidence
 
 
@@ -18,6 +22,7 @@ class SpecialistEvolutionCycle:
 class EcosystemEvolutionReview:
     kalshi: SpecialistEvolutionCycle
     trench: SpecialistEvolutionCycle
+    admitted_trial_ids: tuple[str, ...] = ()
 
 
 def _review_with_challengers(
@@ -31,15 +36,14 @@ def _review_with_challengers(
         specialist=specialist,
         evidence=evidence,
     )
-    experiments = (
-        register_challengers(
-            db_path,
-            profile=review.profile,
-            evidence=evidence,
-            decision=review.decision,
-        )
-        if review.reviewed
-        else ()
+    # Registration is deterministic/idempotent. Re-evaluate it every cycle so a
+    # previously unsupported proposal can be retained or admitted when a worker
+    # ships, even when the underlying evidence review has not changed.
+    experiments = register_challengers(
+        db_path,
+        profile=review.profile,
+        evidence=evidence,
+        decision=review.decision,
     )
     return SpecialistEvolutionCycle(review=review, experiments=experiments)
 
@@ -56,6 +60,7 @@ def evolve_default_specialists(
     """
 
     ensure_default_specialists(db_path)
+    admitted_trial_ids = admit_deferred_challengers(db_path)
     kalshi_evidence = kalshi_history_evidence(db_path)
     trench_evidence = trench1_evidence(
         db_path,
@@ -72,4 +77,5 @@ def evolve_default_specialists(
             specialist="trench-1",
             evidence=trench_evidence,
         ),
+        admitted_trial_ids=admitted_trial_ids,
     )

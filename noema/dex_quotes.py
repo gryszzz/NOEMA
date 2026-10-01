@@ -19,7 +19,10 @@ from typing import Any, Protocol
 
 import httpx
 
-EVM_CHAIN_IDS = {"ethereum": 1, "base": 8453, "polygon": 137}
+EVM_CHAIN_IDS = {
+    "ethereum": 1, "base": 8453, "arbitrum": 42161,
+    "optimism": 10, "polygon": 137, "bnb-chain": 56, "avalanche": 43114,
+}
 _BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
@@ -311,7 +314,7 @@ class JupiterSwapV2QuoteAdapter:
 
 
 class ZeroExPriceQuoteAdapter:
-    """Read-only 0x Swap API v2 /price adapter for Ethereum, Base, and Polygon."""
+    """Read-only 0x Swap API v2 /price adapter for supported EVM networks."""
 
     BASE_URL = "https://api.0x.org/swap/allowance-holder/price"
 
@@ -327,7 +330,7 @@ class ZeroExPriceQuoteAdapter:
     async def quote(self, request: DexQuoteRequest) -> NormalizedDexQuote:
         request.validate()
         if request.chain not in EVM_CHAIN_IDS:
-            raise ValueError("0x price adapter only supports Ethereum, Base, and Polygon")
+            raise ValueError("0x price adapter only supports the configured EVM network registry")
         if not self.api_key:
             raise DexQuoteError("0x", "api_key_missing")
         params = {
@@ -373,7 +376,11 @@ class ZeroExPriceQuoteAdapter:
             request, provider="0x_swap_v2_price",
             buy_amount=payload.get("buyAmount"), minimum_buy_amount=payload.get("minBuyAmount"),
             network_fee_amount=payload.get("totalNetworkFee"),
-            network_fee_asset={"ethereum": "ETH", "base": "ETH", "polygon": "POL"}[request.chain],
+            network_fee_asset={
+                "ethereum": "ETH", "base": "ETH", "arbitrum": "ETH",
+                "optimism": "ETH", "polygon": "POL", "bnb-chain": "BNB",
+                "avalanche": "AVAX",
+            }[request.chain],
             gas_units=payload.get("gas"), gas_price=payload.get("gasPrice"),
             liquidity_available=payload.get("liquidityAvailable"),
             route_sources=sources, provider_reference=payload.get("zid"),

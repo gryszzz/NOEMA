@@ -54,10 +54,17 @@ class EVMChain:
 _DEFAULTS: dict[int, tuple[str, str, str, str | None]] = {
     1: ("ethereum", "ETH", "https://ethereum-rpc.publicnode.com", "ETH"),
     8453: ("base", "ETH", "https://mainnet.base.org", "ETH"),
+    42161: ("arbitrum", "ETH", "https://arb1.arbitrum.io/rpc", "ETH"),
+    10: ("optimism", "ETH", "https://mainnet.optimism.io", "ETH"),
     137: ("polygon", "POL", "https://polygon-bor-rpc.publicnode.com", "POL"),
+    56: ("bnb-chain", "BNB", "https://bsc-dataseed.binance.org", "BNB"),
+    43114: ("avalanche", "AVAX", "https://api.avax.network/ext/bc/C/rpc", "AVAX"),
 }
-_LEGACY_RPC_NAMES = {1: "ETHEREUM", 8453: "BASE", 137: "POLYGON"}
-_ZEROX_QUOTE_CHAIN_IDS = {1, 8453, 137}
+_LEGACY_RPC_NAMES = {
+    1: "ETHEREUM", 8453: "BASE", 42161: "ARBITRUM", 10: "OPTIMISM",
+    137: "POLYGON", 56: "BNB", 43114: "AVALANCHE",
+}
+_ZEROX_QUOTE_CHAIN_IDS = set(_DEFAULTS)
 
 
 def load_evm_chains(environ: Mapping[str, str] | None = None) -> tuple[EVMChain, ...]:
@@ -76,7 +83,7 @@ def load_evm_chains(environ: Mapping[str, str] | None = None) -> tuple[EVMChain,
             chain_ids.add(int(match.group(1)))
 
     chains = []
-    preferred_order = (1, 8453, 137)
+    preferred_order = (1, 8453, 42161, 10, 137, 56, 43114)
     ordered_chain_ids = [chain_id for chain_id in preferred_order if chain_id in chain_ids]
     ordered_chain_ids.extend(sorted(chain_ids - set(preferred_order)))
     for chain_id in ordered_chain_ids:
@@ -98,13 +105,21 @@ def load_evm_chains(environ: Mapping[str, str] | None = None) -> tuple[EVMChain,
         ):
             raise ValueError("EVM native price symbol is invalid")
 
-        endpoint = (
-            env.get(f"NOEMA_EVM_RPC_URL_{chain_id}")
-            or env.get(f"NOEMA_EVM_RPC_URL_{_LEGACY_RPC_NAMES[chain_id]}")
-            if chain_id in _LEGACY_RPC_NAMES else env.get(f"NOEMA_EVM_RPC_URL_{chain_id}")
+        endpoint = env.get(f"NOEMA_EVM_RPC_URL_{chain_id}")
+        if not endpoint and chain_id in _LEGACY_RPC_NAMES:
+            endpoint = env.get(f"NOEMA_EVM_RPC_URL_{_LEGACY_RPC_NAMES[chain_id]}")
+        # The legacy global endpoint historically represented the single watched
+        # network (Ethereum). Never reuse it across unrelated chain IDs.
+        global_rpc = env.get("NOEMA_EVM_RPC_URL") if chain_id == 1 else None
+        endpoint = endpoint or global_rpc or default_rpc or None
+        provider = (
+            "configured_json_rpc" if endpoint and (
+                env.get(f"NOEMA_EVM_RPC_URL_{chain_id}")
+                or (chain_id in _LEGACY_RPC_NAMES
+                    and env.get(f"NOEMA_EVM_RPC_URL_{_LEGACY_RPC_NAMES[chain_id]}"))
+                or global_rpc
+            ) else "default_public_json_rpc" if endpoint else "unconfigured"
         )
-        endpoint = endpoint or env.get("NOEMA_EVM_RPC_URL") or default_rpc or None
-        provider = "configured_json_rpc" if endpoint else "unconfigured"
         chains.append(EVMChain(
             chain_id=chain_id,
             name=name,

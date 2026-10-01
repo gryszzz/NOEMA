@@ -66,6 +66,8 @@ services:
         sync: false
       - key: NOEMA_SOLANA_RPC_URL
         sync: false
+      - key: NOEMA_SOLANA_RPC_FALLBACK_URL
+        value: https://solana-rpc.publicnode.com
       - key: NOEMA_EVM_RPC_URL
         sync: false
       - key: NOEMA_EVM_RPC_URL_ETHEREUM
@@ -74,17 +76,35 @@ services:
         sync: false
       - key: NOEMA_EVM_RPC_URL_POLYGON
         sync: false
+      - key: NOEMA_EVM_RPC_URL_1
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_8453
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_42161
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_10
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_137
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_56
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_43114
+        sync: false
       - key: NOEMA_EVM_CHAIN_REGISTRY_JSON
         sync: false
       - key: NOEMA_BITCOIN_EXPLORER_URL
         sync: false
-      # Cognition remains disabled until an owner supplies an explicit model,
-      # credential, and bounded persistent budget configuration.
+      # Cognition fails closed unless the provider, model, credential, and
+      # persisted model budget are all configured.
       - key: NOEMA_COGNITION_PROVIDER
         sync: false
       - key: NOEMA_COGNITION_ENABLED
         sync: false
       - key: NOEMA_OPENAI_ENABLED
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_API_KEY
         sync: false
       - key: OPENAI_API_KEY
         sync: false
@@ -183,6 +203,8 @@ services:
         sync: false
       - key: NOEMA_SOLANA_RPC_URL
         sync: false
+      - key: NOEMA_SOLANA_RPC_FALLBACK_URL
+        value: https://solana-rpc.publicnode.com
       - key: NOEMA_EVM_RPC_URL
         sync: false
       - key: NOEMA_EVM_RPC_URL_ETHEREUM
@@ -190,6 +212,20 @@ services:
       - key: NOEMA_EVM_RPC_URL_BASE
         sync: false
       - key: NOEMA_EVM_RPC_URL_POLYGON
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_1
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_8453
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_42161
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_10
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_137
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_56
+        sync: false
+      - key: NOEMA_EVM_RPC_URL_43114
         sync: false
       - key: NOEMA_EVM_CHAIN_REGISTRY_JSON
         sync: false

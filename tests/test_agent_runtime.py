@@ -7,14 +7,9 @@ from noema.agent_runtime import bootstrap_hosted_bill_budget
 from noema.bill_tracker import BillTracker
 
 
-def test_agent_config_requires_evm_pair() -> None:
+def test_agent_config_allows_registry_based_evm_configuration() -> None:
     config = AgentConfig(evm_rpc_url="https://rpc.example")
-    try:
-        config.validate()
-    except ValueError as exc:
-        assert "configured together" in str(exc)
-    else:
-        raise AssertionError("expected config validation failure")
+    config.validate()
 
 
 def test_collector_change_triggers_serialized_console_snapshot() -> None:

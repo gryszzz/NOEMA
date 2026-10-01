@@ -79,12 +79,15 @@ class ResearchTrialStore:
         params: dict[str, Any],
         feature_set_version: str,
         parent_trial_id: str | None = None,
+        status: str = "registered",
     ) -> str:
         family = family.strip()
         hypothesis = hypothesis.strip()
         feature_set_version = feature_set_version.strip()
         if not family or not hypothesis or not feature_set_version:
             raise ValueError("family, hypothesis, and feature_set_version are required")
+        if status not in {"registered", "deferred"}:
+            raise ValueError("new research trials must be registered or deferred")
 
         params_json = self.canonical_params(params)
         registered_at = datetime.now(UTC).isoformat()
@@ -99,7 +102,7 @@ class ResearchTrialStore:
             INSERT OR IGNORE INTO research_trials (
                 trial_id, family, hypothesis, params_json, feature_set_version,
                 status, created_at, parent_trial_id, status_updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'registered', ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trial_id,
@@ -107,6 +110,7 @@ class ResearchTrialStore:
                 hypothesis,
                 params_json,
                 feature_set_version,
+                status,
                 registered_at,
                 parent_trial_id,
                 registered_at,
@@ -117,7 +121,7 @@ class ResearchTrialStore:
 
     def set_status(self, trial_id: str, status: str) -> None:
         clean = status.strip()
-        if clean not in {"registered", "running", "rejected", "promoted", "retired"}:
+        if clean not in {"registered", "deferred", "running", "rejected", "promoted", "retired"}:
             raise ValueError("invalid research trial status")
         cursor = self.conn.execute(
             "UPDATE research_trials SET status = ?, status_updated_at = ? WHERE trial_id = ?",
@@ -125,6 +129,17 @@ class ResearchTrialStore:
         )
         if cursor.rowcount != 1:
             raise KeyError(trial_id)
+        self.conn.commit()
+
+    def reconcile_admission_status(self, trial_id: str, status: str) -> None:
+        """Reconcile runnable/deferred state without reopening terminal trials."""
+        if status not in {"registered", "deferred"}:
+            raise ValueError("admission status must be registered or deferred")
+        self.conn.execute(
+            "UPDATE research_trials SET status=?,status_updated_at=? "
+            "WHERE trial_id=? AND status IN ('registered','deferred') AND status<>?",
+            (status, datetime.now(UTC).isoformat(), trial_id, status),
+        )
         self.conn.commit()
 
     def count_family(self, family: str) -> int:
@@ -177,3 +192,16 @@ class ResearchTrialStore:
             (trial_id,),
         ).fetchone()
         return None if row is None else ResearchTrial(*row)
+
+    def deferred(self) -> list[ResearchTrial]:
+        """Return all deferred proposals so an old supported item cannot starve."""
+        rows = self.conn.execute(
+            """
+            SELECT trial_id, family, hypothesis, params_json, feature_set_version,
+                   status, created_at, parent_trial_id
+            FROM research_trials
+            WHERE status = 'deferred'
+            ORDER BY created_at, trial_id
+            """
+        ).fetchall()
+        return [ResearchTrial(*row) for row in rows]

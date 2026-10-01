@@ -21,6 +21,7 @@ from .agent_store import AgentStore
 from .autonomous_research import run_research_work
 from .baseline_recording import record_market_baseline
 from .bill_tracker import BillTracker
+from .chain_registry import load_evm_chains
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
 from .config import kalshi_production_read_only_config
@@ -32,7 +33,6 @@ from .economic_investigations import advance_current_period_investigation
 from .economic_ledger import EconomicLedger
 from .ecosystem_controller import review_research_ecosystem
 from .ecosystem_evolution import evolve_default_specialists
-from .evm_watch import EvmWatchClient
 from .history_forecaster import MODEL_VERSION, record_history_candidate
 from .kalshi_telemetry import KalshiTelemetry
 from .ledger import ForecastLedger
@@ -64,6 +64,7 @@ from .venues.kalshi import KalshiCredentialError, KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.polymarket_us import PolymarketUSVenue
 from .wallet_credentials import polymarket_us_credentials_present
+from .wallet_observer import PublicWalletObserver
 
 
 def _log(event: str, **fields: object) -> None:
@@ -237,29 +238,33 @@ async def _kalshi_state() -> AgentConnectionState:
 
 
 async def _evm_state(config: AgentConfig) -> AgentConnectionState:
-    if not config.evm_rpc_url or not config.evm_address:
-        return AgentConnectionState("unconfigured", "dedicated EVM wallet not configured")
-
+    address = (config.evm_address or os.getenv("NOEMA_EVM_ADDRESS") or "").strip()
+    if not address:
+        return AgentConnectionState("unconfigured", "public EVM wallet address not configured")
     try:
-        client = EvmWatchClient(
-            rpc_url=config.evm_rpc_url,
-            address=config.evm_address,
-        )
+        chains = list(load_evm_chains())
+        if config.evm_rpc_url:
+            chains = [
+                replace(chain, rpc_endpoint=config.evm_rpc_url,
+                        rpc_provider="configured_json_rpc") if chain.chain_id == 1 else chain
+                for chain in chains
+            ]
+        configured = [chain for chain in chains if chain.rpc_endpoint]
+        if not configured:
+            return AgentConnectionState("unconfigured", "EVM chain registry has no RPC endpoints")
+        async with PublicWalletObserver() as observer:
+            results = await asyncio.gather(*(observer.read_evm(chain, address) for chain in configured))
+        connected = sum(item.get("status") == "read_only_balance" for item in results)
+        failed = len(results) - connected
+        detail = f"read_only_chains={connected}/{len(results)} rpc_failures={failed}"
+        invalid = sum(item.get("status") == "invalid_address" for item in results)
+        status = "connected" if connected else "degraded"
+        if invalid:
+            status = "degraded"
+            detail = f"public address invalid; read_only_chains=0/{len(results)} rpc_failures={failed}"
+        return AgentConnectionState(status, detail)
     except (httpx.HTTPError, RuntimeError, ValueError, TypeError) as exc:
-        return AgentConnectionState("degraded", f"{type(exc).__name__}: wallet setup failed")
-    try:
-        snapshot = await client.snapshot()
-        return AgentConnectionState(
-            "connected",
-            (
-                f"chain_id={snapshot.chain_id} block={snapshot.block_number} "
-                f"native={snapshot.native_balance}"
-            ),
-        )
-    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
-        return AgentConnectionState("degraded", f"{type(exc).__name__}: wallet RPC failed")
-    finally:
-        await client.close()
+        return AgentConnectionState("degraded", f"{type(exc).__name__}: wallet observation failed")
 
 
 async def _trench_state(
@@ -376,6 +381,8 @@ async def _trench_sampler_loop(
                     recorded=summary.recorded,
                     unavailable=summary.unavailable,
                     failed=summary.failed,
+                    assessments_recorded=summary.assessments_recorded,
+                    counterfactuals_recorded=summary.counterfactuals_recorded,
                 )
         except asyncio.CancelledError:
             raise
@@ -464,7 +471,10 @@ async def run_cycle(
         stripe_canonical = {"status": "unavailable"}
     if stripe_economy.get("status") not in {"cached", "disabled"}:
         _log("agent_stripe_economy", status=stripe_economy.get("status"),
+             credential_present=bool(os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")),
              payment_intent_count=stripe_economy.get("payment_intent_count"),
+             record_count=stripe_economy.get("persisted_record_count",
+                                             stripe_economy.get("record_count")),
              succeeded_count=stripe_economy.get("succeeded_count"),
              new_successful_payment_count=stripe_economy.get("new_successful_payment_count"))
     finish_stage(stage_name)
@@ -648,15 +658,22 @@ async def run_cycle(
             for item in (evolution.kalshi, evolution.trench)
         )
         challenger_count = sum(
-            len(item.experiments)
+            sum(experiment.status == "registered" for experiment in item.experiments)
             for item in (evolution.kalshi, evolution.trench)
         )
+        deferred_challenger_count = sum(
+            sum(experiment.status == "deferred" for experiment in item.experiments)
+            for item in (evolution.kalshi, evolution.trench)
+        )
+        admitted_challenger_count = len(evolution.admitted_trial_ids)
     except (sqlite3.Error, ValueError, OSError, KeyError) as exc:
         ecosystem_plan = None
         ecosystem_state = "degraded"
         ecosystem_focus = None
         evolution_reviews = 0
         challenger_count = 0
+        deferred_challenger_count = 0
+        admitted_challenger_count = 0
         _log("agent_ecosystem_error", error=type(exc).__name__)
     finish_stage(stage_name)
     stage_name = "cognition_and_goal_selection"
@@ -758,6 +775,8 @@ async def run_cycle(
                 f"ecosystem_idle={0.0 if ecosystem_plan is None else ecosystem_plan.idle_fraction:.3f}; "
                 f"evolution_reviews={evolution_reviews}; "
                 f"challengers_registered={challenger_count}; "
+                f"challengers_deferred={deferred_challenger_count}; "
+                f"challengers_admitted={admitted_challenger_count}; "
                 f"trench={trench.status}; "
                 f"polymarket_us={polymarket_connection.status}; "
                 f"stripe_economy={stripe_economy.get('status')}; "
@@ -910,6 +929,15 @@ async def run_agent(
             _trench_sampler_loop(config.db_path, trench_config, request_snapshot_after_change),
             name="noema-trench-forward-sampler",
         )
+        _log(
+            "trench_forward_sampler_started",
+            primary_rpc_configured=bool(os.getenv("NOEMA_SOLANA_RPC_URL", "").strip()),
+            fallback_rpc_configured=bool(trench_config.solana_rpc_fallback_url),
+            interval_seconds=trench_config.sample_interval_seconds,
+            enabled=True,
+        )
+    else:
+        _log("trench_forward_sampler_started", enabled=False, reason="collector_disabled")
     if os.getenv("NOEMA_POLYMARKET_US_ENABLED", "1").strip() == "1":
         polymarket_stream = asyncio.create_task(
             run_polymarket_account_stream(

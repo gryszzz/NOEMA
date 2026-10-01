@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 from mcp.shared.exceptions import McpError
 
+from . import experiment_factory
 from .agent_identity import AgentIdentity
 from .ecosystem import EcosystemPlan
 from .ecosystem_controller import record_mission_allocation_review
@@ -212,45 +213,10 @@ class ResearchWorkStore:
 
 def handler_for(trial: ResearchTrial) -> tuple[str, str] | None:
     params = json.loads(trial.params_json)
-    if (
-        trial.family == "agent_services_opportunity_qualification"
-        and trial.feature_set_version == "commercial-qualification-v1"
-        and params == {"experiment": "commercial_opportunity_scan", "version": "v1"}
-    ):
-        return "NOEMA", "commercial_opportunity_scan"
-    if (
-        trial.family == "prediction_markets_data_quality"
-        and trial.feature_set_version == "market-data-v1"
-        and params == {"experiment": "market_data_quality", "version": "v1"}
-    ):
-        return "kalshi-history", "market_data_quality"
-    # Exact contracts: untrusted free text, paths and extra parameters are never executed.
-    if (
-        trial.family == "prediction_markets_execution"
-        and params
-        == {
-            "experiment": "cost_threshold_sweep",
-            "search": "predeclared_grid",
-            "objective": "after_cost_return",
-            "must_record_all_variants": True,
-        }
-        and trial.feature_set_version == "execution-v1"
-    ):
-        return "kalshi-history", "cost_threshold_sweep"
-    if (
-        trial.family == "trench_survival"
-        and params
-        == {
-            "model": "logistic_baseline",
-            "target": "survival_1h",
-            "feature_set": "trench-v1",
-            "validation": "purged_expanding_walk_forward",
-            "calibration": "none",
-        }
-        and trial.feature_set_version == "trench-v1"
-    ):
-        return "trench-1", "trench_survival_logistic"
-    return None
+    # Exact contract matching: untrusted free text, paths and extra parameters are never run.
+    return experiment_factory.handler_for_contract(
+        trial.family, trial.feature_set_version, params,
+    )
 
 
 def register_trench_trial_if_ready(
@@ -519,14 +485,9 @@ async def run_research_work(
                     session_id,
                     "idle",
                     {
-                        "reason": "commercial evidence could not be persisted; no work dispatched",
+                        "reason": "commercial evidence unavailable; independent research continues",
                     },
                 )
-                return {
-                    "status": "idle",
-                    "session_id": session_id,
-                    "reason": "commercial evidence unavailable",
-                }
         if not candidates:
             if blocked_trial_ids:
                 placeholders = ",".join("?" for _ in blocked_trial_ids)
@@ -574,14 +535,18 @@ async def run_research_work(
                         "mission_id": str(pending[0][0]),
                         "reason": "prior lesson applied; unsupported repeat mission passed",
                     }
+            reason = (
+                "prior lesson retained; no registered independent research experiment currently "
+                "meets its evidence and attention gates"
+            )
             if commercial_lesson_requires_new_source:
-                return {
-                    "status": "idle",
-                    "reason": "prior commercial lesson requires a new verified buyer or delivery source",
-                }
+                reason = (
+                    "prior lesson requires a new verified buyer or delivery source; "
+                    "no independent experiment currently meets its evidence and attention gates"
+                )
             return {
                 "status": "idle",
-                "reason": "prior lesson requires demand and all-in-cost evidence not supported by current experiments",
+                "reason": reason,
             }
         candidates.sort(
             key=lambda item: (

@@ -36,7 +36,10 @@ async def test_rpc_error_does_not_expose_token_in_agent_status(monkeypatch) -> N
         raise httpx.ConnectError(
             secret, request=httpx.Request("POST", f"https://example.com/{secret}")
         )
-    monkeypatch.setattr("noema.agent_runtime.EvmWatchClient.snapshot", lambda self: fail())
+    async def fail_read(_observer, chain, _address):
+        await fail()
+        return {"chain": chain.name, "status": "unavailable"}
+    monkeypatch.setattr("noema.agent_runtime.PublicWalletObserver.read_evm", fail_read)
     state = await _evm_state(AgentConfig(
         evm_rpc_url=f"https://example.com/{secret}", evm_address="0x" + "a" * 40,
     ))

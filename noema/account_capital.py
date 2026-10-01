@@ -75,7 +75,8 @@ async def value_native_wallets(networks: list[dict[str, Any]]) -> list[dict[str,
     https://docs.cdp.coinbase.com/coinbase-business/track-apis/prices
     """
     symbols = {"solana": "SOL", "ethereum": "ETH", "base": "ETH",
-               "polygon": "POL", "bitcoin": "BTC"}
+               "arbitrum": "ETH", "optimism": "ETH", "polygon": "POL",
+               "bnb-chain": "BNB", "avalanche": "AVAX", "bitcoin": "BTC"}
     needed = set()
     for row in networks:
         amount = _decimal(row.get("sol", row.get("native_balance", row.get("btc"))))
