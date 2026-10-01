@@ -461,13 +461,11 @@ async def _sample_capital_history() -> None:
             ))
             continue
         _account_log.info("Capital history sampler cycle started")
-        stage_started = time.monotonic()
         try:
             # Bypass request caches: this sampler owns the collection cadence,
             # so each runtime cycle must perform a new authenticated read.
             stage = "authenticated_source_reads"
             wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
-            source_reads_ms = max(0, round((time.monotonic() - stage_started) * 1000))
             venue_rows = venues.get("venues", [])
             polymarket_rows = [
                 row for row in venue_rows
@@ -510,28 +508,20 @@ async def _sample_capital_history() -> None:
                         stream.get("last_persisted_at"),
                     )
             stage = "persist_balance_history"
-            stage_started = time.monotonic()
             stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
             await asyncio.to_thread(
                 balance_history, _console_state_db_path(), venues,
                 {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
                 window="24H", stripe=stripe,
             )
-            persistence_ms = max(0, round((time.monotonic() - stage_started) * 1000))
             _account_log.info(
-                "Capital history sampler cycle completed venues=%d wallet_networks=%d "
-                "source_reads_ms=%d persistence_ms=%d cycle_elapsed_ms=%d",
+                "Capital history sampler cycle completed venues=%d wallet_networks=%d",
                 len(venue_rows), len(wallets.get("networks", [])),
-                source_reads_ms, persistence_ms,
-                max(0, round((time.monotonic() - cycle_started) * 1000)),
             )
         except Exception as exc:  # noqa: BLE001 - persist safe stage/type and keep sampler retrying.
             _account_log.warning(
-                "Capital history sampler failed stage=%s error_type=%s stage_elapsed_ms=%d "
-                "cycle_elapsed_ms=%d",
+                "Capital history sampler failed stage=%s error_type=%s",
                 stage, type(exc).__name__,
-                max(0, round((time.monotonic() - stage_started) * 1000)),
-                max(0, round((time.monotonic() - cycle_started) * 1000)),
             )
         await asyncio.sleep(_capital_sample_sleep_seconds(
             _capital_sample_interval(), cycle_started,

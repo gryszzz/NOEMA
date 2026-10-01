@@ -106,14 +106,7 @@ def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatc
     assert persisted[4] == "24H"
     assert persisted[3]["observed_at"] == "wallet-observed-at"
     assert "Account observation venue=polymarket_us status=projection_missing" in caplog.text
-    completed = next(
-        record for record in caplog.records
-        if "Capital history sampler cycle completed" in record.message
-    )
-    assert "venues=0 wallet_networks=0" in completed.message
-    assert "source_reads_ms=" in completed.message
-    assert "persistence_ms=" in completed.message
-    assert "cycle_elapsed_ms=" in completed.message
+    assert "Capital history sampler cycle completed venues=0 wallet_networks=0" in caplog.text
 
 
 def test_capital_sampler_logs_only_safe_stage_and_error_class(monkeypatch, tmp_path, caplog):
