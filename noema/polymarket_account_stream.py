@@ -16,6 +16,8 @@ from .wallet_credentials import (
 )
 
 _log = logging.getLogger(__name__)
+_account_log = logging.getLogger("noema.account")
+_account_log.setLevel(logging.INFO)
 _stream_health: dict[str, Any] = {
     "state": "not_started", "connected_at": None, "last_message_at": None,
     "last_persisted_at": None, "events_received": 0, "reconnects": 0,
@@ -201,7 +203,7 @@ async def run_polymarket_account_stream(
                 try:
                     persisted = persist_prediction_account_records(db_path(), records, observed_at=observed)
                     _stream_health["last_persisted_at"] = observed
-                    _log.info(
+                    _account_log.info(
                         "Polymarket private account event persisted "
                         "(balances=%d positions=%d orders=%d fills=%d inserted=%d updated=%d skipped=%d)",
                         len(normalized_balances), len(normalized_positions), len(orders), len(fills),
@@ -225,7 +227,7 @@ async def run_polymarket_account_stream(
                     state="connected", connected_at=datetime.now(UTC).isoformat(),
                     last_error_type=None,
                 )
-                _log.info("Polymarket private account stream connected")
+                _account_log.info("Polymarket private account stream connected")
 
             websocket.on("open", mark_connected)
             websocket.on("error", lambda error: (
