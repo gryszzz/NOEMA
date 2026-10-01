@@ -56,3 +56,22 @@ def diagnose(config: KalshiConfig | None = None) -> ConfigDiagnostic:
 
 def diagnostic_dict(config: KalshiConfig | None = None) -> dict[str, object]:
     return asdict(diagnose(config))
+
+
+def kalshi_runtime_credential_diagnostic(
+    config: KalshiConfig | None = None,
+) -> dict[str, str]:
+    """Return only safe credential presence and source metadata for runtime logs."""
+    result = diagnose(config)
+    file_status = (
+        "missing" if result.private_key_file_status == "not_configured"
+        else result.private_key_file_status
+    )
+    return {
+        "kalshi_api_key_id_present": "yes" if result.api_key_id_present else "no",
+        "kalshi_api_key_id_provider": result.api_key_id_provider,
+        "kalshi_private_key_configured": "yes" if result.private_key_path_present else "no",
+        "kalshi_private_key_provider": result.private_key_provider,
+        "kalshi_private_key_file_status": file_status,
+        "kalshi_environment": result.environment,
+    }
