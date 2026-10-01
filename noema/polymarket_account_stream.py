@@ -214,7 +214,7 @@ async def run_polymarket_account_stream(
                                "positions": normalized_positions, "orders": orders,
                                "fills": fills})
                 except Exception:  # noqa: BLE001 - keep the socket alive; never log payloads
-                    _log.warning("Polymarket account event could not be persisted")
+                    _account_log.warning("Polymarket account event could not be persisted")
 
             websocket.on("account_balance_snapshot", persist)
             websocket.on("account_balance_update", persist)
@@ -232,11 +232,11 @@ async def run_polymarket_account_stream(
             websocket.on("open", mark_connected)
             websocket.on("error", lambda error: (
                 _stream_health.update(state="degraded", last_error_type=type(error).__name__),
-                _log.warning("Polymarket private account stream reported an error"),
+                _account_log.warning("Polymarket private account stream reported an error"),
             ))
             websocket.on("close", lambda: (
                 _stream_health.update(state="disconnected"),
-                _log.warning("Polymarket private account stream closed"),
+                _account_log.warning("Polymarket private account stream closed"),
             ))
             await websocket.connect()
             await websocket.subscribe_account_balance("noema-account-balance")
@@ -251,7 +251,7 @@ async def run_polymarket_account_stream(
             raise
         except Exception as exc:  # noqa: BLE001 - websocket SDK errors are provider-specific
             _stream_health.update(state="degraded", last_error_type=type(exc).__name__)
-            _log.warning("Polymarket private account stream reconnecting (%s)", type(exc).__name__)
+            _account_log.warning("Polymarket private account stream reconnecting (%s)", type(exc).__name__)
             await asyncio.sleep(delay)
             delay = min(30.0, delay * 2)
         finally:
@@ -260,4 +260,4 @@ async def run_polymarket_account_stream(
                 try:
                     await websocket.close()
                 except Exception as exc:  # noqa: BLE001 - cleanup must not mask the reconnect loop
-                    _log.debug("Polymarket private stream cleanup failed (%s)", type(exc).__name__)
+                    _account_log.debug("Polymarket private stream cleanup failed (%s)", type(exc).__name__)
