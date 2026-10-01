@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import gzip
 import hashlib
 import json
@@ -704,9 +705,11 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         # Snapshot failures can involve sensitive account payloads. Log only a
         # fixed stage name and exception class; never the exception message,
         # request headers, or snapshot contents.
+        error_number = exc.errno if isinstance(exc, OSError) else None
+        error_name = errno.errorcode.get(error_number) if error_number is not None else None
         _log.error(
-            "Worker snapshot persistence failed stage=%s exception_type=%s",
-            failure_stage, type(exc).__name__,
+            "Worker snapshot persistence failed stage=%s exception_type=%s errno=%s errno_name=%s",
+            failure_stage, type(exc).__name__, error_number, error_name or "unknown",
         )
         raise HTTPException(status_code=500, detail="snapshot could not be persisted") from exc
     finally:

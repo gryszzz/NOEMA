@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import gzip
 import logging
 import os
@@ -560,6 +561,28 @@ def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None
     )
     assert response.status_code == 400
     assert not (tmp_path / "console-replica.db").exists()
+
+
+def test_worker_snapshot_logs_only_safe_storage_errno(monkeypatch, tmp_path, caplog) -> None:
+    from noema import dashboard_app
+
+    monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "console-replica.db"))
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+
+    def fail_temporary_file(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "private secret path must not be logged")
+
+    monkeypatch.setattr(dashboard_app.tempfile, "NamedTemporaryFile", fail_temporary_file)
+    caplog.set_level(logging.ERROR, logger="uvicorn.error")
+    response = TestClient(app).post(
+        "/internal/snapshot", content=gzip.compress(b"snapshot bytes"),
+        headers={"Authorization": "Bearer snapshot-test-token"},
+    )
+
+    assert response.status_code == 500
+    assert "stage=write_snapshot exception_type=OSError errno=28 errno_name=ENOSPC" in caplog.text
+    assert "private secret path" not in caplog.text
+    assert "snapshot-test-token" not in caplog.text
 
 
 def test_snapshot_persistence_failure_logs_only_safe_stage_and_type(
