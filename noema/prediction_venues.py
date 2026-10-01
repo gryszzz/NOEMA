@@ -50,6 +50,7 @@ from .prediction_account_history import (
     persist_prediction_account_records,
     prediction_account_sync_state,
 )
+from .sqlite_diagnostics import sqlite_error_fields
 from .venues.kalshi import KalshiVenue
 from .venues.polymarket_us import PolymarketUSVenue
 from .wallet_credentials import (
@@ -961,7 +962,10 @@ def _polymarket_account_error(exc: BaseException) -> dict[str, Any]:
         classification = "local_persistence_failure"
     else:
         classification = "account_request_failure"
-    return {"classification": classification, "error_type": name, "http_status": status}
+    return {
+        "classification": classification, "error_type": name, "http_status": status,
+        **sqlite_error_fields(exc),
+    }
 
 
 async def _polymarket_us_status(*, history_db_path: str | None = None) -> dict[str, Any]:
@@ -1258,6 +1262,8 @@ async def sample_polymarket_private_account(database_path: str) -> dict[str, Any
     return {
         "status": account.get("status", "unavailable"),
         "failure_class": account_read.get("classification") or account.get("error_type"),
+        "sqlite_error_code": account_read.get("sqlite_error_code"),
+        "sqlite_error_name": account_read.get("sqlite_error_name"),
         "credential_presence": account.get("credential_presence", {}),
         "private_stream": account.get("private_stream") or account.get("update_transport", {}),
         "records_persisted": persisted_count,

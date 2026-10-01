@@ -51,6 +51,7 @@ from .solana_research import (
     JupiterTrenchResearchClient,
     SolanaRpcResearchClient,
 )
+from .sqlite_diagnostics import sqlite_error_fields
 from .stripe_economy import reconcile_persisted_stripe_evidence, sync_stripe_economy
 from .sync import (
     cross_venue_outcome_targets,
@@ -104,6 +105,8 @@ async def _polymarket_account_sampler(
                 failure_class=result.get("failure_class"),
                 private_stream=stream.get("state", "unknown"),
                 records_persisted=result.get("records_persisted", 0),
+                sqlite_error_code=result.get("sqlite_error_code"),
+                sqlite_error_name=result.get("sqlite_error_name"),
             )
         except Exception as exc:  # noqa: BLE001 - keep the scheduled read-only sample alive
             key_id_present, secret_present = polymarket_us_credentials_present()
@@ -113,6 +116,7 @@ async def _polymarket_account_sampler(
                 credential_secret_present=secret_present,
                 status="failure", failure_class=type(exc).__name__,
                 records_persisted=0,
+                **sqlite_error_fields(exc),
             )
         await asyncio.sleep(_polymarket_account_sample_interval())
 
@@ -374,7 +378,8 @@ async def _trench_sampler_loop(
             raise
         except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                 KeyError, TypeError) as exc:
-            _log("trench_forward_sampler_error", error=type(exc).__name__)
+            _log("trench_forward_sampler_error", error=type(exc).__name__,
+                 **sqlite_error_fields(exc))
         elapsed = asyncio.get_running_loop().time() - started
         await asyncio.sleep(max(0.0, interval - elapsed))
 
@@ -475,9 +480,10 @@ async def run_cycle(
             trench_due_limit=trench_config.due_limit,
             trench_enrichment_limit=trench_config.enrichment_limit, cycle_id=cycle_id,
         )
-    except (sqlite3.Error, ValueError, OSError, KeyError, TypeError):
+    except (sqlite3.Error, ValueError, OSError, KeyError, TypeError) as exc:
         quotas = CollectionQuotas()
-        _log("agent_allocation_error", error="research allocation unavailable")
+        _log("agent_allocation_error", error="research allocation unavailable",
+             **sqlite_error_fields(exc))
     finish_stage(stage_name)
     stage_name = "kalshi_market_collection"
 
@@ -953,7 +959,8 @@ async def run_agent(
                     first_cycle_event_written = True
             except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                     KeyError, TypeError) as exc:
-                _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
+                _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id,
+                     **sqlite_error_fields(exc))
             try:
                 async with snapshot_lock:
                     snapshot_status = await publish_console_snapshot(config.db_path)

@@ -51,6 +51,7 @@ from .prediction_venues import (
     cached_prediction_venue_status,
 )
 from .research_state import research_trial_update_is_newer
+from .sqlite_diagnostics import sqlite_error_fields
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
@@ -717,8 +718,11 @@ def _log_snapshot_storage_failure(stage: str, exc: Exception) -> None:
     error_number = exc.errno if isinstance(exc, OSError) else None
     error_name = errno.errorcode.get(error_number) if error_number is not None else None
     _log.error(
-        "Worker snapshot persistence failed stage=%s exception_type=%s errno=%s errno_name=%s",
+        "Worker snapshot persistence failed stage=%s exception_type=%s errno=%s errno_name=%s "
+        "sqlite_error_code=%s sqlite_error_name=%s",
         stage, type(exc).__name__, error_number, error_name or "unknown",
+        sqlite_error_fields(exc).get("sqlite_error_code"),
+        sqlite_error_fields(exc).get("sqlite_error_name"),
     )
 
 
