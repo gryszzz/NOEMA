@@ -51,6 +51,7 @@ from .solana_research import (
     JupiterTrenchResearchClient,
     SolanaRpcResearchClient,
 )
+from .sqlite_diagnostics import sqlite_failure_diagnostics
 from .stripe_economy import reconcile_persisted_stripe_evidence, sync_stripe_economy
 from .sync import (
     cross_venue_outcome_targets,
@@ -374,7 +375,8 @@ async def _trench_sampler_loop(
             raise
         except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                 KeyError, TypeError) as exc:
-            _log("trench_forward_sampler_error", error=type(exc).__name__)
+            _log("trench_forward_sampler_error", error=type(exc).__name__,
+                 **sqlite_failure_diagnostics(exc))
         elapsed = asyncio.get_running_loop().time() - started
         await asyncio.sleep(max(0.0, interval - elapsed))
 
@@ -953,7 +955,8 @@ async def run_agent(
                     first_cycle_event_written = True
             except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                     KeyError, TypeError) as exc:
-                _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
+                _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id,
+                     **sqlite_failure_diagnostics(exc))
             try:
                 async with snapshot_lock:
                     snapshot_status = await publish_console_snapshot(config.db_path)
