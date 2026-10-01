@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -68,6 +69,65 @@ def test_cycle_timings_persist_idempotently_and_reject_invalid_values(tmp_path) 
     with pytest.raises(ValueError):
         store.append_cycle_timing(cycle_id=375, started_at=start, completed_at=end,
                                   duration_seconds=-1, stage_timings={})
+
+
+def test_agent_store_wal_allows_snapshot_reader_during_runtime_write(tmp_path) -> None:
+    path = tmp_path / "noema.db"
+    store = AgentStore(str(path))
+    assert store.conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    now = datetime.now(UTC)
+    status = AgentStatus(
+        agent_id="noema", name="NOEMA", version="0.1.0", mission="test",
+        running=True, last_heartbeat_at=now, last_cycle=None,
+    )
+    store.write_status(status)
+
+    reader = sqlite3.connect(path, timeout=0.05)
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT status_json FROM agent_runtime").fetchone()
+        writer = sqlite3.connect(path, timeout=0.05)
+        try:
+            writer.execute(
+                "UPDATE agent_runtime SET updated_at=? WHERE agent_id='noema'",
+                (now.isoformat(),),
+            )
+            writer.commit()
+        finally:
+            writer.close()
+    finally:
+        reader.rollback()
+        reader.close()
+        store.conn.close()
+
+
+def test_heartbeat_write_failure_rolls_back_its_transaction(tmp_path) -> None:
+    store = AgentStore(str(tmp_path / "noema.db"))
+    identity = {"pid": 42, "started_at": datetime.now(UTC).isoformat()}
+    store.set_process_identity(identity)
+    status = AgentStatus(
+        agent_id="noema", name="NOEMA", version="0.1.0", mission="test",
+        running=True, last_heartbeat_at=datetime.now(UTC), last_cycle=None,
+    )
+    store.write_status(status)
+    before = store.conn.execute(
+        "SELECT status_json FROM agent_runtime WHERE agent_id='noema'"
+    ).fetchone()[0]
+    store.conn.execute(
+        "CREATE TRIGGER reject_heartbeat BEFORE INSERT ON agent_heartbeats "
+        "BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+    )
+    store.conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.refresh_heartbeat()
+
+    assert store.conn.in_transaction is False
+    after = store.conn.execute(
+        "SELECT status_json FROM agent_runtime WHERE agent_id='noema'"
+    ).fetchone()[0]
+    assert after == before
+    store.conn.close()
 
 
 def test_process_identity_is_persisted_only_while_runtime_is_running(tmp_path) -> None:

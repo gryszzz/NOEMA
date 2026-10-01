@@ -17,7 +17,14 @@ class AgentStore:
         self.path = str(db.resolve())
         self.process_identity: dict[str, object] | None = None
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        # The runtime has concurrent readers (notably the online snapshot backup)
+        # and short writes from the heartbeat, collector, and private account
+        # stream. WAL lets those readers proceed without holding the rollback
+        # journal's read lock against writers. This mode is persistent in the DB
+        # header, so every later writer connection uses it as well.
+        self.conn = sqlite3.connect(db, timeout=15)
+        self.conn.execute("PRAGMA busy_timeout=15000")
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS agent_runtime (
@@ -134,41 +141,47 @@ class AgentStore:
     def refresh_heartbeat(self, at: datetime | None = None) -> bool:
         """Refresh only heartbeat fields, preserving any concurrently completed cycle."""
         at = at or datetime.now(UTC)
-        self.conn.execute("BEGIN IMMEDIATE")
-        row = self.conn.execute(
-            "SELECT status_json FROM agent_runtime WHERE agent_id='noema'"
-        ).fetchone()
-        if row is None:
-            self.conn.commit()
-            return False
         try:
-            payload = json.loads(row[0])
-        except (TypeError, ValueError):
-            self.conn.commit()
-            return False
-        if not isinstance(payload, dict) or not payload.get("running"):
-            self.conn.commit()
-            return False
-        if payload.get("process_identity") != self.process_identity:
-            self.conn.commit()
-            return False
+            self.conn.execute("BEGIN IMMEDIATE")
+            row = self.conn.execute(
+                "SELECT status_json FROM agent_runtime WHERE agent_id='noema'"
+            ).fetchone()
+            if row is None:
+                self.conn.commit()
+                return False
+            try:
+                payload = json.loads(row[0])
+            except (TypeError, ValueError):
+                self.conn.commit()
+                return False
+            if not isinstance(payload, dict) or not payload.get("running"):
+                self.conn.commit()
+                return False
+            if payload.get("process_identity") != self.process_identity:
+                self.conn.commit()
+                return False
 
-        payload["last_heartbeat_at"] = at.isoformat()
-        encoded = json.dumps(payload, default=str, sort_keys=True)
-        self.conn.execute(
-            "UPDATE agent_runtime SET status_json=?,updated_at=? WHERE agent_id='noema'",
-            (encoded, at.isoformat()),
-        )
-        cycle = payload.get("last_cycle")
-        cycle_id = cycle.get("cycle_id") if isinstance(cycle, dict) else None
-        health = cycle.get("health", "starting") if isinstance(cycle, dict) else "starting"
-        self.conn.execute(
-            "INSERT INTO agent_heartbeats"
-            " (agent_id,created_at,cycle_id,health,payload_json) VALUES (?,?,?,?,?)",
-            ("noema", at.isoformat(), cycle_id, health, encoded),
-        )
-        self.conn.commit()
-        return True
+            payload["last_heartbeat_at"] = at.isoformat()
+            encoded = json.dumps(payload, default=str, sort_keys=True)
+            self.conn.execute(
+                "UPDATE agent_runtime SET status_json=?,updated_at=? WHERE agent_id='noema'",
+                (encoded, at.isoformat()),
+            )
+            cycle = payload.get("last_cycle")
+            cycle_id = cycle.get("cycle_id") if isinstance(cycle, dict) else None
+            health = cycle.get("health", "starting") if isinstance(cycle, dict) else "starting"
+            self.conn.execute(
+                "INSERT INTO agent_heartbeats"
+                " (agent_id,created_at,cycle_id,health,payload_json) VALUES (?,?,?,?,?)",
+                ("noema", at.isoformat(), cycle_id, health, encoded),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error:
+            # A failed statement after BEGIN IMMEDIATE must not leave this
+            # long-lived heartbeat connection holding a write reservation.
+            self.conn.rollback()
+            raise
 
     def append_runtime_event(
         self, session_id: str, stage: str, status: str, detail: str,
