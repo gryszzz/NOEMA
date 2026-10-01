@@ -38,6 +38,8 @@ from .ledger import ForecastLedger
 from .opportunity_radar import build_radar
 from .outcomes import OutcomeStore
 from .paper_research import PaperResearchStore, collect_paper_quote
+from .polymarket_account_stream import run_polymarket_account_stream
+from .prediction_venues import sample_polymarket_private_account
 from .provenance import EvidenceStore
 from .research_allocation import CollectionQuotas, collection_quotas
 from .runtime_diagnostics import capture_process_identity
@@ -59,6 +61,7 @@ from .trench_config import TrenchCollectorConfig
 from .venues.kalshi import KalshiCredentialError, KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.polymarket_us import PolymarketUSVenue
+from .wallet_credentials import polymarket_us_credentials_present
 
 
 def _log(event: str, **fields: object) -> None:
@@ -70,6 +73,43 @@ def _log(event: str, **fields: object) -> None:
         ),
         flush=True,
     )
+
+
+def _polymarket_account_sample_interval() -> int:
+    try:
+        return max(60, min(3600, int(os.getenv(
+            "NOEMA_POLYMARKET_ACCOUNT_SAMPLE_INTERVAL_SECONDS", "300",
+        ))))
+    except ValueError:
+        return 300
+
+
+async def _polymarket_account_sampler(db_path: str) -> None:
+    """Sample through the existing authenticated read-only path on the worker DB."""
+    while True:
+        try:
+            result = await sample_polymarket_private_account(db_path)
+            presence = result.get("credential_presence", {})
+            stream = result.get("private_stream", {})
+            _log(
+                "polymarket_private_rest_sample",
+                credential_key_id_present=presence.get("key_id", False),
+                credential_secret_present=presence.get("secret_key", False),
+                status=result.get("status", "unavailable"),
+                failure_class=result.get("failure_class"),
+                private_stream=stream.get("state", "unknown"),
+                records_persisted=result.get("records_persisted", 0),
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the scheduled read-only sample alive
+            key_id_present, secret_present = polymarket_us_credentials_present()
+            _log(
+                "polymarket_private_rest_sample",
+                credential_key_id_present=key_id_present,
+                credential_secret_present=secret_present,
+                status="failure", failure_class=type(exc).__name__,
+                records_persisted=0,
+            )
+        await asyncio.sleep(_polymarket_account_sample_interval())
 
 
 def bootstrap_hosted_bill_budget(db_path: str) -> str | None:
@@ -789,12 +829,35 @@ async def run_agent(
     heartbeat_thread.start()
 
     trench_sampler: asyncio.Task[None] | None = None
+    polymarket_stream: asyncio.Task[None] | None = None
+    polymarket_rest_sampler: asyncio.Task[None] | None = None
     trench_config = TrenchCollectorConfig.from_env()
     if trench_config.enabled:
         trench_sampler = asyncio.create_task(
             _trench_sampler_loop(config.db_path, trench_config),
             name="noema-trench-forward-sampler",
         )
+    if os.getenv("NOEMA_POLYMARKET_US_ENABLED", "1").strip() == "1":
+        polymarket_stream = asyncio.create_task(
+            run_polymarket_account_stream(
+                lambda: config.db_path, lambda _update: None,
+            ),
+            name="noema-polymarket-account-stream",
+        )
+        polymarket_rest_sampler = asyncio.create_task(
+            _polymarket_account_sampler(config.db_path),
+            name="noema-polymarket-account-rest-sampler",
+        )
+        key_id_present, secret_present = polymarket_us_credentials_present()
+        _log(
+            "polymarket_private_sampler_started",
+            credential_key_id_present=key_id_present,
+            credential_secret_present=secret_present,
+            stream_task=True, rest_sampler_task=True,
+            rest_interval_seconds=_polymarket_account_sample_interval(),
+        )
+    else:
+        _log("polymarket_private_sampler_disabled", flag="NOEMA_POLYMARKET_US_ENABLED")
 
     next_outcome_sync = 0.0
     first_cycle_event_written = False
@@ -842,10 +905,12 @@ async def run_agent(
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
-        if trench_sampler is not None:
-            trench_sampler.cancel()
+        for task in (trench_sampler, polymarket_stream, polymarket_rest_sampler):
+            if task is None:
+                continue
+            task.cancel()
             try:
-                await trench_sampler
+                await task
             except asyncio.CancelledError:
                 pass
         heartbeat_stop.set()

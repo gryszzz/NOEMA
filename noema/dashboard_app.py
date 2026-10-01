@@ -43,10 +43,8 @@ from .market_qualification import build_market_data_qualification
 from .operations_dashboard import build_operations
 from .opportunity_radar import build_radar
 from .paired_evaluation import compare_history_to_market
-from .polymarket_account_stream import run_polymarket_account_stream
 from .prediction_account_history import _ensure_schema as ensure_prediction_account_schema
 from .prediction_venues import (
-    apply_polymarket_stream_projection,
     build_prediction_venue_status,
     cached_prediction_venue_status,
 )
@@ -62,7 +60,6 @@ app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), 
 _wallet_status_cache: dict[str, Any] = {"fetched_at": 0.0, "networks": []}
 _wallet_status_lock = asyncio.Lock()
 _capital_sampler_task: asyncio.Task | None = None
-_polymarket_stream_task: asyncio.Task | None = None
 _log = logging.getLogger(__name__)
 # Uvicorn's production dictConfig attaches the stderr handler to this logger's
 # parent (`uvicorn`). A custom logger propagates to root, which Uvicorn leaves
@@ -529,7 +526,7 @@ async def _sample_capital_history() -> None:
 
 @app.on_event("startup")
 async def start_capital_sampler() -> None:
-    global _capital_sampler_task, _polymarket_stream_task
+    global _capital_sampler_task
     # Import console-owned rows written by the previous colocated-database
     # version before enabling the sidecar writers. SQLite uniqueness makes
     # concurrent web-process startup migrations idempotent.
@@ -546,16 +543,12 @@ async def start_capital_sampler() -> None:
         _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
     else:
         _account_log.warning("Capital history sampler is disabled by configuration")
-    _polymarket_stream_task = asyncio.create_task(
-        run_polymarket_account_stream(_console_state_db_path, apply_polymarket_stream_projection),
-        name="noema-polymarket-account-stream",
-    )
 
 
 @app.on_event("shutdown")
 async def stop_capital_sampler() -> None:
-    global _capital_sampler_task, _polymarket_stream_task
-    for task in (_capital_sampler_task, _polymarket_stream_task):
+    global _capital_sampler_task
+    for task in (_capital_sampler_task,):
         if task is not None:
             task.cancel()
             try:
@@ -563,7 +556,6 @@ async def stop_capital_sampler() -> None:
             except asyncio.CancelledError:
                 pass
     _capital_sampler_task = None
-    _polymarket_stream_task = None
 
 
 def _db_path() -> str:
