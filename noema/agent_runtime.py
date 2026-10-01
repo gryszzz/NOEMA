@@ -56,7 +56,7 @@ from .sync import (
 )
 from .trench_collector import collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
-from .venues.kalshi import KalshiVenue
+from .venues.kalshi import KalshiCredentialError, KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.polymarket_us import PolymarketUSVenue
 
@@ -89,8 +89,22 @@ async def _kalshi_state() -> AgentConnectionState:
          **kalshi_runtime_credential_diagnostic(config))
     try:
         telemetry = KalshiTelemetry(config)
+    except KalshiCredentialError as exc:
+        detail_by_code = {
+            "private_key_unavailable": "private key unavailable",
+            "private_key_source_unavailable": "private key source unreadable",
+            "private_key_malformed": "private key malformed or incompatible",
+            "private_key_incompatible": "private key type incompatible with Kalshi signing",
+            "private_key_signing_failed": "private key signing failed",
+        }
+        detail = detail_by_code.get(exc.code, "credential initialization failed")
+        _log("agent_kalshi_account_check", result="credential_failure", failure=exc.code)
+        return AgentConnectionState("degraded", detail)
     except (RuntimeError, ValueError, OSError, TypeError) as exc:
-        return AgentConnectionState("unconfigured", f"{type(exc).__name__}: account unavailable")
+        # Never include the exception message: constructors may contain secret-derived text.
+        error_class = type(exc).__name__
+        _log("agent_kalshi_account_check", result="initialization_failure", error_class=error_class)
+        return AgentConnectionState("degraded", f"local credential initialization failed ({error_class})")
 
     try:
         orders, fills, positions = await asyncio.gather(
@@ -102,8 +116,30 @@ async def _kalshi_state() -> AgentConnectionState:
             "connected",
             f"orders={len(orders)} fills={len(fills)} positions={len(positions)}",
         )
-    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
-        return AgentConnectionState("degraded", f"{type(exc).__name__}: account check failed")
+    except KalshiCredentialError as exc:
+        detail = "private key signing failed" if exc.code == "private_key_signing_failed" else "private key incompatible"
+        _log("agent_kalshi_account_check", result="credential_failure", failure=exc.code)
+        return AgentConnectionState("degraded", detail)
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        if code in {401, 403}:
+            result, detail = "authenticated_api_rejection", f"authenticated API rejected credentials (HTTP {code})"
+        elif code == 429 or code >= 500:
+            result, detail = "api_unavailable", f"Kalshi API unavailable (HTTP {code})"
+        else:
+            result, detail = "api_rejection", f"Kalshi API rejected account request (HTTP {code})"
+        _log("agent_kalshi_account_check", result=result, http_status=code)
+        return AgentConnectionState("degraded", detail)
+    except httpx.RequestError as exc:
+        # URLs, request headers, and exception strings are intentionally omitted.
+        error_class = type(exc).__name__
+        _log("agent_kalshi_account_check", result="network_failure", error_class=error_class)
+        return AgentConnectionState("degraded", f"Kalshi network request failed ({error_class})")
+    except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        error_class = type(exc).__name__
+        result = "api_response_failure" if isinstance(exc, (ValueError, KeyError, TypeError)) else "api_request_failure"
+        _log("agent_kalshi_account_check", result=result, error_class=error_class)
+        return AgentConnectionState("degraded", f"Kalshi account request failed ({error_class})")
     finally:
         await telemetry.close()
 

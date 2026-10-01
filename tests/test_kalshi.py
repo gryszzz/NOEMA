@@ -2,7 +2,7 @@ import base64
 from decimal import Decimal
 
 from noema.config import KalshiConfig
-from noema.venues.kalshi import KalshiSigner, KalshiVenue
+from noema.venues.kalshi import KalshiCredentialError, KalshiSigner, KalshiVenue
 
 
 def test_demo_is_default_environment() -> None:
@@ -88,13 +88,37 @@ def test_malformed_hosted_kalshi_pem_has_secret_safe_error(monkeypatch, tmp_path
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
     try:
-        config = KalshiConfig.from_env()
-        KalshiSigner(config.key_id, private_key_pem_b64=config.private_key_pem_b64)
-    except RuntimeError as error:
+        malformed_b64 = base64.b64encode(
+            b"-----BEGIN PRIVATE KEY-----secret-value-----END PRIVATE KEY-----",
+        ).decode("ascii")
+        KalshiSigner("fixture-id", private_key_pem_b64=malformed_b64)
+    except KalshiCredentialError as error:
+        assert error.code == "private_key_malformed"
         assert "secret-value" not in str(error)
         assert "PRIVATE KEY" not in str(error)
     else:
         raise AssertionError("malformed PEM must fail closed")
+
+
+def test_kalshi_unsupported_private_key_signing_failure_is_classified_safely():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    signer = KalshiSigner("fixture-key-id", private_key_pem=pem)
+    try:
+        signer.headers("GET", "/trade-api/v2/portfolio/balance")
+    except KalshiCredentialError as error:
+        assert error.code == "private_key_signing_failed"
+        assert "fixture-key-id" not in str(error)
+        assert "signature" not in str(error).lower()
+    else:
+        raise AssertionError("unsupported signing key must fail closed")
 
 
 def test_market_mapping_uses_fixed_point_dollars() -> None:
