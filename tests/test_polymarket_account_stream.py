@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import sqlite3
 
-from noema import prediction_venues
+from noema import polymarket_account_stream, prediction_venues
 from noema.polymarket_account_stream import _account_rows
 from noema.prediction_account_history import persist_prediction_account_records
 
@@ -10,6 +11,25 @@ def test_account_observability_info_logger_is_explicitly_enabled():
     account_log = logging.getLogger("noema.account")
     assert account_log.level == logging.INFO
     assert account_log.isEnabledFor(logging.INFO)
+
+
+def test_unconfigured_private_stream_logs_presence_only(monkeypatch, caplog):
+    monkeypatch.setattr(polymarket_account_stream, "polymarket_us_credentials_present", lambda: (True, False))
+    monkeypatch.setitem(polymarket_account_stream._stream_health, "state", "not_started")
+
+    async def cancel_after_unconfigured_wait(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(polymarket_account_stream.asyncio, "sleep", cancel_after_unconfigured_wait)
+    try:
+        asyncio.run(polymarket_account_stream.run_polymarket_account_stream(lambda: "unused.db", lambda _: None))
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("stream retry loop should be cancelled by the test")
+
+    assert "Polymarket private account stream unconfigured key_id_present=yes secret_present=no" in caplog.text
+    assert "unused.db" not in caplog.text
 
 
 def test_private_balance_position_and_order_updates_normalize_to_existing_records(tmp_path):

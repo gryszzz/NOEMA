@@ -143,6 +143,13 @@ async def run_polymarket_account_stream(
         try:
             key_id_present, secret_present = polymarket_us_credentials_present()
             if not key_id_present or not secret_present:
+                if _stream_health.get("state") != "unconfigured":
+                    _account_log.info(
+                        "Polymarket private account stream unconfigured "
+                        "key_id_present=%s secret_present=%s",
+                        "yes" if key_id_present else "no",
+                        "yes" if secret_present else "no",
+                    )
                 _stream_health.update(state="unconfigured")
                 await asyncio.sleep(15)
                 continue

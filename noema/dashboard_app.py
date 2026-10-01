@@ -462,7 +462,17 @@ async def _sample_capital_history() -> None:
             # so each runtime cycle must perform a new authenticated read.
             stage = "authenticated_source_reads"
             wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
-            for venue in venues.get("venues", []):
+            venue_rows = venues.get("venues", [])
+            polymarket_rows = [
+                row for row in venue_rows
+                if isinstance(row, dict)
+                and str(row.get("venue", "")).lower().startswith("polymarket")
+            ]
+            if not polymarket_rows:
+                _account_log.info(
+                    "Account observation venue=polymarket_us status=projection_missing"
+                )
+            for venue in venue_rows:
                 if not isinstance(venue, dict):
                     continue
                 account = venue.get("account") or {}
@@ -500,9 +510,9 @@ async def _sample_capital_history() -> None:
                 {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
                 window="24H", stripe=stripe,
             )
-            _log.info(
+            _account_log.info(
                 "Capital history sampler cycle completed venues=%d wallet_networks=%d",
-                len(venues.get("venues", [])), len(wallets.get("networks", [])),
+                len(venue_rows), len(wallets.get("networks", [])),
             )
         except Exception as exc:  # noqa: BLE001 - persist safe stage/type and keep sampler retrying.
             _log.warning(
@@ -523,7 +533,7 @@ async def start_capital_sampler() -> None:
     _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
     sampler_enabled = _capital_history_sampler_enabled()
     key_id_present, secret_present = polymarket_us_credentials_present()
-    _log.info(
+    _account_log.info(
         "Capital observation startup sampler_enabled=%s sample_interval_seconds=%s "
         "worker_database_present=%s polymarket_key_id_present=%s polymarket_secret_present=%s",
         sampler_enabled, _capital_sample_interval(), Path(_db_path()).is_file(),
