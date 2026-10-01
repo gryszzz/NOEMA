@@ -38,6 +38,7 @@ def test_unconfigured_worker_cycle_reports_safe_kalshi_credential_metadata(
     assert diagnostic["event"] == "agent_kalshi_credential_diagnostic"
     assert {key: value for key, value in diagnostic.items() if key.startswith("kalshi_")} == {
         "kalshi_api_key_id_present": "yes",
+        "kalshi_api_key_id_header_safe": "yes",
         "kalshi_api_key_id_provider": "environment",
         "kalshi_private_key_configured": "yes",
         "kalshi_private_key_provider": "environment_path",
@@ -117,5 +118,40 @@ def test_kalshi_network_failure_is_distinguished_without_url_or_exception_text(m
     assert state.status == "degraded"
     assert state.detail == "Kalshi network request failed (ConnectError)"
     assert '"result": "network_failure"' in output.getvalue()
+    assert "do-not-log" not in output.getvalue()
+    assert "example.invalid" not in output.getvalue()
+
+
+def test_kalshi_local_protocol_failure_is_not_reported_as_network_failure(monkeypatch):
+    import httpx
+
+    request = httpx.Request("GET", "https://example.invalid/private")
+
+    class InvalidRequestTelemetry:
+        def __init__(self, _config):
+            pass
+
+        async def orders(self):
+            raise httpx.LocalProtocolError("do-not-log-header-value", request=request)
+
+        async def fills(self):
+            return []
+
+        async def positions(self):
+            return []
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("noema.agent_runtime.kalshi_production_read_only_config", lambda: object())
+    monkeypatch.setattr("noema.agent_runtime.kalshi_runtime_credential_diagnostic", lambda _c: {})
+    monkeypatch.setattr("noema.agent_runtime.KalshiTelemetry", InvalidRequestTelemetry)
+    output = StringIO()
+    with redirect_stdout(output):
+        state = asyncio.run(_kalshi_state())
+
+    assert state.status == "degraded"
+    assert state.detail == "Kalshi request could not be formed safely"
+    assert '"result": "request_protocol_failure"' in output.getvalue()
     assert "do-not-log" not in output.getvalue()
     assert "example.invalid" not in output.getvalue()

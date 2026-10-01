@@ -69,9 +69,21 @@ def kalshi_runtime_credential_diagnostic(
     )
     return {
         "kalshi_api_key_id_present": "yes" if result.api_key_id_present else "no",
+        "kalshi_api_key_id_header_safe": (
+            "yes" if _kalshi_key_id_header_safe(config.key_id) else "no"
+        ),
         "kalshi_api_key_id_provider": result.api_key_id_provider,
         "kalshi_private_key_configured": "yes" if result.private_key_path_present else "no",
         "kalshi_private_key_provider": result.private_key_provider,
         "kalshi_private_key_file_status": file_status,
         "kalshi_environment": result.environment,
     }
+
+
+def _kalshi_key_id_header_safe(value: str | None) -> bool:
+    """Validate only safe HTTP header character constraints, never disclose value."""
+    return bool(
+        value
+        and value.isascii()
+        and all(0x21 <= ord(char) <= 0x7E for char in value)
+    )

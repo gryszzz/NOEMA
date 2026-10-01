@@ -40,6 +40,7 @@ def test_runtime_credential_diagnostic_contains_only_safe_presence_metadata(
 
     assert result == {
         "kalshi_api_key_id_present": "yes",
+        "kalshi_api_key_id_header_safe": "yes",
         "kalshi_api_key_id_provider": "environment",
         "kalshi_private_key_configured": "yes",
         "kalshi_private_key_provider": "render_secret_file",
@@ -48,3 +49,13 @@ def test_runtime_credential_diagnostic_contains_only_safe_presence_metadata(
     }
     assert "fixture-id-must-not-appear" not in repr(result)
     assert "private-key-material-must-not-appear" not in repr(result)
+
+
+def test_runtime_credential_diagnostic_reports_header_safety_without_key_id(monkeypatch):
+    result = kalshi_runtime_credential_diagnostic(KalshiConfig(
+        environment="production",
+        key_id="fixture-id\nsecret-suffix",
+    ))
+    assert result["kalshi_api_key_id_header_safe"] == "no"
+    assert "fixture-id" not in repr(result)
+    assert "secret-suffix" not in repr(result)
