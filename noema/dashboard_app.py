@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import tempfile
 import time
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -71,6 +72,7 @@ _account_log.setLevel(logging.INFO)
 
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 _MAX_DATABASE_BYTES = 512 * 1024 * 1024
+_SNAPSHOT_IO_CHUNK_BYTES = 1024 * 1024
 
 
 def _merge_account_history_into_console_state(source_path: str, state_path: str) -> None:
@@ -115,9 +117,8 @@ def _copy_account_history_tables(
     ):
         if table not in source_tables:
             continue
-        rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
         if table == "prediction_account_records":
-            for row in rows:
+            for row in source.execute(f"SELECT {columns} FROM {table}"):
                 key = row[:3]
                 current = target.execute(
                     "SELECT first_observed_at,last_observed_at FROM prediction_account_records "
@@ -143,7 +144,7 @@ def _copy_account_history_tables(
                     (*row[:6], first_seen, *row[7:]),
                 )
         elif table == "prediction_account_sync_state":
-            for row in rows:
+            for row in source.execute(f"SELECT {columns} FROM {table}"):
                 key = row[:2]
                 current = target.execute(
                     "SELECT last_success_at,last_full_audit_at,high_water_at,high_water_id,last_error_type "
@@ -176,7 +177,7 @@ def _copy_account_history_tables(
         target.executemany("""INSERT OR IGNORE INTO prediction_account_baselines
                 (venue,observed_at,cash_usd,portfolio_value_usd,source) VALUES (?,?,?,?,?)""",
             source.execute("SELECT venue,observed_at,cash_usd,portfolio_value_usd,source "
-                           "FROM prediction_account_baselines").fetchall())
+                           "FROM prediction_account_baselines"))
     if "live_balance_observations" in source_tables:
         target.execute("""CREATE TABLE IF NOT EXISTS live_balance_observations (
                 fingerprint TEXT PRIMARY KEY, observed_at TEXT NOT NULL, amount_usd TEXT NOT NULL,
@@ -184,7 +185,7 @@ def _copy_account_history_tables(
         target.executemany("""INSERT OR IGNORE INTO live_balance_observations
                 (fingerprint,observed_at,amount_usd,scope,sources_json) VALUES (?,?,?,?,?)""",
             source.execute("SELECT fingerprint,observed_at,amount_usd,scope,sources_json "
-                           "FROM live_balance_observations").fetchall())
+                           "FROM live_balance_observations"))
     target.commit()
 
 
@@ -218,11 +219,10 @@ def _copy_console_research_history(
         columns = [name for name in source_columns if name != "id"]
         if not columns:
             continue
-        rows = source.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        rows = source.execute(f"SELECT {','.join(columns)} FROM {table}")
         if table == "research_trials" and {"trial_id", "status"} <= set(source_columns):
             status_time_column = next((name for name in ("status_updated_at", "updated_at")
                                        if name in columns), None)
-            pending = []
             for row in rows:
                 values = dict(zip(columns, row, strict=True))
                 trial_id = values["trial_id"]
@@ -231,7 +231,10 @@ def _copy_console_research_history(
                     "SELECT status,status_updated_at FROM research_trials WHERE trial_id=?", (trial_id,),
                 ).fetchone()
                 if existing is None:
-                    pending.append(row)
+                    target.execute(
+                        f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
+                        f"VALUES ({','.join('?' for _ in columns)})", row,
+                    )
                 elif research_trial_update_is_newer(
                     status, values.get(status_time_column) if status_time_column else None,
                     existing[0], existing[1],
@@ -240,8 +243,7 @@ def _copy_console_research_history(
                         "UPDATE research_trials SET status=?,status_updated_at=? WHERE trial_id=?",
                         (status, values.get(status_time_column) if status_time_column else None, trial_id),
                     )
-            rows = pending
-        if table == "autonomous_research_runs" and {
+        elif table == "autonomous_research_runs" and {
             "trial_id", "evidence_hash", "worker_version", "status", "completed_at",
         } <= set(source_columns):
             update_columns = [name for name in columns if name not in {
@@ -267,10 +269,18 @@ def _copy_console_research_history(
                             row[columns.index("worker_version")],
                         ),
                     )
-        target.executemany(
-            f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
-            f"VALUES ({','.join('?' for _ in columns)})", rows,
-        )
+                    continue
+                target.execute(
+                    f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
+                    f"VALUES ({','.join('?' for _ in columns)})", row,
+                )
+        else:
+            insert_sql = (
+                f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)})"
+            )
+            for row in rows:
+                target.execute(insert_sql, row)
 
     if "economic_events" not in source_tables:
         target.commit()
@@ -312,8 +322,7 @@ def _copy_console_research_history(
     existing_events = target.execute(
         "SELECT " + selected + " FROM economic_events WHERE "
         "event_type='canonical_market_observation' OR event_type LIKE 'paper_cross_venue_%' "
-        "OR event_type IN ('paper_settlement','paper_result')"
-    ).fetchall()
+        "OR event_type IN ('paper_settlement','paper_result')")
     for row in existing_events:
         digest = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
         target.execute(
@@ -322,8 +331,7 @@ def _copy_console_research_history(
     rows = source.execute(
         "SELECT " + selected + " FROM economic_events WHERE "
         "event_type='canonical_market_observation' OR event_type LIKE 'paper_cross_venue_%' "
-        "OR event_type IN ('paper_settlement','paper_result')"
-    ).fetchall()
+        "OR event_type IN ('paper_settlement','paper_result')")
     placeholders = ",".join("?" for _ in columns)
     for row in rows:
         digest = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
@@ -650,32 +658,24 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
                 raise HTTPException(status_code=413, detail="snapshot is too large")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid content length") from exc
-    compressed = await request.body()
-    if len(compressed) > _MAX_SNAPSHOT_BYTES:
-        raise HTTPException(status_code=413, detail="snapshot is too large")
+    destination = Path(_db_path()).resolve()
     try:
-        inflater = gzip.GzipFile(fileobj=__import__("io").BytesIO(compressed))
-        image = inflater.read(_MAX_DATABASE_BYTES + 1)
-    except (OSError, EOFError) as exc:
-        raise HTTPException(status_code=400, detail="invalid snapshot encoding") from exc
-    if len(image) > _MAX_DATABASE_BYTES:
-        raise HTTPException(status_code=413, detail="database snapshot is too large")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path, image_size = await _decompress_snapshot_to_file(request, destination.parent)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log_snapshot_storage_failure("write_snapshot", exc)
+        raise HTTPException(status_code=500, detail="snapshot could not be persisted") from exc
     encoded_metadata = request.headers.get("x-noema-worker-metadata")
     try:
         worker_metadata = None if encoded_metadata is None else decode_worker_metadata(encoded_metadata)
     except (TypeError, ValueError) as exc:
+        Path(temporary_path).unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="worker metadata is invalid") from exc
 
-    destination = Path(_db_path()).resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: str | None = None
     failure_stage = "write_snapshot"
     try:
-        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
-            temporary_path = temporary.name
-            temporary.write(image)
-            temporary.flush()
-            os.fsync(temporary.fileno())
         uri = Path(temporary_path).resolve().as_uri() + "?mode=ro"
         try:
             with sqlite3.connect(uri, uri=True, timeout=2) as conn:
@@ -695,7 +695,6 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         failure_stage = "replace_worker_replica"
         os.chmod(temporary_path, 0o444)
         os.replace(temporary_path, destination)
-        temporary_path = None
         if worker_metadata is not None:
             failure_stage = "persist_worker_metadata"
             persist_worker_metadata(_db_path(), worker_metadata)
@@ -705,21 +704,91 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         # Snapshot failures can involve sensitive account payloads. Log only a
         # fixed stage name and exception class; never the exception message,
         # request headers, or snapshot contents.
-        error_number = exc.errno if isinstance(exc, OSError) else None
-        error_name = errno.errorcode.get(error_number) if error_number is not None else None
-        _log.error(
-            "Worker snapshot persistence failed stage=%s exception_type=%s errno=%s errno_name=%s",
-            failure_stage, type(exc).__name__, error_number, error_name or "unknown",
-        )
+        _log_snapshot_storage_failure(failure_stage, exc)
         raise HTTPException(status_code=500, detail="snapshot could not be persisted") from exc
     finally:
-        if temporary_path is not None:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
-    return {"status": "persisted", "database_bytes": len(image),
+        Path(temporary_path).unlink(missing_ok=True)
+    return {"status": "persisted", "database_bytes": image_size,
             "received_at": datetime.now(UTC).isoformat()}
+
+
+def _log_snapshot_storage_failure(stage: str, exc: Exception) -> None:
+    """Log snapshot failure class and errno only; never exception text or content."""
+    error_number = exc.errno if isinstance(exc, OSError) else None
+    error_name = errno.errorcode.get(error_number) if error_number is not None else None
+    _log.error(
+        "Worker snapshot persistence failed stage=%s exception_type=%s errno=%s errno_name=%s",
+        stage, type(exc).__name__, error_number, error_name or "unknown",
+    )
+
+
+async def _decompress_snapshot_to_file(request: Request, directory: Path) -> tuple[str, int]:
+    """Stream a bounded gzip snapshot to disk instead of buffering it in RAM."""
+    compressed_path: str | None = None
+    database_path: str | None = None
+    compressed_size = 0
+    database_size = 0
+    try:
+        with tempfile.NamedTemporaryFile(dir=directory, delete=False) as compressed:
+            compressed_path = compressed.name
+            async for chunk in request.stream():
+                compressed_size += len(chunk)
+                if compressed_size > _MAX_SNAPSHOT_BYTES:
+                    raise HTTPException(status_code=413, detail="snapshot is too large")
+                await asyncio.to_thread(compressed.write, chunk)
+            await asyncio.to_thread(compressed.flush)
+            await asyncio.to_thread(os.fsync, compressed.fileno())
+
+        database_path, database_size = await asyncio.to_thread(
+            _inflate_snapshot_file, compressed_path, directory,
+        )
+    except HTTPException:
+        if database_path is not None:
+            Path(database_path).unlink(missing_ok=True)
+        raise
+    except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+        if database_path is not None:
+            Path(database_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="invalid snapshot encoding") from exc
+    finally:
+        if compressed_path is not None:
+            Path(compressed_path).unlink(missing_ok=True)
+    if database_path is None:
+        raise HTTPException(status_code=400, detail="invalid snapshot encoding")
+    return database_path, database_size
+
+
+def _inflate_snapshot_file(compressed_path: str, directory: Path) -> tuple[str, int]:
+    """Expand a gzip database to a temporary file with a strict size ceiling."""
+    database_path: str | None = None
+    database_size = 0
+    try:
+        with gzip.open(compressed_path, "rb") as inflater, tempfile.NamedTemporaryFile(
+            dir=directory, delete=False,
+        ) as database:
+            database_path = database.name
+            while chunk := inflater.read(_SNAPSHOT_IO_CHUNK_BYTES):
+                database_size += len(chunk)
+                if database_size > _MAX_DATABASE_BYTES:
+                    raise HTTPException(status_code=413, detail="database snapshot is too large")
+                database.write(chunk)
+            database.flush()
+            os.fsync(database.fileno())
+    except HTTPException:
+        if database_path is not None:
+            Path(database_path).unlink(missing_ok=True)
+        raise
+    except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+        if database_path is not None:
+            Path(database_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="invalid snapshot encoding") from exc
+    except OSError:
+        if database_path is not None:
+            Path(database_path).unlink(missing_ok=True)
+        raise
+    if database_path is None:
+        raise HTTPException(status_code=400, detail="invalid snapshot encoding")
+    return database_path, database_size
 
 
 @app.get("/", response_class=HTMLResponse)
