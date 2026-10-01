@@ -323,6 +323,9 @@ async def _trench_state(
         sqlite3.Error,
         OSError,
     ) as exc:
+        if isinstance(exc, sqlite3.Error):
+            _log("agent_trench_collection_error", error=type(exc).__name__,
+                 **sqlite_error_fields(exc))
         return AgentConnectionState(
             "degraded",
             f"{type(exc).__name__}: Trench collection failed",

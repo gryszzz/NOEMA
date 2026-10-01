@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 
 from noema import agent_runtime
 from noema.agent_config import AgentConfig
@@ -73,6 +74,27 @@ def test_polymarket_rest_sample_requests_snapshot_only_for_persisted_changes(mon
 
     assert asyncio.run(run(3)) == [True]
     assert asyncio.run(run(0)) == []
+
+
+def test_trench_health_sqlite_failure_logs_only_safe_error_metadata(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("NOEMA_TRENCH_ENABLED", "1")
+    error = sqlite3.OperationalError("database is locked: /private/account.db")
+    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+    error.sqlite_errorname = "SQLITE_BUSY"
+
+    async def fail_collection(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(agent_runtime, "collect_trench_cycle", fail_collection)
+    state = asyncio.run(agent_runtime._trench_state("worker.sqlite3"))
+
+    assert state.status == "degraded"
+    output = capsys.readouterr().out
+    assert '"event": "agent_trench_collection_error"' in output
+    assert '"sqlite_error_name": "SQLITE_BUSY"' in output
+    assert '"sqlite_error_code": 5' in output
+    assert "/private/account.db" not in output
+    assert "database is locked" not in output
 
 
 def test_render_budget_bootstrap_runs_only_for_hosted_runtime_and_persists_once(
