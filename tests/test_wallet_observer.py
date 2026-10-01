@@ -34,7 +34,11 @@ class PublicReadClient:
         chain_ids = {
             "ethereum-rpc.publicnode.com": 1,
             "mainnet.base.org": 8453,
+            "arb1.arbitrum.io": 42161,
+            "mainnet.optimism.io": 10,
             "polygon-bor-rpc.publicnode.com": 137,
+            "bsc-dataseed.binance.org": 56,
+            "api.avax.network": 43114,
         }
         chain_id = chain_ids[urlparse(url).hostname]
         if json["method"] == "eth_chainId":
@@ -66,17 +70,18 @@ def test_public_wallet_observer_reads_balances_without_signing_credentials(monke
     rows = asyncio.run(read())
 
     assert [row["chain"] for row in rows] == [
-        "solana", "ethereum", "base", "polygon", "bitcoin",
+        "solana", "ethereum", "base", "arbitrum", "optimism", "polygon",
+        "bnb-chain", "avalanche", "bitcoin",
     ]
     assert all(row["status"] == "read_only_balance" for row in rows)
     assert rows[0]["sol"] == "0.123456789"
     assert rows[1]["native_balance"] == "1.25"
     assert rows[2]["native_balance"] == "1.25"
-    assert rows[3]["native_balance"] == "1.25"
-    assert rows[4]["btc"] == "0.00000105"
+    assert rows[5]["native_balance"] == "1.25"
+    assert rows[8]["btc"] == "0.00000105"
     assert all(row["signer_configured"] is False for row in rows)
-    assert all(row["rpc_health"] == "healthy" for row in rows[1:4])
-    assert all(row["data_freshness"] == "fresh" for row in rows[1:4])
+    assert all(row["rpc_health"] == "healthy" for row in rows[1:8])
+    assert all(row["data_freshness"] == "fresh" for row in rows[1:8])
     assert rows[1]["canonical_network_id"] == "eip155:1"
     assert rows[2]["native_symbol"] == "ETH"
 
@@ -95,12 +100,12 @@ def test_public_wallet_observer_preserves_unknown_when_address_or_source_is_unav
     assert rows[0]["status"] == "unconfigured"
     assert rows[1]["status"] == "invalid_address"
     assert rows[2]["status"] == "invalid_address"
-    assert rows[3]["status"] == "invalid_address"
-    assert rows[4]["status"] == "unconfigured"
+    assert all(row["status"] == "invalid_address" for row in rows[1:8])
+    assert rows[8]["status"] == "unconfigured"
     assert "sol" not in rows[0]
     assert rows[1]["rpc_health"] == "healthy"
     assert "native_balance" not in rows[1]
-    assert "btc" not in rows[4]
+    assert "btc" not in rows[8]
 
 
 def test_public_wallet_observer_never_returns_secret_rpc_url_or_error_text(monkeypatch):

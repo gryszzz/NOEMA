@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -38,6 +39,16 @@ _LANES = {"web3", "prediction", "saas", "apis", "data", "subscriptions",
           "automation", "research", "agent_services", "other"}
 _READ_TOOLS = ("retrieve_balance", "list_payment_intents")
 _NOT_EXPOSED = ("refunds", "payouts", "balance_transactions", "fees")
+_STRIPE_REST_COLLECTIONS = {
+    "balance_transactions": "/v1/balance_transactions",
+    "payment_intents": "/v1/payment_intents",
+    "refunds": "/v1/refunds",
+    "disputes": "/v1/disputes",
+    "payouts": "/v1/payouts",
+    "subscriptions": "/v1/subscriptions",
+    "invoices": "/v1/invoices",
+}
+_STRIPE_ID = re.compile(r"^[a-z]{2,4}_[A-Za-z0-9]{6,128}$")
 
 
 def _now() -> str:
@@ -72,6 +83,12 @@ def _tool_payload(result: Any) -> Any:
 
 def _minor(value: Any) -> int | None:
     if type(value) is not int or value < 0 or value > 2**63 - 1:
+        return None
+    return value
+
+
+def _signed_minor(value: Any) -> int | None:
+    if type(value) is not int or abs(value) > 2**63 - 1:
         return None
     return value
 
@@ -153,6 +170,19 @@ class StripeEconomyStore:
             );
             CREATE INDEX IF NOT EXISTS stripe_payments_created
                 ON stripe_payment_observations(created_at DESC);
+            CREATE TABLE IF NOT EXISTS stripe_read_observations (
+                object_type TEXT NOT NULL,
+                object_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                created_at TEXT,
+                status TEXT,
+                currency TEXT,
+                amount_minor INTEGER,
+                fee_minor INTEGER,
+                net_minor INTEGER,
+                livemode INTEGER,
+                PRIMARY KEY(object_type, object_id)
+            );
         CREATE TABLE IF NOT EXISTS stripe_sync_state (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 next_sync_at TEXT NOT NULL
@@ -485,7 +515,12 @@ def _status_counts(payload: Any, collection: str) -> tuple[dict[str, int], int]:
 
 
 async def sync_stripe_economy(path: str, *, force: bool = False) -> dict[str, Any]:
-    """Fetch only the configured profile's explicitly allowlisted read-only tools."""
+    """Fetch Stripe via a bounded GET-only REST path or the legacy MCP profile."""
+    secret = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")
+    if secret:
+        return await _sync_stripe_rest(path, secret=secret, force=force)
+    if os.getenv("RENDER", "").lower() == "true":
+        return {"status": "unconfigured", "reason": "hosted Stripe REST credential unavailable"}
     if os.getenv("NOEMA_MCP_ENABLED", "0") != "1":
         return {"status": "disabled", "reason": "Docker MCP is disabled"}
     profile = os.getenv("NOEMA_MCP_PROFILE", "noema")
@@ -629,6 +664,117 @@ async def sync_stripe_economy(path: str, *, force: bool = False) -> dict[str, An
         store.close()
 
 
+async def _sync_stripe_rest(path: str, *, secret: str, force: bool) -> dict[str, Any]:
+    """Read only financial account evidence; never logs or persists customer payloads."""
+    store = StripeEconomyStore(path)
+    try:
+        if not force and not store.due():
+            return {"status": "cached", "record_count": 0}
+        recorded = 0
+        available = pending = None
+        capabilities = ["balance", *_STRIPE_REST_COLLECTIONS.keys(), "fees"]
+        async with httpx.AsyncClient(
+            base_url="https://api.stripe.com", timeout=httpx.Timeout(12.0),
+            follow_redirects=False,
+        ) as client:
+            balance_response = await client.get(
+                "/v1/balance", headers={"Authorization": f"Bearer {secret}"},
+            )
+            balance_response.raise_for_status()
+            balance = balance_response.json()
+            available = _balance_rows(balance.get("available")) if isinstance(balance, dict) else []
+            pending = _balance_rows(balance.get("pending")) if isinstance(balance, dict) else []
+            livemode = balance.get("livemode") if isinstance(balance, dict) else None
+            if type(livemode) is not bool:
+                livemode = None
+            observed_at = _now()
+            for object_type, endpoint in _STRIPE_REST_COLLECTIONS.items():
+                response = await client.get(
+                    endpoint, params={"limit": 100},
+                    headers={"Authorization": f"Bearer {secret}"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                items = payload.get("data", []) if isinstance(payload, dict) else []
+                if not isinstance(items, list):
+                    continue
+                for item in items[:100]:
+                    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                        continue
+                    object_id = item["id"]
+                    if not _STRIPE_ID.fullmatch(object_id):
+                        continue
+                    currency = item.get("currency")
+                    if not isinstance(currency, str) or not re.fullmatch(r"[a-z]{3}", currency):
+                        currency = None
+                    amount = _signed_minor(item.get("amount_received"))
+                    if amount is None:
+                        amount = _signed_minor(item.get("amount"))
+                    fee = _signed_minor(item.get("fee"))
+                    net = _signed_minor(item.get("net"))
+                    created = item.get("created")
+                    created_at = (datetime.fromtimestamp(created, UTC).isoformat()
+                                  if type(created) is int and 0 <= created <= 2**63 - 1 else None)
+                    status = item.get("status")
+                    if not isinstance(status, str) or not re.fullmatch(r"[a-z_]{1,40}", status):
+                        status = None
+                    item_live = item.get("livemode") if type(item.get("livemode")) is bool else livemode
+                    store.conn.execute(
+                        "INSERT INTO stripe_read_observations VALUES(?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(object_type,object_id) DO UPDATE SET observed_at=excluded.observed_at,"
+                        "created_at=excluded.created_at,status=excluded.status,currency=excluded.currency,"
+                        "amount_minor=excluded.amount_minor,fee_minor=excluded.fee_minor,"
+                        "net_minor=excluded.net_minor,livemode=excluded.livemode",
+                        (object_type, object_id, observed_at, created_at, status, currency,
+                         amount, fee, net, None if item_live is None else int(item_live)),
+                    )
+                    recorded += 1
+                    if object_type == "balance_transactions" and net is not None and currency == "usd":
+                        occurred = datetime.fromtimestamp(created, UTC) if created_at else datetime.now(UTC)
+                        net_decimal = Decimal(net) / Decimal(100)
+                        record_event_on_connection(store.conn, EconomicEvent(
+                            provider="stripe", external_reference_id=object_id,
+                            event_type="balance_transaction_observed", occurred_at=occurred,
+                            currency=currency.upper(), amount=net_decimal,
+                            amount_usd=net_decimal if currency == "usd" else None,
+                            reconciliation_state="MATCHED", value_state="realized",
+                            capital_class="unclassified_cash", confidence_state="provider_confirmed",
+                            completeness_state="complete" if fee is not None else "incomplete",
+                            evidence={"type": item.get("type") if isinstance(item.get("type"), str) else None,
+                                      "fee_minor": fee, "net_minor": net,
+                                      "livemode": item_live},
+                        ))
+            store.conn.commit()
+        store.record(
+            status="connected", livemode=livemode, available=available, pending=pending,
+            payments=[], scan_limit=100,
+            capabilities={"available": capabilities, "not_exposed": []},
+        )
+        interval = max(60, min(86400, int(os.getenv("NOEMA_STRIPE_SYNC_INTERVAL_SECONDS", "900"))))
+        store.conn.execute(
+            "INSERT INTO stripe_sync_state VALUES(1,?) ON CONFLICT(singleton) "
+            "DO UPDATE SET next_sync_at=excluded.next_sync_at",
+            (datetime.fromtimestamp(datetime.now(UTC).timestamp() + interval, UTC).isoformat(),),
+        )
+        store.conn.commit()
+        persisted = store.conn.execute(
+            "SELECT count(*) FROM stripe_read_observations"
+        ).fetchone()[0]
+        return {"status": "connected", "record_count": recorded,
+                "persisted_record_count": int(persisted)}
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError, TypeError, sqlite3.Error) as exc:
+        try:
+            store.record(status="unavailable", livemode=None, available=None, pending=None,
+                         payments=[], scan_limit=100,
+                         capabilities={"available": [], "not_exposed": list(_STRIPE_REST_COLLECTIONS)},
+                         error_code=type(exc).__name__)
+        except sqlite3.Error:
+            pass
+        return {"status": "unavailable", "reason": type(exc).__name__}
+    finally:
+        store.close()
+
+
 def stripe_economy_overview(path: str) -> dict[str, Any]:
     if not Path(path).exists():
         return {"status": "not_observed", "payments": [], "available": None,
@@ -639,7 +785,7 @@ def stripe_economy_overview(path: str) -> dict[str, Any]:
         tables = {row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
-        if "stripe_economy_snapshots" not in tables or "stripe_payment_observations" not in tables:
+        if "stripe_economy_snapshots" not in tables:
             return {"status": "not_observed", "payments": [], "available": None,
                     "pending": None, "capabilities": {"available": [],
                     "not_exposed": list(_NOT_EXPOSED)}}
@@ -654,7 +800,12 @@ def stripe_economy_overview(path: str) -> dict[str, Any]:
             "SELECT payment_intent_id,charge_id,created_at,status,amount_received_minor,currency,"
             "livemode,mission_id,attribution_json,first_seen_at FROM stripe_payment_observations "
             "ORDER BY COALESCE(created_at,'') DESC LIMIT 12"
-        ).fetchall()
+        ).fetchall() if "stripe_payment_observations" in tables else []
+        records_by_type = {}
+        if "stripe_read_observations" in tables:
+            records_by_type = {item[0]: item[1] for item in conn.execute(
+                "SELECT object_type,count(*) FROM stripe_read_observations GROUP BY object_type"
+            )}
         history_rows = conn.execute(
             "SELECT observed_at,available_json,pending_json FROM stripe_economy_snapshots "
             "WHERE status='connected' ORDER BY id DESC LIMIT 30"
@@ -686,8 +837,14 @@ def stripe_economy_overview(path: str) -> dict[str, Any]:
             "invoice_record_count": row["invoice_record_count"],
             "scan_limit": row["scan_limit"],
             "capabilities": json.loads(row["capabilities_json"]),
-            "accounting_note": "Successful PaymentIntents are gross captured amounts; fees, refunds, and payouts are not reconciled.",
-            "fees_refunds_payouts": "not_exposed_by_configured_read_only_tools",
+            "records_persisted": sum(records_by_type.values()),
+            "records_by_type": records_by_type,
+            "accounting_note": (
+                "Balance transactions are the canonical source for realized net cashflow; PaymentIntents are gross activity."
+                if records_by_type else
+                "Successful PaymentIntents are gross captured amounts; fees, refunds, and payouts are not reconciled."
+            ),
+            "fees_refunds_payouts": "included_when_present_in_balance_transactions",
             "error_code": row["error_code"],
             "balance_history": history,
             "payments": [{

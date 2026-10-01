@@ -5,6 +5,7 @@ import sys
 from decimal import Decimal
 from typing import Any
 
+from .chain_registry import load_evm_chains
 from .wallet_credentials import (
     bitcoin_signing_credential_present,
     evm_signing_credential_present,
@@ -29,11 +30,12 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
             ),
             "signer": "isolated signer process",
         },
-        {
-            "chain": "ethereum",
+        *({
+            "chain": chain.name,
             "network": "mainnet",
-            "chain_id": 1,
+            "chain_id": chain.chain_id,
             "address": os.environ.get("NOEMA_EVM_ADDRESS"),
+            "rpc_provider": chain.rpc_provider,
             "credential_present": evm_signing_credential_present(),
             "signer_process_enabled": os.environ.get("NOEMA_EVM_SIGNER_ENABLED") == "1",
             "master_halt": (
@@ -41,33 +43,7 @@ def public_wallet_policy(policy: AgentWalletPolicy | None = None) -> dict[str, A
                 or os.environ.get("NOEMA_EVM_MASTER_HALT", "1") != "0"
             ),
             "signer": "isolated signer process",
-        },
-        {
-            "chain": "base",
-            "network": "mainnet",
-            "chain_id": 8453,
-            "address": os.environ.get("NOEMA_EVM_ADDRESS"),
-            "credential_present": evm_signing_credential_present(),
-            "signer_process_enabled": os.environ.get("NOEMA_EVM_SIGNER_ENABLED") == "1",
-            "master_halt": (
-                os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
-                or os.environ.get("NOEMA_EVM_MASTER_HALT", "1") != "0"
-            ),
-            "signer": "isolated signer process",
-        },
-        {
-            "chain": "polygon",
-            "network": "mainnet",
-            "chain_id": 137,
-            "address": os.environ.get("NOEMA_EVM_ADDRESS"),
-            "credential_present": evm_signing_credential_present(),
-            "signer_process_enabled": os.environ.get("NOEMA_EVM_SIGNER_ENABLED") == "1",
-            "master_halt": (
-                os.environ.get("NOEMA_WALLET_MASTER_HALT", "1") != "0"
-                or os.environ.get("NOEMA_EVM_MASTER_HALT", "1") != "0"
-            ),
-            "signer": "isolated signer process",
-        },
+        } for chain in load_evm_chains()),
         {
             "chain": "bitcoin",
             "network": "mainnet",
@@ -137,9 +113,6 @@ async def live_wallet_networks() -> list[dict[str, Any]]:
         rows = await observer.read_all()
     credentials = {
         "solana": solana_signing_credential_present(),
-        "ethereum": evm_signing_credential_present(),
-        "base": evm_signing_credential_present(),
-        "polygon": evm_signing_credential_present(),
         "bitcoin": bitcoin_signing_credential_present(),
     }
     for row in rows:
@@ -149,7 +122,10 @@ async def live_wallet_networks() -> list[dict[str, Any]]:
             and row.get("data_freshness", "fresh") == "fresh"
         )
         connected = row.get("rpc_health") == "healthy" or readable
-        signer_configured = credentials.get(chain, False)
+        signer_configured = (
+            evm_signing_credential_present()
+            if row.get("chain_family") == "evm" else credentials.get(chain, False)
+        )
         row["credential_provider"] = "macos_keychain" if signer_configured else "unavailable"
         row.update(project_wallet_capabilities(
             connected=connected, authenticated=False, readable=readable,

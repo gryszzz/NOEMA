@@ -175,3 +175,62 @@ def test_stripe_sync_queues_when_shared_docker_worker_slot_is_busy(tmp_path, mon
     result = asyncio.run(sync_stripe_economy(str(tmp_path / "noema.db"), force=True))
     assert result["status"] == "queued"
     assert result["reason"] == "QUEUED: test slot busy"
+
+
+def test_hosted_rest_sync_uses_get_only_and_persists_financial_projection(tmp_path, monkeypatch):
+    import sqlite3
+
+    import httpx
+
+    from noema import stripe_economy
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, params=None, headers=None):
+            calls.append(("GET", str(url), dict(params or {})))
+            assert headers["Authorization"] == "Bearer test-secret"
+            if str(url) == "/v1/balance":
+                payload = {"livemode": True, "available": [{"currency": "usd", "amount": 500}],
+                           "pending": []}
+            elif str(url) == "/v1/balance_transactions":
+                payload = {"data": [{"id": "txn_1234567890", "type": "payment", "created": 1,
+                                      "currency": "usd", "amount": 600, "fee": 100, "net": 500,
+                                      "livemode": True}]}
+            elif str(url) == "/v1/subscriptions":
+                payload = {"data": [{"id": "sub_1234567890", "status": "active",
+                                      "customer": "cus_privatecustomer"}]}
+            else:
+                payload = {"data": []}
+            return httpx.Response(
+                200, json=payload,
+                request=httpx.Request("GET", f"https://api.stripe.com{url}"),
+            )
+
+    monkeypatch.setattr(stripe_economy.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "test-secret")
+    path = str(tmp_path / "noema.db")
+    result = asyncio.run(stripe_economy.sync_stripe_economy(path, force=True))
+    assert result["status"] == "connected", (result, calls)
+    assert result["persisted_record_count"] == 2
+    assert calls and all(method == "GET" for method, _, _ in calls)
+    assert all(params == {"limit": 100} for _, url, params in calls if url != "/v1/balance")
+    overview = stripe_economy.stripe_economy_overview(path)
+    assert overview["records_by_type"] == {"balance_transactions": 1, "subscriptions": 1}
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT net_minor,fee_minor FROM stripe_read_observations"
+        ).fetchone() == (500, 100)
+        assert "cus_privatecustomer" not in str(conn.execute(
+            "SELECT * FROM stripe_read_observations"
+        ).fetchall())

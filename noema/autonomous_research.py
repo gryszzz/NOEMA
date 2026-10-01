@@ -485,14 +485,9 @@ async def run_research_work(
                     session_id,
                     "idle",
                     {
-                        "reason": "commercial evidence could not be persisted; no work dispatched",
+                        "reason": "commercial evidence unavailable; independent research continues",
                     },
                 )
-                return {
-                    "status": "idle",
-                    "session_id": session_id,
-                    "reason": "commercial evidence unavailable",
-                }
         if not candidates:
             if blocked_trial_ids:
                 placeholders = ",".join("?" for _ in blocked_trial_ids)
@@ -540,14 +535,18 @@ async def run_research_work(
                         "mission_id": str(pending[0][0]),
                         "reason": "prior lesson applied; unsupported repeat mission passed",
                     }
+            reason = (
+                "prior lesson retained; no registered independent research experiment currently "
+                "meets its evidence and attention gates"
+            )
             if commercial_lesson_requires_new_source:
-                return {
-                    "status": "idle",
-                    "reason": "prior commercial lesson requires a new verified buyer or delivery source",
-                }
+                reason = (
+                    "prior lesson requires a new verified buyer or delivery source; "
+                    "no independent experiment currently meets its evidence and attention gates"
+                )
             return {
                 "status": "idle",
-                "reason": "prior lesson requires demand and all-in-cost evidence not supported by current experiments",
+                "reason": reason,
             }
         candidates.sort(
             key=lambda item: (

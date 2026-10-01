@@ -33,7 +33,8 @@ def project_balance(venues: dict, wallets: dict, now: datetime, stripe: dict | N
                               "observed": readable, "funded": amount is not None and amount > 0})
     known_native_symbols = {
         "solana": "SOL", "ethereum": "ETH", "base": "ETH",
-        "polygon": "POL", "bitcoin": "BTC",
+        "arbitrum": "ETH", "optimism": "ETH", "polygon": "POL",
+        "bnb-chain": "BNB", "avalanche": "AVAX", "bitcoin": "BTC",
     }
     for row in wallets.get("networks", []):
         if not isinstance(row, dict):

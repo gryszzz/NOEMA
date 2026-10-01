@@ -59,7 +59,3 @@ class AgentConfig:
             raise ValueError("outcome_sync_interval_seconds must be >= 60")
         if self.max_outcomes_per_sync <= 0:
             raise ValueError("max_outcomes_per_sync must be positive")
-        if bool(self.evm_rpc_url) != bool(self.evm_address):
-            raise ValueError(
-                "NOEMA_EVM_RPC_URL and NOEMA_EVM_ADDRESS must be configured together"
-            )

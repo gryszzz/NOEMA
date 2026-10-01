@@ -8,7 +8,9 @@ from noema.chain_registry import load_evm_chains
 def test_registry_keeps_existing_network_defaults_and_never_exposes_rpc_urls():
     rows = load_evm_chains({})
     assert [(row.chain_id, row.name) for row in rows] == [
-        (1, "ethereum"), (8453, "base"), (137, "polygon"),
+        (1, "ethereum"), (8453, "base"), (42161, "arbitrum"),
+        (10, "optimism"), (137, "polygon"), (56, "bnb-chain"),
+        (43114, "avalanche"),
     ]
     ethereum = rows[0]
     assert ethereum.canonical_id == "eip155:1"
@@ -28,8 +30,8 @@ def test_registry_accepts_new_chain_by_id_without_guessing_native_price_asset():
     chain = next(row for row in load_evm_chains(env) if row.chain_id == 42161)
     assert chain.canonical_id == "eip155:42161"
     assert chain.rpc_endpoint == "https://rpc.example/secret-path"
-    assert chain.native_price_symbol is None
-    assert chain.supported_quote_sources == ()
+    assert chain.native_price_symbol == "ETH"
+    assert chain.supported_quote_sources == ("0x_swap_v2_price",)
     public = chain.public_record()
     assert public["provider"] == "configured_json_rpc"
     assert public["execution_authority_state"] == "disabled"
@@ -43,8 +45,8 @@ def test_registry_discovers_rpc_ids_and_preserves_legacy_rpc_fallbacks():
     })
     optimism = next(row for row in rows if row.chain_id == 10)
     base = next(row for row in rows if row.chain_id == 8453)
-    assert optimism.name == "eip155-10"
-    assert optimism.native_symbol == "NATIVE"
+    assert optimism.name == "optimism"
+    assert optimism.native_symbol == "ETH"
     assert optimism.rpc_endpoint == "https://optimism.example/rpc"
     assert base.rpc_endpoint == "https://base.example/rpc"
 
