@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import logging
 import os
 import sqlite3
 import stat
@@ -21,6 +22,31 @@ def test_capital_history_sampler_configuration_defaults_enabled_and_can_be_disab
     for value in ("0", "false", "no"):
         monkeypatch.setenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", value)
         assert _capital_history_sampler_enabled() is False
+
+
+def test_capital_observation_startup_uses_explicitly_enabled_account_logger(
+    monkeypatch, caplog, tmp_path,
+) -> None:
+    from noema import dashboard_app
+
+    monkeypatch.setenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "0")
+    monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(tmp_path / "missing-worker.db"))
+    monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(tmp_path / "state.db"))
+    monkeypatch.setattr(dashboard_app, "_merge_account_history_into_console_state", lambda *_: None)
+    monkeypatch.setattr(dashboard_app, "polymarket_us_credentials_present", lambda: (True, True))
+
+    def discard_task(coro, *, name=None):
+        coro.close()
+
+    monkeypatch.setattr(dashboard_app.asyncio, "create_task", discard_task)
+    caplog.set_level(logging.INFO, logger="noema.account")
+
+    asyncio.run(dashboard_app.start_capital_sampler())
+
+    startup = next(record for record in caplog.records if "Capital observation startup" in record.message)
+    assert startup.name == "noema.account"
+    assert "sampler_enabled=False" in startup.message
+    assert "polymarket_key_id_present=True" in startup.message
 
 
 def test_capital_sampler_targets_start_to_start_interval() -> None:
@@ -107,6 +133,7 @@ def test_capital_sampler_logs_only_safe_stage_and_error_class(monkeypatch, tmp_p
         raise AssertionError("sampler should retry after the isolated source-read failure")
 
     assert "stage=authenticated_source_reads error_type=RuntimeError" in caplog.text
+    assert any(record.name == "noema.account" for record in caplog.records)
     assert "sensitive account body" not in caplog.text
     assert "credential placeholder" not in caplog.text
 

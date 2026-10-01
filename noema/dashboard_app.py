@@ -451,12 +451,12 @@ async def _sample_capital_history() -> None:
         cycle_started = time.monotonic()
         stage = "worker_database_check"
         if not Path(_db_path()).is_file():
-            _log.warning("Capital history sampler status=waiting_for_worker_snapshot")
+            _account_log.warning("Capital history sampler status=waiting_for_worker_snapshot")
             await asyncio.sleep(_capital_sample_sleep_seconds(
                 _capital_sample_interval(), cycle_started,
             ))
             continue
-        _log.info("Capital history sampler cycle started")
+        _account_log.info("Capital history sampler cycle started")
         try:
             # Bypass request caches: this sampler owns the collection cadence,
             # so each runtime cycle must perform a new authenticated read.
@@ -515,7 +515,7 @@ async def _sample_capital_history() -> None:
                 len(venue_rows), len(wallets.get("networks", [])),
             )
         except Exception as exc:  # noqa: BLE001 - persist safe stage/type and keep sampler retrying.
-            _log.warning(
+            _account_log.warning(
                 "Capital history sampler failed stage=%s error_type=%s",
                 stage, type(exc).__name__,
             )
@@ -542,7 +542,7 @@ async def start_capital_sampler() -> None:
     if sampler_enabled:
         _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
     else:
-        _log.warning("Capital history sampler is disabled by configuration")
+        _account_log.warning("Capital history sampler is disabled by configuration")
     _polymarket_stream_task = asyncio.create_task(
         run_polymarket_account_stream(_console_state_db_path, apply_polymarket_stream_projection),
         name="noema-polymarket-account-stream",
