@@ -24,13 +24,13 @@ with sqlite3.connect(sys.argv[1]) as c:
  c.execute('INSERT INTO mission_events VALUES(?,?,?,?,?,?,?,?)', (1,'mission-fixture','2026-09-27T00:00:05+00:00','evidence-critic','critic_evaluation','completed','Evidence critic passed integrity checks','{}'))
  c.execute('CREATE TABLE mission_handoffs(handoff_id,mission_id,created_at,updated_at,from_specialist,to_specialist,objective,status,capability_grants_json,resource_grant_json,result_json)')
  c.execute('INSERT INTO mission_handoffs VALUES(?,?,?,?,?,?,?,?,?,?,?)', ('handoff-fixture','mission-fixture','2026-09-27T00:00:04+00:00','2026-09-27T00:00:05+00:00','Test specialist','evidence-critic','Check result integrity','completed','["read_result"]','{"network":"denied"}','{"verdict":"PASS"}'))
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from noema.economic_ledger import EconomicEvent, EconomicLedger
 ledger = EconomicLedger(sys.argv[1])
 ledger.record_event(EconomicEvent(
  provider='fixture-wallet', event_type='owner_deposit', external_reference_id='fixture-deposit',
- occurred_at=datetime(2026, 9, 27, tzinfo=UTC), currency='USD', amount=Decimal(25),
+ occurred_at=datetime.now(UTC) - timedelta(minutes=1), currency='USD', amount=Decimal(25),
  amount_usd=Decimal(25), reconciliation_state='RECONCILED', value_state='realized',
  capital_class='owner_capital', confidence_state='provider_confirmed',
  completeness_state='complete', evidence={'fixture': True},
