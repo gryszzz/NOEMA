@@ -63,6 +63,8 @@ _wallet_status_lock = asyncio.Lock()
 _capital_sampler_task: asyncio.Task | None = None
 _polymarket_stream_task: asyncio.Task | None = None
 _log = logging.getLogger(__name__)
+_account_log = logging.getLogger("noema.account")
+_account_log.setLevel(logging.INFO)
 
 
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
@@ -459,7 +461,7 @@ async def _sample_capital_history() -> None:
                     persistence = account.get("history_persistence") or {}
                     stream = account.get("private_stream") or account.get("update_transport") or {}
                     account_read = account.get("account_read") or {}
-                    _log.info(
+                    _account_log.info(
                         "Account observation venue=polymarket_us status=%s balance_available=%s "
                         "positions=%s fills=%s activities=%s activity_complete=%s "
                         "missing_persisted=%s persistence=%s inserted=%s updated=%s skipped=%s "

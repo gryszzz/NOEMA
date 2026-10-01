@@ -1,8 +1,15 @@
+import logging
 import sqlite3
 
 from noema import prediction_venues
 from noema.polymarket_account_stream import _account_rows
 from noema.prediction_account_history import persist_prediction_account_records
+
+
+def test_account_observability_info_logger_is_explicitly_enabled():
+    account_log = logging.getLogger("noema.account")
+    assert account_log.level == logging.INFO
+    assert account_log.isEnabledFor(logging.INFO)
 
 
 def test_private_balance_position_and_order_updates_normalize_to_existing_records(tmp_path):
