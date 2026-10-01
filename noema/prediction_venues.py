@@ -71,9 +71,10 @@ _OVERLAP_SECONDS = 300
 
 def _account_history_plan(
     venue: str, record_types: tuple[str, ...], *, required_streams: tuple[str, ...] = ("activity", "settlement"),
+    database_path: str | None = None,
 ) -> tuple[bool, int | None, dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     """Choose a durable incremental cursor and scheduled full-coverage audit."""
-    path = console_state_db_path()
+    path = database_path or console_state_db_path()
     state = prediction_account_sync_state(path, venue)
     now = datetime.now(UTC)
     full_audit = True
@@ -963,7 +964,7 @@ def _polymarket_account_error(exc: BaseException) -> dict[str, Any]:
     return {"classification": classification, "error_type": name, "http_status": status}
 
 
-async def _polymarket_us_status() -> dict[str, Any]:
+async def _polymarket_us_status(*, history_db_path: str | None = None) -> dict[str, Any]:
     started = monotonic()
     venue = PolymarketUSVenue()
     try:
@@ -1039,6 +1040,7 @@ async def _polymarket_us_status() -> dict[str, Any]:
                 full_audit, _min_ts, history, sync_state = _account_history_plan(
                     "polymarket_us", ("fill", "position_resolution", "balance_activity"),
                     required_streams=("activity",),
+                    database_path=history_db_path,
                 )
                 request_stage = "positions"
                 positions = await _polymarket_cursor_pages(
@@ -1227,6 +1229,39 @@ async def _polymarket_us_status() -> dict[str, Any]:
         }
     finally:
         venue.close()
+
+
+async def sample_polymarket_private_account(database_path: str) -> dict[str, Any]:
+    """Run the existing read-only private account path and persist into its owner DB."""
+    result = await _polymarket_us_status(history_db_path=database_path)
+    account = result.get("account", {})
+    records = account.pop("_persisted_records", None)
+    persisted_count = 0
+    if records is not None:
+        coverage = account.get("history_coverage", {})
+        record = {
+            "venue": "polymarket_us",
+            **records,
+            "coverage": {
+                "positions_complete": coverage.get("positions", {}).get("complete") is True,
+                "settlements_complete": coverage.get("settlements", {}).get("complete") is True,
+                "deposits_complete": coverage.get("deposits", {}).get("complete") is True,
+                "withdrawals_complete": coverage.get("withdrawals", {}).get("complete") is True,
+                "open_orders_complete": coverage.get("orders", {}).get("open_snapshot") is True,
+            },
+        }
+        persistence = await asyncio.to_thread(
+            persist_prediction_account_records, database_path, [record],
+        )
+        persisted_count = persistence.get("inserted", 0) + persistence.get("updated", 0)
+    account_read = account.get("account_read", {})
+    return {
+        "status": account.get("status", "unavailable"),
+        "failure_class": account_read.get("classification") or account.get("error_type"),
+        "credential_presence": account.get("credential_presence", {}),
+        "private_stream": account.get("private_stream") or account.get("update_transport", {}),
+        "records_persisted": persisted_count,
+    }
 
 
 async def _cross_venue_candidate() -> dict[str, Any]:
