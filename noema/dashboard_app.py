@@ -601,6 +601,7 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
     destination = Path(_db_path()).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: str | None = None
+    failure_stage = "write_snapshot"
     try:
         with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
             temporary_path = temporary.name
@@ -619,17 +620,27 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         # Account rows included in worker snapshots are imported into the
         # console-owned sidecar. Live console writers target that same file,
         # which this atomic worker replacement never touches.
+        failure_stage = "merge_console_state"
         _merge_account_history_into_console_state(temporary_path, _console_state_db_path())
         # The replica is an immutable worker-provided snapshot. Console-owned
         # state is persisted in the sidecar, never in this replaceable file.
+        failure_stage = "replace_worker_replica"
         os.chmod(temporary_path, 0o444)
         os.replace(temporary_path, destination)
         temporary_path = None
         if worker_metadata is not None:
+            failure_stage = "persist_worker_metadata"
             persist_worker_metadata(_db_path(), worker_metadata)
     except HTTPException:
         raise
-    except (OSError, sqlite3.Error) as exc:
+    except Exception as exc:
+        # Snapshot failures can involve sensitive account payloads. Log only a
+        # fixed stage name and exception class; never the exception message,
+        # request headers, or snapshot contents.
+        _log.error(
+            "Worker snapshot persistence failed stage=%s exception_type=%s",
+            failure_stage, type(exc).__name__,
+        )
         raise HTTPException(status_code=500, detail="snapshot could not be persisted") from exc
     finally:
         if temporary_path is not None:

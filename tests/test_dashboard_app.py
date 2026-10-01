@@ -491,6 +491,29 @@ def test_worker_snapshot_rejects_corrupt_database(monkeypatch, tmp_path) -> None
     assert not (tmp_path / "console-replica.db").exists()
 
 
+def test_snapshot_persistence_failure_logs_only_safe_stage_and_type(
+    monkeypatch, tmp_path, caplog,
+) -> None:
+    source = tmp_path / "worker-source.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE prediction_account_records (venue TEXT)")
+    monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "console-replica.db"))
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+
+    def fail_merge(_source_path, _state_path):
+        raise sqlite3.OperationalError("sensitive-row-placeholder")
+
+    monkeypatch.setattr("noema.dashboard_app._merge_account_history_into_console_state", fail_merge)
+    response = TestClient(app).post(
+        "/internal/snapshot", content=gzip.compress(source.read_bytes()),
+        headers={"Authorization": "Bearer snapshot-test-token"},
+    )
+
+    assert response.status_code == 500
+    assert "stage=merge_console_state exception_type=OperationalError" in caplog.text
+    assert "sensitive-row-placeholder" not in caplog.text
+
+
 def test_replication_backup_contains_committed_worker_records(tmp_path) -> None:
     from noema.console_replication import _snapshot_image
 
