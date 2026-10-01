@@ -18,7 +18,7 @@ def test_one_total_preserves_scope_and_unknowns():
     result = project_balance(venues, wallets, NOW)
     assert result["amount_usd"] == "32.50"
     assert result["valued_sources"] == 2
-    assert result["expected_sources"] == 8
+    assert result["expected_sources"] == 4
     assert result["is_profit"] is False
     assert result["status"] == "CACHED"
     assert "open positions" in result["exclusions"]
@@ -79,6 +79,25 @@ def test_native_wallets_and_only_available_live_stripe_funds_roll_into_one_total
     assert stale["amount_usd"] == "32.50"
     assert stale["contributions"][-1]["status"] == "STALE"
     assert stale["stale_sources"] == 1
+
+
+def test_new_chain_registry_sources_join_total_only_when_marked_and_fresh():
+    venues, wallets = sources()
+    wallets["networks"].append({
+        "chain": "arbitrum", "canonical_network_id": "eip155:42161",
+        "native_symbol": "ETH", "address": "agent-address", "readable": True,
+        "connected": True, "native_balance": "0.25", "native_value_usd": "500",
+        "observed_at": NOW.isoformat(), "data_freshness": "fresh",
+    })
+    result = project_balance(venues, wallets, NOW)
+    entry = next(row for row in result["contributions"] if row["label"] == "arbitrum")
+    assert entry["id"] == "wallet:eip155:42161:agent-address"
+    assert entry["amount_usd"] == "500"
+    assert result["amount_usd"] == "532.50"
+    wallets["networks"][-1]["data_freshness"] = "stale"
+    stale = project_balance(venues, wallets, NOW)
+    assert stale["amount_usd"] == "32.50"
+    assert next(row for row in stale["contributions"] if row["label"] == "arbitrum")["status"] == "STALE"
 
 
 def test_funded_unpriced_is_never_zero_and_chain_accounts_remain_distinct():

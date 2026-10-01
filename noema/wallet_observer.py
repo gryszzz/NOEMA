@@ -11,17 +11,14 @@ from typing import Any, Self
 
 import httpx
 
-from .wallet_types import Chain
+from .chain_registry import EVMChain, load_evm_chains
 
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _SOLANA_ADDRESS = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 _BITCOIN_BECH32 = re.compile(r"^bc1[ac-hj-np-z02-9]{11,71}$")
 _BITCOIN_BASE58 = re.compile(r"^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$")
-_EVM_CHAINS = {
-    Chain.ETHEREUM: (1, "ethereum", "ETH", 18, "https://ethereum-rpc.publicnode.com"),
-    Chain.BASE: (8453, "base", "ETH", 18, "https://mainnet.base.org"),
-    Chain.POLYGON: (137, "polygon", "POL", 18, "https://polygon-bor-rpc.publicnode.com"),
-}
+_EVM_NATIVE_DECIMALS = 18
+_MAX_EVM_BLOCK_AGE_SECONDS = 120
 
 
 class PublicWalletObserver:
@@ -52,7 +49,17 @@ class PublicWalletObserver:
         evm = os.getenv("NOEMA_EVM_ADDRESS", "").strip()
         bitcoin = os.getenv("NOEMA_BITCOIN_ADDRESS", "").strip()
         reads = [self.read_solana(solana)]
-        reads.extend(self.read_evm(chain, evm) for chain in _EVM_CHAINS)
+        try:
+            chains = load_evm_chains()
+        except (TypeError, ValueError) as exc:
+            reads.append(asyncio.sleep(0, result={
+                "chain": "evm_registry", "chain_family": "evm",
+                "status": "registry_invalid", "rpc_health": "misconfigured",
+                "failure_type": type(exc).__name__, "execution_authority_state": "disabled",
+            }))
+            reads.append(self.read_bitcoin(bitcoin))
+            return list(await asyncio.gather(*reads))
+        reads.extend(self.read_evm(chain, evm) for chain in chains)
         reads.append(self.read_bitcoin(bitcoin))
         return list(await asyncio.gather(*reads))
 
@@ -79,33 +86,81 @@ class PublicWalletObserver:
                     "observed_at": datetime.now(UTC).isoformat(),
                     "failure_type": type(exc).__name__}
 
-    async def read_evm(self, chain: Chain, address: str) -> dict[str, Any]:
-        chain_id, suffix, symbol, decimals, default_url = _EVM_CHAINS[chain]
-        base = {"chain": chain.value, "network": "mainnet", "chain_id": chain_id,
-                "address": address or None}
-        if not address:
-            return {**base, "status": "unconfigured"}
-        if not _EVM_ADDRESS.fullmatch(address):
-            return {**base, "status": "invalid_address"}
-        endpoint = (os.getenv(f"NOEMA_EVM_RPC_URL_{suffix.upper()}")
-                    or os.getenv("NOEMA_EVM_RPC_URL") or default_url)
+    async def read_evm(self, chain: EVMChain, address: str) -> dict[str, Any]:
+        invalid_address = bool(address) and _EVM_ADDRESS.fullmatch(address) is None
+        base = {
+            **chain.public_record(), "network": "mainnet", "address": address or None,
+            "wallet_address_configured": bool(address),
+            "status": "unconfigured", "rpc_health": "unknown",
+            "data_freshness": "unknown", "source": "evm_json_rpc",
+        }
+        endpoint = chain.rpc_endpoint
+        if not endpoint:
+            return {**base, "status": "rpc_unconfigured", "rpc_health": "unconfigured"}
+        observed_at = datetime.now(UTC)
         try:
-            result = await self._rpc(endpoint, "eth_getBalance", [address, "latest"])
-            if not isinstance(result, str) or not result.startswith("0x"):
-                raise ValueError
-            raw = int(result, 16)
-            if raw < 0:
-                raise ValueError
-            return {**base, "status": "read_only_balance", "source": "evm_json_rpc",
-                    "observed_at": datetime.now(UTC).isoformat(),
-                    "native_symbol": symbol,
-                    "native_balance_wei": str(raw),
-                    "native_balance": str(Decimal(raw) / (Decimal(10) ** decimals)),
-                    "as_of": "latest_rpc_response", "signer_configured": False}
-        except Exception as exc:  # noqa: BLE001 - do not return provider URLs or response bodies
-            return {**base, "status": "unavailable", "source": "evm_json_rpc",
-                    "observed_at": datetime.now(UTC).isoformat(),
-                    "failure_type": type(exc).__name__}
+            actual_chain_id = _rpc_integer(await self._rpc(endpoint, "eth_chainId", []))
+            if actual_chain_id != chain.chain_id:
+                return {
+                    **base, "status": "rpc_chain_id_mismatch", "rpc_health": "misconfigured",
+                    "actual_chain_id": actual_chain_id,
+                    "observed_at": observed_at.isoformat(),
+                }
+            block = await self._rpc(endpoint, "eth_getBlockByNumber", ["latest", False])
+            if not isinstance(block, dict):
+                raise TypeError
+            block_number = _rpc_integer(block.get("number"))
+            block_timestamp = _rpc_integer(block.get("timestamp"))
+            block_at = datetime.fromtimestamp(block_timestamp, UTC)
+            age = max(0.0, (observed_at - block_at).total_seconds())
+            freshness = "fresh" if age <= _MAX_EVM_BLOCK_AGE_SECONDS else "stale"
+            if invalid_address:
+                return {
+                    **base, "status": "invalid_address", "rpc_health": "healthy",
+                    "latest_block_number": block_number,
+                    "latest_block_at": block_at.isoformat(),
+                    "block_age_seconds": round(age, 3), "data_freshness": freshness,
+                    "observed_at": observed_at.isoformat(),
+                    "provenance": "eth_chainId + eth_getBlockByNumber",
+                }
+            balance_raw: int | None = None
+            if address:
+                result = await self._rpc(
+                    endpoint, "eth_getBalance", [address, hex(block_number)],
+                )
+                balance_raw = _rpc_integer(result)
+            row = {
+                **base,
+                "status": "read_only_balance" if address else "network_observed",
+                "rpc_health": "healthy",
+                "latest_block_number": block_number,
+                "latest_block_at": block_at.isoformat(),
+                "block_age_seconds": round(age, 3),
+                "data_freshness": freshness,
+                "capability_state": (
+                    "read_only_wallet_observation" if address else "network_observed_no_wallet"
+                ),
+                "observed_at": observed_at.isoformat(),
+                "as_of": f"block:{block_number}",
+                "provenance": "eth_chainId + eth_getBlockByNumber + eth_getBalance",
+                "signer_configured": False,
+            }
+            if balance_raw is not None:
+                row.update({
+                    "native_balance_wei": str(balance_raw),
+                    "native_balance": str(Decimal(balance_raw) / (Decimal(10) ** _EVM_NATIVE_DECIMALS)),
+                })
+            return row
+        except (OverflowError, OSError, ValueError, TypeError, httpx.HTTPError) as exc:
+            return {
+                **base, "status": "unavailable", "rpc_health": "unavailable",
+                "observed_at": observed_at.isoformat(), "failure_type": type(exc).__name__,
+            }
+        except Exception as exc:  # noqa: BLE001 - never expose provider URL or response data.
+            return {
+                **base, "status": "unavailable", "rpc_health": "unavailable",
+                "observed_at": observed_at.isoformat(), "failure_type": type(exc).__name__,
+            }
 
     async def read_bitcoin(self, address: str) -> dict[str, Any]:
         base = {"chain": "bitcoin", "network": "mainnet", "address": address or None}
@@ -158,6 +213,15 @@ def _stats_balance(stats: Any, *, allow_negative: bool = False) -> int | None:
         return None
     value = funded - spent
     return value if allow_negative or value >= 0 else None
+
+
+def _rpc_integer(value: object) -> int:
+    if not isinstance(value, str) or re.fullmatch(r"0x[0-9a-fA-F]+", value) is None:
+        raise ValueError("EVM RPC integer is invalid")
+    parsed = int(value, 16)
+    if parsed < 0:
+        raise ValueError("EVM RPC integer is negative")
+    return parsed
 
 
 def _valid_bitcoin_address(address: str) -> bool:

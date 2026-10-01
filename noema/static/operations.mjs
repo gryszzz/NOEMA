@@ -1394,10 +1394,15 @@ function renderWalletState(payload) {
     head.append(element('span', network.connected ? 'CONNECTED' : network.connected === false ? 'DISCONNECTED' : 'CONNECTION UNKNOWN'));
     card.append(head);
     const native = network.sol ?? network.native_balance ?? network.btc;
-    const symbol = network.chain === 'bitcoin' ? 'BTC' : network.chain === 'solana' ? 'SOL' : 'ETH';
+    const symbol = network.native_symbol ?? (network.chain === 'bitcoin' ? 'BTC' : network.chain === 'solana' ? 'SOL' : 'ETH');
     card.append(element('strong', native === undefined ? 'Balance unknown' : `${native} ${symbol}`, 'wallet-network-balance'));
     const detail = element('div', undefined, 'wallet-network-detail');
     detail.append(element('span', network.chain_id ? `CHAIN ${network.chain_id}` : 'MAINNET'));
+    if (network.rpc_health) detail.append(element('span', `RPC ${network.rpc_health.toUpperCase()}`));
+    if (network.latest_block_number != null) {
+      const age = Number(network.block_age_seconds);
+      detail.append(element('span', `BLOCK ${network.latest_block_number} · ${Number.isFinite(age) ? `${Math.round(age)}s` : 'age unknown'}`));
+    }
     const assetStatus = network.token_status === 'unavailable'
       ? 'ERC-20 state unavailable'
       : network.token_status === 'indexed'

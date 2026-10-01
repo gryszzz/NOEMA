@@ -74,6 +74,8 @@ services:
         sync: false
       - key: NOEMA_EVM_RPC_URL_POLYGON
         sync: false
+      - key: NOEMA_EVM_CHAIN_REGISTRY_JSON
+        sync: false
       - key: NOEMA_BITCOIN_EXPLORER_URL
         sync: false
       # Cognition remains disabled until an owner supplies an explicit model,
@@ -188,6 +190,8 @@ services:
       - key: NOEMA_EVM_RPC_URL_BASE
         sync: false
       - key: NOEMA_EVM_RPC_URL_POLYGON
+        sync: false
+      - key: NOEMA_EVM_CHAIN_REGISTRY_JSON
         sync: false
       - key: NOEMA_BITCOIN_EXPLORER_URL
         sync: false

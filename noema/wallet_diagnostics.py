@@ -144,14 +144,18 @@ async def live_wallet_networks() -> list[dict[str, Any]]:
     }
     for row in rows:
         chain = str(row.get("chain", ""))
-        readable = str(row.get("status", "")).startswith("read_only")
+        readable = (
+            str(row.get("status", "")).startswith("read_only")
+            and row.get("data_freshness", "fresh") == "fresh"
+        )
+        connected = row.get("rpc_health") == "healthy" or readable
         signer_configured = credentials.get(chain, False)
         row["credential_provider"] = "macos_keychain" if signer_configured else "unavailable"
         row.update(project_wallet_capabilities(
-            connected=readable, authenticated=False, readable=readable,
+            connected=connected, authenticated=False, readable=readable,
             funded=_wallet_row_funded(row), signer_configured=signer_configured,
             credentials_isolated=signer_configured,
-            halted=True, research_enabled=readable,
+            halted=True, research_enabled=connected,
         ))
         row["signer_process_enabled"] = False
         row["master_halt"] = True
