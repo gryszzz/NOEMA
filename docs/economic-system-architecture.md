@@ -9,24 +9,26 @@ production-proven autonomous trading system.
 
 | Layer | Existing implementation | Important boundary |
 | --- | --- | --- |
-| Prediction-market collection | Kalshi and Polymarket US market/account adapters, activity persistence, sampler, SSE console | Kalshi hosted auth is not considered healthy until a private account request succeeds; Polymarket market data is not proof of authenticated account access |
+| Prediction-market collection | Kalshi and Polymarket US market/account adapters, activity persistence, sampler, SSE console | Render Kalshi private reads succeeded repeatedly; Polymarket public market collection is separate evidence from authenticated account/stream health |
 | Forecast and evidence | immutable forecast ledger, market baselines, Brier/log-loss/calibration, truth and market-data qualification | strategy outcomes and venue account economics are separate evidence streams |
 | Specialist research | specialist registry/evolution, research queue, Trench-1, EVM public wallet observation, cross-venue experiments | specialist activation is research scheduling, not financial authority |
 | Economic accounting | venue fills/orders/positions/settlements, account history, balance history, economic ledger and paper execution | deposits/transfers are not profit; missing fees, marks or cost basis stay unknown |
 | Treasury observation | Phantom browser connection and public address observers | Phantom is a human-side observation interface; no owner key or signing capability enters NOEMA |
-| Agent wallet | wallet descriptors, intent/policy, chain checks, simulated native/ERC-20 transfers, local Keychain child signer | current server deployment has no provisioned isolated agent signer; `wallet_signer_process.py` denies canonical live authority |
-| Multichain routes | new normalized read-only Jupiter and 0x quote adapters; append-only normalized quote evidence | quote path is not scheduled or displayed; no swap, route simulation, fill, receipt, token-delta or swap P&L lifecycle is wired |
+| Agent wallet | wallet descriptors, intent/policy, chain checks, simulated native/ERC-20 transfers | agent-wallet factory is deliberately disabled; local Keychain identities are human treasury credentials, not agent custody |
+| Multichain routes | normalized read-only Jupiter Swap V2 `/order` and 0x `/price` quote adapters; append-only quote observations | route sampling is not scheduled or displayed; no chain simulation, fill model, receipt, token-delta or swap P&L lifecycle is wired |
 | Execution safety | deterministic policy, owner authority, caps, expiry, allowlists, global halt | do not remove or infer authority from strategy evidence |
 
 ## Near-term implementation sequence
 
-1. Deploy safe Kalshi diagnostics, then use the next authenticated read-only
-   account cycle to classify key parsing, signature/API rejection, response
-   failure, or network failure. Do not infer the cause from file presence alone.
-2. Verify the Polymarket account endpoint and private stream separately. Record
+1. Render Kalshi cycles repeatedly report authenticated read-only access
+   (`orders=1`, `fills=1`, `positions=0`) after request-header sanitation. This
+   proves account-read access, not order placement; keep execution disabled.
+2. Deploy safe Polymarket account/stream diagnostics, then verify the account
+   endpoint and private stream separately. Record
    authenticated balance/position/activity coverage, append/update counts, and
-   stream connect/message/persist times without logging account values or
-   secrets.
+   stream connect/message/persist times without logging account values, response
+   bodies or secrets. Safe private request diagnostics distinguish stage, failure
+   category, error class and HTTP status.
 3. Connect normalized quote observations to a bounded research scheduler and
    persistent evidence record. Keep request identity, quote freshness, route,
    fees, liquidity and provider failures explicit. Quote polling needs provider
@@ -57,11 +59,13 @@ production-proven autonomous trading system.
 
 Jupiter Swap V2 `/order` and 0x Swap v2 `/price` responses are normalized into a
 common quote record. Raw response bodies, unsigned transactions, calldata and
-API keys are discarded. A local quote TTL is only a short-lived observation
-window, not a provider guarantee or a chain-level block expiry. Route comparison
-reports gross output; it declines to name an economic winner when fees cannot
-be compared in the same denomination. Simulation status is `not_run` and live
+API keys are discarded. Jupiter router, fee and provider-expiry fields are kept
+when present. A local quote TTL is only an observation bound; provider block/time
+expiry is stored separately. The 0x `/price` response is indicative and is not
+treated as an executable quote or simulation. Route comparison reports gross
+output and declines to name an economic winner when material costs cannot be
+compared in a shared denomination. Simulation remains `not_run` and live
 execution is hard-coded false.
 
-Provider references: [Jupiter Swap API V2](https://developers.jup.ag/docs/swap/index.md)
+Provider references: [Jupiter Swap API V2](https://developers.jup.ag/docs/swap)
 and [0x Swap API v2](https://docs.0x.org/docs/introduction/quickstart/swap-tokens-with-0x-swap-api).

@@ -108,9 +108,9 @@ not be treated as an unattended server signer. Do not import its seed phrase or
 private key into NOEMA. For autonomous operation, use a distinct, bounded agent
 wallet controlled by a programmable signer, funded explicitly from the treasury.
 
-## Local Keychain signer (not Phantom)
+## Local treasury signer (not Phantom or the agent wallet)
 
-NOEMA uses three distinct macOS login Keychain identities: Solana
+Local owner tooling uses three macOS login Keychain identities: Solana
 (`com.noema.solana.owner-wallet` / `noema-owner`), EVM
 (`com.noema.evm.owner-wallet` / `noema-owner`), and Bitcoin
 (`com.noema.bitcoin.owner-wallet` / `noema-owner`). The EVM identity is shared by
@@ -119,11 +119,17 @@ copied to `.env.local`, SQLite, Docker, prompts, the dashboard or an ordinary ag
 process. A short-lived signer child reads only the requested chain's Keychain item;
 its parent receives structured public results only.
 
-`WalletIntent` continues through `AgentWallet` and the deterministic policy into a
-chain-specific signer. The owner-funded wallet balance is the capital boundary in
-dedicated mode, so there is no routine approval click or daily discretionary cap.
-The owner-controlled global and per-chain master halts remain outside model
-authority, and each chain has an explicit signer-enable flag. Signers reject
+These are human-controlled credentials, not a provisioned agent wallet. The
+`create_owner_agent_wallet` factory therefore uses `DisabledWalletSigner` and
+`signer_isolated=False`; it cannot sign until a distinct agent wallet provider is
+provisioned. `LocalOwnerWalletSigner` remains available only to explicit local
+owner tooling and must not be attached to the autonomous coordinator.
+
+After a separate agent wallet is provisioned, its `WalletIntent` must continue
+through `AgentWallet` and deterministic policy into an isolated chain-specific
+signer. Its explicitly authorized capital is the boundary; it must never inherit
+Phantom or human Keychain signing authority. Global and per-chain halts remain
+outside model authority, and each chain has an explicit signer-enable flag. Signers reject
 unsupported actions, mismatched wallet identity, wrong chain ID, unavailable RPC,
 failed simulation or preflight, insufficient native/token funds, and fees above the
 intent ceiling.
@@ -137,9 +143,9 @@ can be called a supported action.
 
 ### Current state
 
-- Confirmed public identities are checked against their isolated Keychain items;
-  the Home reads current public balances and chain IDs without returning any key.
-  These identities are independent from the browser-connected Phantom address.
+- Local tooling checks human Keychain identities against their derived public
+  addresses. Public balance reads return no key. These identities are distinct
+  from Phantom's browser-connected address and are not agent custody.
 - Solana and Base transaction construction, fee/gas estimation, simulation and
   local signing were verified without broadcasting. Solana simulation succeeded;
   Base `eth_call` and `eth_estimateGas` succeeded.
@@ -149,18 +155,20 @@ can be called a supported action.
 - Bitcoin balance is zero, so there are no confirmed UTXOs to construct or sign a
   spend. Bitcoin does not have an EVM-style transaction simulation RPC; the adapter
   uses confirmed-UTXO and fee preflight instead.
-- EVM and Solana broadcast, receipt confirmation and reconciliation paths are
-  implemented, but no mainnet transaction has been broadcast. All signer-enable
-  flags are off and the owner master halt is on. No live execution is available
-  until the owner enables it after reviewing the runtime configuration.
+- Local owner signer adapters contain broadcast, receipt and reconciliation code,
+  but the autonomous agent factory does not use them. No mainnet transaction has
+  been broadcast. Agent signing remains disabled until a distinct isolated
+  agent-wallet provider and owner-controlled policy are provisioned.
 - A confirmed transaction records its chain, public transaction reference, status,
   fee and balance reconciliation in the economic ledger and its owning mission;
   transfers and fees are never classified as revenue.
 
-## Current agent policy
+## Dormant agent policy template
 
-The ordinary wallet policy stays fail-closed. The dedicated-wallet policy uses the
-deposited wallet capital as its economic ceiling and retains:
+The policy template is not execution authority and is not currently paired with
+an agent signer. The autonomous wallet factory always uses `DisabledWalletSigner`.
+If a distinct agent custody provider is provisioned later, the policy must use its
+explicitly funded balance as an economic ceiling and retain:
 
 - master halt **ON**;
 - evidence required;
@@ -169,7 +177,8 @@ deposited wallet capital as its economic ceiling and retains:
 - per-chain signer-enable flags;
 - a global owner-controlled master halt.
 
-`DisabledWalletSigner` remains the default when no local owner signer is selected.
+`DisabledWalletSigner` is the only configured autonomous signer in the hosted
+runtime. No environment flag or evidence score can enable a missing provider.
 
 ## Wallet intent
 
@@ -283,7 +292,8 @@ Implemented:
 - deterministic wallet policy;
 - daily budget ledger;
 - provider-neutral signer protocol;
-- isolated macOS Keychain signer process for Solana, EVM and Bitcoin;
+- isolated macOS Keychain signer processes for local human treasury tooling (not
+  agent custody);
 - chain-ID checked EVM adapter for Ethereum, Base and Polygon;
 - Solana simulation and native transfer signer;
 - EVM native/ERC-20 construction, gas estimation, `eth_call`, signing, send and receipt reconciliation;
@@ -291,7 +301,7 @@ Implemented:
 - wallet coordinator;
 - economic and mission receipt persistence;
 - read-only multi-chain wallet status in NOEMA Home;
-- unit tests and live construction/simulation/signing checks.
+- local construction/simulation/signing checks without transaction broadcast.
 
 Not yet implemented:
 
@@ -305,15 +315,17 @@ Those should be added one adapter at a time against current provider documentati
 
 ## DEX route research status
 
-`noema/dex_quotes.py` now contains read-only Jupiter Swap V2 `/order` and 0x
-Swap API v2 `/price` adapters plus one normalized quote shape, short local
-observation TTL, gross route comparison, and append-only SQLite quote evidence.
-The adapter boundary drops raw provider responses, including transaction bytes
-and EVM calldata. This is route research only: `simulation_status` is
-`not_run`, `live_execution_enabled` is always false, quote depth is unknown unless
-an adapter provides it, and network fees are not converted into a common USD or
-output-token denomination. A gross-output winner is not reported as an economic
-winner while costs are incomplete.
+`noema/dex_quotes.py` contains read-only Jupiter Swap V2 `/order` and 0x Swap API
+v2 `/price` adapters, normalized quote evidence and local append-only SQLite
+storage. The normalized record keeps Jupiter's selected router, returned fee
+fields, and provider expiry metadata when present. It never stores Jupiter's
+unsigned transaction or 0x calldata. The local TTL is an observation bound, not
+the provider's actual expiry. The 0x `/price` response is indicative and is not
+treated as simulation or a firm quote. This is route research only:
+`simulation_status` is `not_run`, `live_execution_enabled` is always false, depth
+is unknown unless an adapter provides it, and network costs are not valued in a
+shared denomination. Gross output never becomes an economic winner while costs
+are incomplete.
 
 These adapters are not yet scheduled as autonomous specialist work and are not
 yet presented in the console. No persistent specialist hypothesis/result loop,
@@ -341,11 +353,13 @@ submission. Store confirmed receipts and reconcile actual token deltas,
 gas/priority fees, and failed/reverted costs before attributing P&L. Do not treat
 quote output as a fill or realized return.
 
-The current hosted Kalshi worker diagnostic verifies credential presence and
-secret-file readability only. Updated runtime diagnostics separately report
-safe key-load categories, HTTP authentication rejection (401/403), other HTTP
-failure, and network failure. An authenticated state is claimed only after
-read-only private account endpoints return successfully. Render must deploy this
-diagnostic change before it can explain the current hosted failure.
+The hosted Kalshi worker now verifies its private account endpoints successfully
+on repeated cycles. Safe diagnostics report credential presence, endpoint failure
+category and HTTP/network classification without exposing keys, signatures or
+response bodies. The Polymarket sampler now reports private account failure
+stage/classification independently from public market data; that code must be
+deployed before hosted account/stream state can be verified. An authenticated
+state is claimed only after read-only private account endpoints return
+successfully.
 
 References: [Jupiter Swap API](https://developers.jup.ag/docs/swap-api), [0x Swap API](https://docs.0x.org/docs/introduction/quickstart/swap-tokens-with-0x-swap-api), and [Privy wallet policies and controls](https://docs.privy.io/security/wallet-infrastructure/policy-and-controls). A server signer such as Privy or Turnkey still needs explicit wallet provisioning, owner-controlled policy, and service credentials; the enum value alone does not configure or authorize one.

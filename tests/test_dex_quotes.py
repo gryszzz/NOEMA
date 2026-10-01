@@ -60,7 +60,7 @@ def test_zeroex_quote_is_normalized_and_transaction_payload_is_discarded():
         ("zeroExFee", "100", "0x" + "2" * 40),
         ("integratorFee", "4", "0x" + "2" * 40),
     )
-    assert quote.provider_preflight_status == "provider_simulation_complete"
+    assert quote.provider_preflight_status == "indicative_price_only"
     assert quote.route_sources == ("Uniswap_V3",)
     assert quote.simulation_status == "not_run"
     assert quote.live_execution_enabled is False
@@ -72,8 +72,12 @@ def test_jupiter_quote_uses_v2_read_only_order_and_discards_transaction():
     response_payload = {
         "outAmount": "950000", "otherAmountThreshold": "940500",
         "priceImpactPct": "0.002", "requestId": "jupiter-request",
+        "router": "metis", "transaction": "secret-unsigned-transaction",
+        "feeBps": 12, "feeMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "platformFee": {"amount": "120", "feeBps": 5,
+                         "feeMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},
+        "lastValidBlockHeight": 123456,
         "routePlan": [{"swapInfo": {"label": "Raydium"}}],
-        "transaction": "unsigned-transaction-must-not-escape",
     }
     seen: dict[str, object] = {}
 
@@ -87,7 +91,13 @@ def test_jupiter_quote_uses_v2_read_only_order_and_discards_transaction():
     assert quote.provider == "jupiter_swap_v2"
     assert quote.route_sources == ("Raydium",)
     assert float(quote.estimated_slippage_bps) == 100
-    assert "unsigned-transaction" not in json.dumps(quote.as_dict())
+    assert quote.provider_route == "metis"
+    assert quote.provider_fee_bps == "12"
+    assert quote.provider_fee_amount_atomic == "120"
+    assert quote.provider_expiry_kind == "last_valid_block_height"
+    assert quote.provider_expiry_value == "123456"
+    assert quote.provider_preflight_status == "provider_order_available"
+    assert "secret-unsigned-transaction" not in json.dumps(quote.as_dict())
 
 
 def test_quote_provider_errors_do_not_expose_response_body():

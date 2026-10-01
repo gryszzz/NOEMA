@@ -122,6 +122,10 @@ class NormalizedDexQuote:
     provider_reference: str | None
     evidence_sha256: str
     provider_preflight_status: str
+    provider_fee_bps: str | None = None
+    provider_expiry_kind: str | None = None
+    provider_expiry_value: str | None = None
+    provider_route: str | None = None
     live_execution_enabled: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -159,6 +163,8 @@ def _quote(
     liquidity_available: bool | None = None, depth_amount: object = None,
     route_sources: tuple[str, ...] = (), provider_reference: object = None,
     fee_amount: object = None, fee_asset: object = None, ttl_seconds: int = 5,
+    fee_bps: object = None, provider_expiry_kind: str | None = None,
+    provider_expiry_value: object = None, provider_route: object = None,
     provider_latency_ms: int = 0,
     additional_fees: tuple[tuple[str, str, str], ...] = (),
     provider_preflight_status: str = "not_reported",
@@ -178,7 +184,11 @@ def _quote(
         "network_fee_asset": _str_value(network_fee_asset),
         "provider_fee_amount_atomic": _str_value(fee_amount),
         "provider_fee_asset": _str_value(fee_asset),
+        "provider_fee_bps": _str_value(fee_bps),
         "additional_fees": additional_fees,
+        "provider_expiry_kind": provider_expiry_kind,
+        "provider_expiry_value": _str_value(provider_expiry_value),
+        "provider_route": _str_value(provider_route),
         "provider_preflight_status": provider_preflight_status,
         "observed_at": now.isoformat(),
         "sell_decimals": request.sell_decimals, "buy_decimals": request.buy_decimals,
@@ -207,6 +217,10 @@ def _quote(
         depth_amount=_str_value(depth_amount), route_sources=route_sources,
         simulation_status="not_run", provider_reference=_str_value(provider_reference),
         evidence_sha256=digest, provider_preflight_status=provider_preflight_status,
+        provider_fee_bps=_str_value(fee_bps),
+        provider_expiry_kind=provider_expiry_kind,
+        provider_expiry_value=_str_value(provider_expiry_value),
+        provider_route=_str_value(provider_route),
     )
 
 
@@ -237,24 +251,46 @@ class JupiterSwapV2QuoteAdapter:
         started = time.monotonic()
         payload = await self._get(params, headers)
         latency_ms = round((time.monotonic() - started) * 1000)
+        platform_fee = payload.get("platformFee") if isinstance(payload.get("platformFee"), dict) else {}
+        transaction = payload.get("transaction")
+        preflight = (
+            "provider_order_not_buildable" if transaction == "" else
+            "provider_order_available" if isinstance(transaction, str) and transaction else
+            "price_only_no_transaction"
+        )
+        provider_expiry_kind = (
+            "rfq_expire_at" if payload.get("expireAt") is not None else
+            "last_valid_block_height" if payload.get("lastValidBlockHeight") is not None else None
+        )
+        provider_expiry_value = payload.get("expireAt") or payload.get("lastValidBlockHeight")
+        router = payload.get("router")
         route = payload.get("routePlan")
         sources = tuple(sorted({str(item.get("swapInfo", {}).get("label"))
                                 for item in route if isinstance(item, dict)
                                 and isinstance(item.get("swapInfo"), dict)
-                                and item["swapInfo"].get("label")})) if isinstance(route, list) else ()
+                                and item["swapInfo"].get("label")})) if isinstance(route, list) else (
+                                    (str(router),) if isinstance(router, str) and router else ()
+                                )
+        fee_mint = platform_fee.get("feeMint") or payload.get("feeMint")
+        platform_fees = (
+            (("jupiter_platform_fee", str(platform_fee["amount"]), str(fee_mint)),)
+            if platform_fee.get("amount") is not None and fee_mint else ()
+        )
         return _quote(
             request, provider="jupiter_swap_v2",
             buy_amount=payload.get("outAmount") or payload.get("outputAmount"),
             minimum_buy_amount=payload.get("otherAmountThreshold") or payload.get("minimumOutputAmount"),
             price_impact_pct=payload.get("priceImpactPct"),
-            network_fee_amount=payload.get("prioritizationFeeLamports"),
-            network_fee_asset="SOL" if payload.get("prioritizationFeeLamports") is not None else None,
-            fee_amount=payload.get("feeAmount"), fee_asset=payload.get("feeMint"),
-            liquidity_available=(bool(route) if isinstance(route, list) else None),
+            fee_amount=platform_fee.get("amount"), fee_asset=fee_mint,
+            fee_bps=payload.get("feeBps"), additional_fees=platform_fees,
             route_sources=sources,
             provider_reference=payload.get("requestId"),
+            provider_expiry_kind=provider_expiry_kind,
+            provider_expiry_value=provider_expiry_value,
+            provider_route=router,
             ttl_seconds=self.quote_ttl_seconds,
             provider_latency_ms=latency_ms,
+            provider_preflight_status=preflight,
         )
 
     async def _get(self, params: dict[str, str], headers: dict[str, str]) -> dict[str, Any]:
@@ -330,12 +366,9 @@ class ZeroExPriceQuoteAdapter:
             for item in (fees[kind],)
             if item.get("amount") is not None and item.get("token") is not None
         )
-        issues = payload.get("issues") if isinstance(payload.get("issues"), dict) else {}
-        preflight = (
-            "provider_simulation_incomplete" if issues.get("simulationIncomplete") is True else
-            "provider_simulation_complete" if issues.get("simulationIncomplete") is False else
-            "not_reported"
-        )
+        # 0x says simulationIncomplete may be ignored for the indicative
+        # /price endpoint. Price is not an executable quote or simulation.
+        preflight = "indicative_price_only"
         return _quote(
             request, provider="0x_swap_v2_price",
             buy_amount=payload.get("buyAmount"), minimum_buy_amount=payload.get("minBuyAmount"),

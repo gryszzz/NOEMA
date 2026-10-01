@@ -458,18 +458,26 @@ async def _sample_capital_history() -> None:
                     activity_coverage = coverage.get("activities") or {}
                     persistence = account.get("history_persistence") or {}
                     stream = account.get("private_stream") or account.get("update_transport") or {}
+                    account_read = account.get("account_read") or {}
                     _log.info(
                         "Account observation venue=polymarket_us status=%s balance_available=%s "
                         "positions=%s fills=%s activities=%s activity_complete=%s "
                         "missing_persisted=%s persistence=%s inserted=%s updated=%s skipped=%s "
-                        "private_stream=%s stream_events=%s stream_persisted_at=%s",
+                        "account_stage=%s account_failure=%s account_http_status=%s "
+                        "private_stream=%s stream_events=%s stream_reconnects=%s "
+                        "stream_error_type=%s stream_last_message_at=%s stream_persisted_at=%s",
                         account.get("status", "unknown"), account.get("balance_available"),
                         account.get("positions"), account.get("fills"),
                         account.get("activity_records"), activity_coverage.get("complete"),
                         activity_coverage.get("missing_persisted_records"),
                         persistence.get("status", "unavailable"), persistence.get("inserted"),
                         persistence.get("updated"), persistence.get("skipped"),
+                        account_read.get("stage", "none"),
+                        account_read.get("classification", "none"),
+                        account_read.get("http_status", "none"),
                         stream.get("state", "unknown"), stream.get("events_received"),
+                        stream.get("reconnects"), stream.get("last_error_type", "none"),
+                        stream.get("last_message_at"),
                         stream.get("last_persisted_at"),
                     )
             stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())

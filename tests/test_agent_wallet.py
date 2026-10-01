@@ -3,13 +3,23 @@ from decimal import Decimal
 
 import pytest
 
-from noema.agent_wallet import AgentWallet
+from noema.agent_wallet import AgentWallet, create_owner_agent_wallet
 from noema.economic_ledger import EconomicLedger
 from noema.mission_store import MissionStore
 from noema.wallet_budget import WalletBudgetLedger
 from noema.wallet_intents import WalletExecutionReceipt, WalletIntent
 from noema.wallet_policy import AgentWalletPolicy, AgentWalletState, FinancialMissionAuthority
+from noema.wallet_signer import DisabledWalletSigner
 from noema.wallet_types import Chain
+
+
+def test_default_agent_wallet_never_routes_to_human_owner_keychain(tmp_path):
+    wallet = create_owner_agent_wallet(str(tmp_path / "agent.db"))
+
+    assert wallet.wallet_id == "noema-dedicated-wallets"
+    assert isinstance(wallet.signer, DisabledWalletSigner)
+    assert wallet.live_execution_enabled is False
+    assert wallet.signer_isolated is False
 
 
 class FakeSigner:
