@@ -16,6 +16,7 @@ production-proven autonomous trading system.
 | Treasury observation | Phantom browser connection and public address observers | Phantom is a human-side observation interface; no owner key or signing capability enters NOEMA |
 | Agent wallet | wallet descriptors, intent/policy, chain checks, simulated native/ERC-20 transfers | agent-wallet factory is deliberately disabled; local Keychain identities are human treasury credentials, not agent custody |
 | Multichain routes | normalized read-only Jupiter Swap V2 `/order` and 0x `/price` quote adapters; append-only quote observations | route sampling is not scheduled or displayed; no chain simulation, fill model, receipt, token-delta or swap P&L lifecycle is wired |
+| Runtime replication | consistent SQLite worker snapshots and separate console state | worker currently reports snapshot unavailable; new safe diagnostics expose backup/metadata/transport/HTTP failure stage without payloads |
 | Execution safety | deterministic policy, owner authority, caps, expiry, allowlists, global halt | do not remove or infer authority from strategy evidence |
 
 ## Near-term implementation sequence
@@ -23,34 +24,36 @@ production-proven autonomous trading system.
 1. Render Kalshi cycles repeatedly report authenticated read-only access
    (`orders=1`, `fills=1`, `positions=0`) after request-header sanitation. This
    proves account-read access, not order placement; keep execution disabled.
-2. Deploy safe Polymarket account/stream diagnostics, then verify the account
+2. Diagnose and restore worker-to-console snapshot replication. Verify its next
+   persisted cycle and confirm the console replica advances with the worker.
+3. Deploy safe Polymarket account/stream diagnostics, then verify the account
    endpoint and private stream separately. Record
    authenticated balance/position/activity coverage, append/update counts, and
    stream connect/message/persist times without logging account values, response
    bodies or secrets. Safe private request diagnostics distinguish stage, failure
    category, error class and HTTP status.
-3. Connect normalized quote observations to a bounded research scheduler and
+4. Connect normalized quote observations to a bounded research scheduler and
    persistent evidence record. Keep request identity, quote freshness, route,
    fees, liquidity and provider failures explicit. Quote polling needs provider
    cadence and budget limits.
-4. Implement token identity/decimal registry and independent source checks.
+5. Implement token identity/decimal registry and independent source checks.
    Reject unknown token metadata rather than using guessed decimals or ticker
    symbols.
-5. Build paper fills from forward quote snapshots with measured quote-to-decision
+6. Build paper fills from forward quote snapshots with measured quote-to-decision
    and decision-to-observation latency. Account for fees in their native asset;
    do not convert to USD without a timestamped price source.
-6. Add testnet/dev adapter simulation and receipt lifecycle for swaps. Record
+7. Add testnet/dev adapter simulation and receipt lifecycle for swaps. Record
    submitted, pending, confirmed, failed, partial, replaced and reverted states;
    reconcile chain token deltas and native fees before computing realized P&L.
-7. Provision a separate bounded agent wallet through an isolated programmable
+8. Provision a separate bounded agent wallet through an isolated programmable
    signer only after provider threat-model, chain policy, address verification,
    owner recovery, audit, and remote key custody are established. The cognition
    runtime should receive intent/receipt schemas only.
-8. Persist strategy promotion evidence as versioned, immutable criteria/results
+9. Persist strategy promotion evidence as versioned, immutable criteria/results
    spanning forward expectancy, uncertainty, drawdown, fees, slippage, latency,
    capacity, and operating cost. Promotion must remain distinct from explicit
    wallet/venue authority.
-9. Surface human treasury and agent wallet as distinct entities in the console;
+10. Surface human treasury and agent wallet as distinct entities in the console;
    expose balances, exposure, P&L, fees, source freshness and evidence coverage
    only when supported by account/chain records. Keep unpriced or stale values
    visible as such.
