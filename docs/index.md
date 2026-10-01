@@ -11,6 +11,7 @@
 - [Specialist evolution](specialist-evolution.md), [agent ecosystem](agent-ecosystem.md), [Trench-1](trench-1.md).
 - [Meridian bridge contract](meridian-noema-contract.md) and [ecosystem direction](meridian-noema-vision.md).
 - [Architecture](architecture.md), [production boundaries](production-boundaries.md), [hardening](hardening.md).
+- [Agent wallet](agent-wallet.md) and [economic-system capability inventory](economic-system-architecture.md) — treasury separation, wallet authority, multichain route research, and remaining implementation gaps.
 
 The running implementation and its tests establish current capability. Architecture
 and vision documents also describe unfinished work; they do not grant live execution authority.

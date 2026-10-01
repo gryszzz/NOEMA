@@ -1,15 +1,90 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
+from types import SimpleNamespace
 
+from noema import prediction_venues
 from noema.account import KalshiAccount
 from noema.prediction_account_history import get_or_create_prediction_account_baseline
 from noema.prediction_venues import (
     _kalshi_account_metrics,
     _kalshi_open_position_count,
+    _polymarket_account_error,
     _polymarket_position_capital,
     _retain_last_successful_account,
 )
+
+
+def test_polymarket_account_error_diagnostics_classify_without_provider_messages():
+    class ProviderError(RuntimeError):
+        status_code = 401
+
+    rejected = _polymarket_account_error(ProviderError("credential body must not escape"))
+    assert rejected == {
+        "classification": "authenticated_api_rejection",
+        "error_type": "ProviderError",
+        "http_status": 401,
+    }
+    assert "credential body" not in repr(rejected)
+
+    rate_limited = _polymarket_account_error(SimpleNamespace(status_code=429))
+    assert rate_limited["classification"] == "rate_limited"
+
+    network = _polymarket_account_error(TimeoutError("sensitive endpoint data"))
+    assert network["classification"] == "network_failure"
+    assert "sensitive endpoint" not in repr(network)
+
+    persistence = _polymarket_account_error(__import__("sqlite3").OperationalError("private db path"))
+    assert persistence["classification"] == "local_persistence_failure"
+    assert "private db path" not in repr(persistence)
+
+
+def test_polymarket_market_data_failure_does_not_mask_authenticated_account_failure(monkeypatch):
+    requested = []
+
+    class Venue:
+        async def market_page(self, *, limit):
+            raise RuntimeError("private market endpoint detail")
+
+        def close(self):
+            pass
+
+    class Account:
+        def balances(self):
+            requested.append("balances")
+            error = RuntimeError("private key or response body must not appear")
+            error.status_code = 401
+            raise error
+
+    class Client:
+        def __init__(self, **kwargs):
+            requested.append("client_created")
+            self.account = Account()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(prediction_venues, "PolymarketUSVenue", Venue)
+    monkeypatch.setattr(prediction_venues, "polymarket_us_credentials_present", lambda: (True, True))
+    monkeypatch.setattr(prediction_venues, "polymarket_us_credential_sources", dict)
+    monkeypatch.setattr(
+        prediction_venues, "load_polymarket_us_credentials_in_api_boundary",
+        lambda: ("key-id", "secret-placeholder"),
+    )
+    monkeypatch.setattr(prediction_venues, "polymarket_stream_health", lambda: {"state": "disconnected"})
+    monkeypatch.setitem(sys.modules, "polymarket_us", types.SimpleNamespace(PolymarketUS=Client))
+
+    result = asyncio.run(prediction_venues._polymarket_us_status())
+    assert result["market_data"]["status"] == "degraded"
+    assert result["account"]["status"] == "authentication_or_read_failed"
+    assert result["account"]["account_read"]["stage"] == "balances"
+    assert result["account"]["account_read"]["classification"] == "authenticated_api_rejection"
+    assert result["account"]["account_read"]["http_status"] == 401
+    assert requested == ["client_created", "balances"]
+    assert "private market endpoint detail" not in repr(result)
+    assert "secret-placeholder" not in repr(result)
 
 
 def test_kalshi_realized_pnl_requires_complete_reconciled_opening_balance_window():

@@ -934,18 +934,84 @@ async def _kalshi_status() -> dict[str, Any]:
     }
 
 
+def _polymarket_account_error(exc: BaseException) -> dict[str, Any]:
+    """Return safe request-failure diagnostics without SDK message/body/URL data."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, bool) or not isinstance(status, int):
+        response = getattr(exc, "response", None)
+        candidate = getattr(response, "status_code", None)
+        status = candidate if isinstance(candidate, int) and not isinstance(candidate, bool) else None
+    name = type(exc).__name__
+    if status in {401, 403}:
+        classification = "authenticated_api_rejection"
+    elif status == 429:
+        classification = "rate_limited"
+    elif status is not None and status >= 500:
+        classification = "upstream_unavailable"
+    elif status is not None:
+        classification = "api_rejection"
+    elif name in {"APIConnectionError", "APITimeoutError"} or isinstance(
+        exc, (httpx.RequestError, TimeoutError),
+    ):
+        classification = "network_failure"
+    elif isinstance(exc, (ValueError, KeyError, TypeError)):
+        classification = "malformed_response"
+    elif isinstance(exc, sqlite3.Error):
+        classification = "local_persistence_failure"
+    else:
+        classification = "account_request_failure"
+    return {"classification": classification, "error_type": name, "http_status": status}
+
+
 async def _polymarket_us_status() -> dict[str, Any]:
     started = monotonic()
     venue = PolymarketUSVenue()
     try:
-        markets, _ = await venue.market_page(limit=1)
-        sample = next((item for item in markets if item.yes_bid is not None or item.yes_ask is not None), None)
+        markets: list[Any] = []
+        sample = None
         book: dict[str, Any] | None = None
-        if sample:
-            try:
-                book = await venue.book(sample.market_id)
-            except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError):
-                pass
+        market_data: dict[str, Any]
+        try:
+            markets, _ = await venue.market_page(limit=1)
+            sample = next((item for item in markets if item.yes_bid is not None or item.yes_ask is not None), None)
+            if sample:
+                try:
+                    book = await venue.book(sample.market_id)
+                except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError):
+                    pass
+            market_data = {
+                "status": "connected",
+                "open_markets_sampled": len(markets),
+                "sample_market": None if sample is None else {
+                    "market_id": sample.market_id,
+                    "title": sample.title,
+                    "yes_bid": sample.yes_bid,
+                    "yes_ask": sample.yes_ask,
+                    "spread": (
+                        None if sample.yes_bid is None or sample.yes_ask is None
+                        else round(sample.yes_ask - sample.yes_bid, 6)
+                    ),
+                    "closes_at": None if sample.closes_at is None else sample.closes_at.isoformat(),
+                    "rules_available": bool(sample.resolution_rules),
+                    # USD depth remains unknown until actual book levels can be
+                    # interpreted consistently with contract units.
+                    "liquidity_usd": sample.liquidity_usd,
+                },
+                "order_book_readable": book is not None,
+                "order_book_levels": (
+                    None if book is None else len(book.get("bids", [])) + len(book.get("offers", []))
+                ),
+                "market_state": None if book is None else book.get("state"),
+            }
+        except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
+                KeyError, TypeError, OSError) as exc:
+            market_error = _polymarket_account_error(exc)
+            market_data = {
+                "status": "degraded",
+                "failure_classification": market_error["classification"],
+                "error_type": market_error["error_type"],
+                "http_status": market_error["http_status"],
+            }
         key_id_present, secret_present = polymarket_us_credentials_present()
         account: dict[str, Any] = {
             "status": "unconfigured",
@@ -959,6 +1025,7 @@ async def _polymarket_us_status() -> dict[str, Any]:
         if key_id_present and secret_present:
             account_status = "authenticated_read_only"
             authenticated_client = None
+            request_stage = "credential_load"
             try:
                 from polymarket_us import PolymarketUS
 
@@ -966,11 +1033,14 @@ async def _polymarket_us_status() -> dict[str, Any]:
                 authenticated_client = PolymarketUS(
                     key_id=key_id, secret_key=secret_key, timeout=5.0, max_retries=0,
                 )
+                request_stage = "balances"
                 balances = await asyncio.to_thread(authenticated_client.account.balances)
+                request_stage = "account_history_plan"
                 full_audit, _min_ts, history, sync_state = _account_history_plan(
                     "polymarket_us", ("fill", "position_resolution", "balance_activity"),
                     required_streams=("activity",),
                 )
+                request_stage = "positions"
                 positions = await _polymarket_cursor_pages(
                     authenticated_client.portfolio.positions, "positions",
                 )
@@ -981,6 +1051,7 @@ async def _polymarket_us_status() -> dict[str, Any]:
                                           for row in history.get("position_resolution", []) if row.get("trade_id"))
                 known_activity_ids.update(f"{row.get('activity_type')}:{row.get('transaction_id')}"
                                           for row in history.get("balance_activity", []) if row.get("transaction_id"))
+                request_stage = "activities"
                 activities = await _polymarket_cursor_pages(
                     authenticated_client.portfolio.activities, "activities",
                     stop_after_ids=set() if full_audit else known_activity_ids,
@@ -994,6 +1065,7 @@ async def _polymarket_us_status() -> dict[str, Any]:
                     and (full_audit or bool((sync_state.get("activity") or {}).get("last_full_audit_at")))
                     and not missing_activity_ids
                 )
+                request_stage = "orders"
                 orders = await asyncio.to_thread(authenticated_client.orders.list)
                 position_rows = _polymarket_positions(positions)
                 delta_fills = _polymarket_fills(activities)
@@ -1040,6 +1112,7 @@ async def _polymarket_us_status() -> dict[str, Any]:
                     "Authenticated balances response contains no valid USD currentBalance.",
                     source_ids=["/v1/account/balances:USD.currentBalance"] if usd_balance is not None else [],
                 )
+                request_stage = "normalize_and_reconcile"
                 account = {
                     "status": account_status,
                     "update_transport": polymarket_stream_health(),
@@ -1088,12 +1161,20 @@ async def _polymarket_us_status() -> dict[str, Any]:
                     },
                 }
             except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
-                    KeyError, TypeError, OSError) as exc:
+                    KeyError, TypeError, OSError, sqlite3.Error) as exc:
                 account_status = "authentication_or_read_failed"
+                error = _polymarket_account_error(exc)
                 account = {
                     "status": account_status,
-                    "error_type": type(exc).__name__,
-                    "account_read": {"complete": False, "reason": f"Authenticated Polymarket US account request failed ({type(exc).__name__}); source totals were not projected."},
+                    "account_read": {
+                        "complete": False,
+                        "stage": request_stage,
+                        **error,
+                        "reason": (
+                            "Authenticated Polymarket US account request failed at "
+                            f"{request_stage} ({error['classification']}); source totals were not projected."
+                        ),
+                    },
                     "balance_available": False,
                     "positions": None,
                     "open_orders": None,
@@ -1122,41 +1203,27 @@ async def _polymarket_us_status() -> dict[str, Any]:
             "environment": "production_read_only_public_data",
             "execution": "disabled",
             "latency_ms": round((monotonic() - started) * 1000),
-            "market_data": {
-                "status": "connected",
-                "open_markets_sampled": len(markets),
-                "sample_market": None if sample is None else {
-                    "market_id": sample.market_id,
-                    "title": sample.title,
-                    "yes_bid": sample.yes_bid,
-                    "yes_ask": sample.yes_ask,
-                    "spread": (
-                        None if sample.yes_bid is None or sample.yes_ask is None
-                        else round(sample.yes_ask - sample.yes_bid, 6)
-                    ),
-                    "closes_at": None if sample.closes_at is None else sample.closes_at.isoformat(),
-                    "rules_available": bool(sample.resolution_rules),
-                    # USD depth remains unknown until actual book levels can be
-                    # interpreted consistently with contract units.
-                    "liquidity_usd": sample.liquidity_usd,
-                },
-                "order_book_readable": book is not None,
-                "order_book_levels": (
-                    None if book is None else len(book.get("bids", [])) + len(book.get("offers", []))
-                ),
-                "market_state": None if book is None else book.get("state"),
-            },
+            "market_data": market_data,
             "account": account,
         }
     except (PolymarketUSError, httpx.HTTPError, RuntimeError, ValueError,
-            KeyError, TypeError, OSError):
+            KeyError, TypeError, OSError, sqlite3.Error) as exc:
+        error = _polymarket_account_error(exc)
         return {
             "venue": "Polymarket US",
             "environment": "production_read_only_public_data",
             "execution": "disabled",
             "latency_ms": round((monotonic() - started) * 1000),
             "market_data": {"status": "degraded"},
-            "account": {"status": "unconfigured"},
+            "account": {
+                "status": "account_read_failed",
+                "account_read": {
+                    "complete": False,
+                    "stage": "venue_status",
+                    **error,
+                    "reason": "Polymarket status assembly failed; inspect only the safe error classification.",
+                },
+            },
         }
     finally:
         venue.close()

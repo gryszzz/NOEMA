@@ -199,8 +199,15 @@ async def run_polymarket_account_stream(
                     "fills": fills,
                 }]
                 try:
-                    persist_prediction_account_records(db_path(), records, observed_at=observed)
+                    persisted = persist_prediction_account_records(db_path(), records, observed_at=observed)
                     _stream_health["last_persisted_at"] = observed
+                    _log.info(
+                        "Polymarket private account event persisted "
+                        "(balances=%d positions=%d orders=%d fills=%d inserted=%d updated=%d skipped=%d)",
+                        len(normalized_balances), len(normalized_positions), len(orders), len(fills),
+                        persisted.get("inserted", 0), persisted.get("updated", 0),
+                        persisted.get("skipped", 0),
+                    )
                     on_change({"balances": normalized_balances,
                                "positions": normalized_positions, "orders": orders,
                                "fills": fills})
@@ -213,9 +220,14 @@ async def run_polymarket_account_stream(
             websocket.on("order_update", persist)
             websocket.on("order_snapshot", persist)
             websocket.on("heartbeat", mark_message)
-            websocket.on("open", lambda: _stream_health.update(
-                state="connected", connected_at=datetime.now(UTC).isoformat(), last_error_type=None,
-            ))
+            def mark_connected() -> None:
+                _stream_health.update(
+                    state="connected", connected_at=datetime.now(UTC).isoformat(),
+                    last_error_type=None,
+                )
+                _log.info("Polymarket private account stream connected")
+
+            websocket.on("open", mark_connected)
             websocket.on("error", lambda error: (
                 _stream_health.update(state="degraded", last_error_type=type(error).__name__),
                 _log.warning("Polymarket private account stream reported an error"),

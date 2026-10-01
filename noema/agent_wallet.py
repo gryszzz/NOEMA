@@ -18,7 +18,7 @@ from .wallet_policy import (
     dedicated_wallet_policy,
     evaluate_wallet_intent,
 )
-from .wallet_signer import LocalOwnerWalletSigner, WalletSigner
+from .wallet_signer import DisabledWalletSigner, WalletSigner
 
 
 @dataclass(frozen=True)
@@ -280,14 +280,21 @@ class AgentWallet:
 
 
 def create_owner_agent_wallet(db_path: str = "data/noema.db") -> AgentWallet:
-    """Construct the persistent NOEMA wallet coordinator from owner runtime config."""
+    """Construct an unprovisioned agent wallet without treasury signing access.
+
+    The local Keychain signer is owned by the human treasury and must never be
+    reused as the autonomous agent's custody backend. Until a distinct agent
+    wallet is provisioned through an isolated provider, signing fails closed.
+    """
     from .economic_ledger import EconomicLedger
     from .mission_store import MissionStore
     from .research_session import SessionStore
 
     return AgentWallet(
+        # Preserve the stable ledger identity so historic reservations/exposure
+        # remain part of policy accounting after the signer is disabled.
         wallet_id="noema-dedicated-wallets",
-        signer=LocalOwnerWalletSigner(),
+        signer=DisabledWalletSigner(),
         policy=dedicated_wallet_policy(),
         budget=WalletBudgetLedger(db_path),
         economic_ledger=EconomicLedger(db_path),
@@ -295,5 +302,5 @@ def create_owner_agent_wallet(db_path: str = "data/noema.db") -> AgentWallet:
         session_store=SessionStore(db_path),
         policy_resolver=dedicated_wallet_policy,
         live_execution_enabled=False,
-        signer_isolated=True,
+        signer_isolated=False,
     )
