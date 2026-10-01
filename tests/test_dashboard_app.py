@@ -5,6 +5,7 @@ import sqlite3
 import stat
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from noema.dashboard_app import _capital_sample_sleep_seconds, _runtime_change_stream, app
@@ -526,6 +527,32 @@ def test_replication_backup_contains_committed_worker_records(tmp_path) -> None:
     replica.write_bytes(image)
     with sqlite3.connect(replica) as conn:
         assert conn.execute("SELECT evidence FROM observations").fetchone()[0] == "official-venue-observation"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_publisher_logs_failure_class_without_request_secrets(
+    monkeypatch, tmp_path, caplog,
+) -> None:
+    import httpx
+
+    from noema.console_replication import publish_console_snapshot
+
+    monkeypatch.setenv("NOEMA_CONSOLE_INTERNAL_ADDRESS", "console.internal:10000")
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "test-snapshot-secret")
+
+    async def fail_post(*_args, **_kwargs):
+        request = httpx.Request("POST", "http://console.internal:10000/internal/snapshot")
+        raise httpx.ConnectError("secret-bearing transport detail", request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fail_post)
+    source = tmp_path / "worker.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE observation (id INTEGER PRIMARY KEY)")
+
+    assert await publish_console_snapshot(str(source)) == "unavailable"
+    assert "stage=send_snapshot exception_type=ConnectError" in caplog.text
+    assert "secret-bearing transport detail" not in caplog.text
+    assert "test-snapshot-secret" not in caplog.text
     assert source.exists()
 
 

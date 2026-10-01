@@ -4,6 +4,7 @@ import asyncio
 import base64
 import gzip
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -11,6 +12,8 @@ import tempfile
 from pathlib import Path
 
 import httpx
+
+_log = logging.getLogger(__name__)
 
 _ADDRESS_PATTERN = re.compile(r"^[a-zA-Z0-9.-]+:[0-9]{1,5}$")
 _COMMIT_PATTERN = re.compile(r"^(?:[a-fA-F0-9]{7,64}|unknown)$")
@@ -139,8 +142,10 @@ async def publish_console_snapshot(db_path: str) -> str:
         return "disabled"
     if not address or not token or not _ADDRESS_PATTERN.fullmatch(address):
         return "misconfigured"
+    stage = "create_consistent_backup"
     try:
         payload = await asyncio.to_thread(_snapshot_image, db_path)
+        stage = "send_snapshot"
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
             response = await client.post(
                 f"http://{address}/internal/snapshot",
@@ -151,7 +156,20 @@ async def publish_console_snapshot(db_path: str) -> str:
                     "X-NOEMA-Worker-Metadata": _worker_metadata_header(),
                 },
             )
+        stage = "validate_receiver_response"
         response.raise_for_status()
         return "persisted"
-    except (httpx.HTTPError, OSError, sqlite3.Error, ValueError):
+    except httpx.HTTPStatusError as exc:
+        _log.warning(
+            "Console snapshot publish failed stage=%s exception_type=%s http_status=%s",
+            stage, type(exc).__name__, exc.response.status_code,
+        )
+        return "unavailable"
+    except (httpx.HTTPError, OSError, sqlite3.Error, ValueError) as exc:
+        # Transport and local snapshot failures may carry URLs, response text,
+        # paths, or SQLite details. Only emit the fixed stage and class name.
+        _log.warning(
+            "Console snapshot publish failed stage=%s exception_type=%s",
+            stage, type(exc).__name__,
+        )
         return "unavailable"
