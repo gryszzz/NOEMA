@@ -44,11 +44,11 @@ from repository configuration.
 | Stripe/cognition | Latest captured full cycle (228) reported Stripe unavailable and cognition unconfigured. | No hosted Stripe economic sensor or cognition operation confirmed for that cycle. |
 | Execution | Hosted cycle state and repository factory keep agent signer unconfigured/disabled. No trade or wallet transaction was submitted. | Execution remains fail-closed. |
 
-## Repository health snapshot (2026-10-01 13:17 UTC)
+## Repository health snapshot (2026-10-01 13:26 UTC)
 
 | Item | State | Result |
 | --- | --- | --- |
-| Open PRs | #47 and #72 | #40 and #44 were closed as superseded. Duplicate PR #71 was closed after #70 merged the overlapping SQLite diagnostics. |
+| Open PRs | #47 only | #40 and #44 were closed as superseded. Duplicate PR #71 was closed after #70 merged the overlapping SQLite diagnostics. |
 | PR #47 | Head `e7b988251ca75605b611d04c56fbe754aabfabe6`, CI green and mergeable; its base SHA is now one main commit behind | Remains open and should not merge because the required fresh Codex review gate is not satisfied. |
 | Current-main required checks | Verify for `103d085` succeeded; deployment workflow build/operations QA passed, deploy job was queued at 13:26 UTC | No current required-check failure identified; hosted deployment of this SHA was not yet confirmed. |
 | Runtime | Both Render services last confirmed on `9f25a60` | Worker SQLite failures continued through 13:25:55 UTC; runtime is not fully healthy. |
