@@ -117,7 +117,7 @@ def test_malformed_hosted_kalshi_pem_has_secret_safe_error(monkeypatch, tmp_path
         raise AssertionError("malformed PEM must fail closed")
 
 
-def test_kalshi_unsupported_private_key_signing_failure_is_classified_safely():
+def test_kalshi_unsupported_private_key_type_is_rejected_before_request():
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -127,11 +127,10 @@ def test_kalshi_unsupported_private_key_signing_failure_is_classified_safely():
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    signer = KalshiSigner("fixture-key-id", private_key_pem=pem)
     try:
-        signer.headers("GET", "/trade-api/v2/portfolio/balance")
+        KalshiSigner("fixture-key-id", private_key_pem=pem)
     except KalshiCredentialError as error:
-        assert error.code == "private_key_signing_failed"
+        assert error.code == "private_key_incompatible"
         assert "fixture-key-id" not in str(error)
         assert "signature" not in str(error).lower()
     else:

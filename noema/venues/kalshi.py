@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from noema.config import KalshiConfig
@@ -76,6 +76,10 @@ class KalshiSigner:
             self.private_key = serialization.load_pem_private_key(pem, password=None)
         except Exception:  # noqa: BLE001 - never expose key/parser details
             raise KalshiCredentialError("private_key_malformed") from None
+        if not isinstance(self.private_key, (Ed25519PrivateKey, rsa.RSAPrivateKey)):
+            raise KalshiCredentialError("private_key_incompatible")
+        if isinstance(self.private_key, rsa.RSAPrivateKey) and self.private_key.key_size < 2048:
+            raise KalshiCredentialError("private_key_incompatible")
     def headers(self, method: str, request_path: str) -> dict[str, str]:
         timestamp = str(int(time.time() * 1000))
         path_without_query = request_path.split("?", 1)[0]

@@ -87,7 +87,28 @@ Current intended roles:
 
 Provider selection should happen after testing current SDK/API support for the target chains.
 
-## Local Phantom signer decision
+### Current Phantom connection is observation-only
+
+The `CONNECT PHANTOM` control in `noema/static/detailed.html` calls
+`window.phantom.solana.connect()` in the browser and displays the returned public
+key. It does not request a signature, build or submit a transaction, send the
+address to the backend, or persist a wallet descriptor. It covers the Phantom
+Solana provider only; it does not connect Phantom's EVM provider. Treat this as a
+browser-local address connection, not an authenticated agent signer or as a
+wallet identity currently available to the worker.
+
+The backend's `PublicWalletObserver` is separately read-only and observes only
+addresses configured through `NOEMA_SOLANA_WALLET_ADDRESS`, `NOEMA_EVM_ADDRESS`,
+and `NOEMA_BITCOIN_ADDRESS`. A browser-connected Phantom address is not
+automatically copied into those settings. Public balance reads do not require or
+grant signing authority.
+
+Phantom can be used as the human-controlled treasury interface, but it should
+not be treated as an unattended server signer. Do not import its seed phrase or
+private key into NOEMA. For autonomous operation, use a distinct, bounded agent
+wallet controlled by a programmable signer, funded explicitly from the treasury.
+
+## Local Keychain signer (not Phantom)
 
 NOEMA uses three distinct macOS login Keychain identities: Solana
 (`com.noema.solana.owner-wallet` / `noema-owner`), EVM
@@ -118,6 +139,7 @@ can be called a supported action.
 
 - Confirmed public identities are checked against their isolated Keychain items;
   the Home reads current public balances and chain IDs without returning any key.
+  These identities are independent from the browser-connected Phantom address.
 - Solana and Base transaction construction, fee/gas estimation, simulation and
   local signing were verified without broadcasting. Solana simulation succeeded;
   Base `eth_call` and `eth_estimateGas` succeeded.
@@ -273,10 +295,57 @@ Implemented:
 
 Not yet implemented:
 
-- DEX swap adapters and protocol-call allowlists;
+- DEX execution adapters and protocol-call allowlists (read-only quote research is now implemented; see below);
 - token registry and automatic ERC-20 discovery on Ethereum/Polygon;
 - Bitcoin fee/UTXO transaction construction test (the confirmed account balance is zero);
 - live mainnet broadcast/confirmation test (no economically justified live intent has been executed);
 - USD valuation for wallet balance and on-chain fees.
 
 Those should be added one adapter at a time against current provider documentation and testnets before mainnet capital is considered.
+
+## DEX route research status
+
+`noema/dex_quotes.py` now contains read-only Jupiter Swap V2 `/order` and 0x
+Swap API v2 `/price` adapters plus one normalized quote shape, short local
+observation TTL, gross route comparison, and append-only SQLite quote evidence.
+The adapter boundary drops raw provider responses, including transaction bytes
+and EVM calldata. This is route research only: `simulation_status` is
+`not_run`, `live_execution_enabled` is always false, quote depth is unknown unless
+an adapter provides it, and network fees are not converted into a common USD or
+output-token denomination. A gross-output winner is not reported as an economic
+winner while costs are incomplete.
+
+These adapters are not yet scheduled as autonomous specialist work and are not
+yet presented in the console. No persistent specialist hypothesis/result loop,
+quote-to-paper fill model, transaction receipt reconciliation, swap token-delta
+accounting, or failed/partial swap P&L attribution is connected to them. The
+local append store `dex_quote_observations` is ready for durable quote evidence,
+but production database migration/retention and an evaluated sampling cadence
+remain to be wired before continuous collection.
+
+## DEX execution architecture direction
+
+Use one normalized quote and execution-intent model across chains, with a
+chain-specific route adapter behind it. For Solana research use Jupiter Swap API
+V2; for Ethereum, Base, and Polygon use the 0x Swap API v2 chain-ID interface.
+The current research adapter calls only quote/price endpoints. Execution paths
+must remain separate and should not be implemented until evidence justifies
+them and a remote isolated signer is provisioned.
+
+The route service must not sign or submit. It should return a typed, expiring
+route proposal bound to the exact wallet address, chain ID, input/output asset
+identifiers, amount, minimum output, destination program/contracts, fee ceiling,
+and source timestamp. The isolated signer verifies those fields again, simulates
+the exact transaction, and independently enforces owner policy before any future
+submission. Store confirmed receipts and reconcile actual token deltas,
+gas/priority fees, and failed/reverted costs before attributing P&L. Do not treat
+quote output as a fill or realized return.
+
+The current hosted Kalshi worker diagnostic verifies credential presence and
+secret-file readability only. Updated runtime diagnostics separately report
+safe key-load categories, HTTP authentication rejection (401/403), other HTTP
+failure, and network failure. An authenticated state is claimed only after
+read-only private account endpoints return successfully. Render must deploy this
+diagnostic change before it can explain the current hosted failure.
+
+References: [Jupiter Swap API](https://developers.jup.ag/docs/swap-api), [0x Swap API](https://docs.0x.org/docs/introduction/quickstart/swap-tokens-with-0x-swap-api), and [Privy wallet policies and controls](https://docs.privy.io/security/wallet-infrastructure/policy-and-controls). A server signer such as Privy or Turnkey still needs explicit wallet provisioning, owner-controlled policy, and service credentials; the enum value alone does not configure or authorize one.

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 
 from noema.config import KalshiConfig, kalshi_credential_presence
 from noema.diagnostics import diagnose
@@ -13,6 +15,15 @@ from noema.wallet_credentials import private_key_file_status
 
 def _pem_bytes() -> bytes:
     key = Ed25519PrivateKey.generate()
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+def _rsa_pem_bytes() -> bytes:
+    key = generate_private_key(public_exponent=65537, key_size=2048)
     return key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -58,6 +69,38 @@ def test_render_secret_file_is_selected_and_signer_reads_it(monkeypatch, tmp_pat
     assert diagnostic.live_orders_armed is False
     assert "fixture-key-id" not in repr(config)
     assert pem_path.read_bytes().decode("ascii") not in repr(config)
+
+
+def test_kalshi_signer_supports_registered_ed25519_and_rsa_key_types():
+    for pem in (_pem_bytes(), _rsa_pem_bytes()):
+        headers = KalshiSigner("fixture-id", private_key_pem=pem).headers(
+            "GET", "/trade-api/v2/portfolio/balance?limit=1",
+        )
+        assert headers["KALSHI-ACCESS-KEY"] == "fixture-id"
+        assert headers["KALSHI-ACCESS-SIGNATURE"]
+
+
+def test_kalshi_signer_reports_malformed_key_without_material():
+    from noema.venues.kalshi import KalshiCredentialError
+
+    with pytest.raises(KalshiCredentialError) as caught:
+        KalshiSigner("fixture-id", private_key_pem=b"fixture-private-material")
+    assert caught.value.code == "private_key_malformed"
+    assert "fixture-private-material" not in str(caught.value)
+
+
+def test_kalshi_signer_rejects_rsa_key_below_official_minimum_size():
+    from noema.venues.kalshi import KalshiCredentialError
+
+    key = generate_private_key(public_exponent=65537, key_size=1024)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    with pytest.raises(KalshiCredentialError) as caught:
+        KalshiSigner("fixture-id", private_key_pem=pem)
+    assert caught.value.code == "private_key_incompatible"
 
 
 def test_explicit_missing_secret_file_path_is_diagnosed_without_fallback(monkeypatch, tmp_path) -> None:

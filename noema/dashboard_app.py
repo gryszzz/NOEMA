@@ -449,6 +449,29 @@ async def _sample_capital_history() -> None:
             # Bypass request caches: this sampler owns the collection cadence,
             # so each runtime cycle must perform a new authenticated read.
             wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
+            for venue in venues.get("venues", []):
+                if not isinstance(venue, dict):
+                    continue
+                account = venue.get("account") or {}
+                if str(venue.get("venue", "")).lower().startswith("polymarket"):
+                    coverage = account.get("history_coverage") or {}
+                    activity_coverage = coverage.get("activities") or {}
+                    persistence = account.get("history_persistence") or {}
+                    stream = account.get("private_stream") or account.get("update_transport") or {}
+                    _log.info(
+                        "Account observation venue=polymarket_us status=%s balance_available=%s "
+                        "positions=%s fills=%s activities=%s activity_complete=%s "
+                        "missing_persisted=%s persistence=%s inserted=%s updated=%s skipped=%s "
+                        "private_stream=%s stream_events=%s stream_persisted_at=%s",
+                        account.get("status", "unknown"), account.get("balance_available"),
+                        account.get("positions"), account.get("fills"),
+                        account.get("activity_records"), activity_coverage.get("complete"),
+                        activity_coverage.get("missing_persisted_records"),
+                        persistence.get("status", "unavailable"), persistence.get("inserted"),
+                        persistence.get("updated"), persistence.get("skipped"),
+                        stream.get("state", "unknown"), stream.get("events_received"),
+                        stream.get("last_persisted_at"),
+                    )
             stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
             await asyncio.to_thread(
                 balance_history, _console_state_db_path(), venues,
