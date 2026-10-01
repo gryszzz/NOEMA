@@ -39,12 +39,12 @@ def test_capital_observation_startup_uses_explicitly_enabled_account_logger(
         coro.close()
 
     monkeypatch.setattr(dashboard_app.asyncio, "create_task", discard_task)
-    caplog.set_level(logging.INFO, logger="noema.account")
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
 
     asyncio.run(dashboard_app.start_capital_sampler())
 
     startup = next(record for record in caplog.records if "Capital observation startup" in record.message)
-    assert startup.name == "noema.account"
+    assert startup.name == "uvicorn.error"
     assert "sampler_enabled=False" in startup.message
     assert "polymarket_key_id_present=True" in startup.message
 
@@ -133,7 +133,7 @@ def test_capital_sampler_logs_only_safe_stage_and_error_class(monkeypatch, tmp_p
         raise AssertionError("sampler should retry after the isolated source-read failure")
 
     assert "stage=authenticated_source_reads error_type=RuntimeError" in caplog.text
-    assert any(record.name == "noema.account" for record in caplog.records)
+    assert any(record.name == "uvicorn.error" for record in caplog.records)
     assert "sensitive account body" not in caplog.text
     assert "credential placeholder" not in caplog.text
 

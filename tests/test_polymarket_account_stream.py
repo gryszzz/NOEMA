@@ -8,9 +8,12 @@ from noema.prediction_account_history import persist_prediction_account_records
 
 
 def test_account_observability_info_logger_is_explicitly_enabled():
-    account_log = logging.getLogger("noema.account")
+    from uvicorn.config import LOGGING_CONFIG
+
+    account_log = logging.getLogger("uvicorn.error")
     assert account_log.level == logging.INFO
     assert account_log.isEnabledFor(logging.INFO)
+    assert "default" in LOGGING_CONFIG["loggers"]["uvicorn"]["handlers"]
 
 
 def test_unconfigured_private_stream_logs_presence_only(monkeypatch, caplog):
