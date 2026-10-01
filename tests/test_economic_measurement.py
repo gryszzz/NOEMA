@@ -57,6 +57,7 @@ def test_measurement_includes_sidecar_only_research_run_cost(tmp_path):
 
 def test_measurement_uses_completed_sidecar_run_once_when_worker_copy_is_stale(tmp_path, monkeypatch):
     worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
+    test_now = datetime.now(UTC)
     run_schema = """CREATE TABLE autonomous_research_runs(
         id INTEGER PRIMARY KEY,trial_id TEXT NOT NULL,specialist TEXT NOT NULL,
         kind TEXT NOT NULL,evidence_hash TEXT NOT NULL,worker_version TEXT NOT NULL,
@@ -64,12 +65,12 @@ def test_measurement_uses_completed_sidecar_run_once_when_worker_copy_is_stale(t
         elapsed_seconds REAL,compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,
         mission_id TEXT,UNIQUE(trial_id,evidence_hash,worker_version))"""
     values = ("trial-cost", "critic", "research", "hash-cost", "v1", "running",
-              NOW.isoformat(), None, NOW.isoformat(), None, "0.20", "{}", None, None)
+              test_now.isoformat(), None, test_now.isoformat(), None, "0.20", "{}", None, None)
     with sqlite3.connect(worker) as conn:
         conn.execute(run_schema)
         conn.execute("INSERT INTO autonomous_research_runs VALUES(1," + ",".join("?" for _ in values) + ")",
                      values)
-    completed_at = (NOW + timedelta(minutes=10)).isoformat()
+    completed_at = (test_now + timedelta(minutes=10)).isoformat()
     with sqlite3.connect(sidecar) as conn:
         conn.execute(run_schema)
         conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
@@ -78,7 +79,7 @@ def test_measurement_uses_completed_sidecar_run_once_when_worker_copy_is_stale(t
         ))
 
     report = build_economic_measurement(
-        str(worker), now=NOW + timedelta(hours=1), additional_paths=(str(sidecar),),
+        str(worker), now=test_now + timedelta(hours=1), additional_paths=(str(sidecar),),
     )
     rows = [item for item in report["activity_costs"]["rows"]
             if item["activity_id"] == "trial-cost"]

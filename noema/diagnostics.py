@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 from .config import KalshiConfig
-from .wallet_credentials import KALSHI_KEY_ID_KEYCHAIN_SERVICE, credential_source
+from .wallet_credentials import (
+    KALSHI_KEY_ID_KEYCHAIN_SERVICE,
+    credential_source,
+    private_key_file_status,
+)
 
 
 @dataclass(frozen=True)
@@ -13,6 +16,7 @@ class ConfigDiagnostic:
     api_key_id_present: bool
     private_key_path_present: bool
     private_key_file_exists: bool
+    private_key_file_status: str
     api_key_id_provider: str
     private_key_provider: str
     live_orders_armed: bool
@@ -25,16 +29,17 @@ def diagnose(config: KalshiConfig | None = None) -> ConfigDiagnostic:
     path_present = bool(
         config.private_key_path or config.private_key_pem or config.private_key_pem_b64
     )
-    file_exists = bool(config.private_key_pem is not None or (
-        config.private_key_pem_b64 is not None or (
-            config.private_key_path and Path(config.private_key_path).is_file()
-        )
-    ))
+    if config.private_key_pem is not None or config.private_key_pem_b64 is not None:
+        file_status = "environment"
+    else:
+        file_status = private_key_file_status(config.private_key_path)
+    file_exists = file_status in {"readable", "unreadable"}
     return ConfigDiagnostic(
         environment=config.environment,
         api_key_id_present=bool(config.key_id),
         private_key_path_present=path_present,
         private_key_file_exists=file_exists,
+        private_key_file_status=file_status,
         api_key_id_provider=credential_source(
             "KALSHI_API_KEY_ID", keychain_service=KALSHI_KEY_ID_KEYCHAIN_SERVICE,
         ),
