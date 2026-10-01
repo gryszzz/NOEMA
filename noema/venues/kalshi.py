@@ -54,41 +54,61 @@ class KalshiSigner:
         private_key_pem_b64: str | None = None,
     ) -> None:
         if private_key_pem is None and private_key_pem_b64 is None and private_key_path is None:
-            raise RuntimeError("Kalshi signing key is unavailable")
+            raise KalshiCredentialError("private_key_unavailable")
         self.key_id = key_id
-        try:
-            if private_key_pem is not None:
-                pem = private_key_pem
-            elif private_key_pem_b64 is not None:
+        if private_key_pem is not None:
+            pem = private_key_pem
+        elif private_key_pem_b64 is not None:
+            try:
                 pem = base64.b64decode(private_key_pem_b64, validate=True)
-            else:
+            except Exception:  # noqa: BLE001 - never expose credential parser details
+                raise KalshiCredentialError("private_key_malformed") from None
+        else:
+            try:
                 pem = Path(private_key_path).read_bytes()
+            except OSError:
+                raise KalshiCredentialError("private_key_source_unavailable") from None
+        try:
             self.private_key = serialization.load_pem_private_key(pem, password=None)
-        except Exception:  # noqa: BLE001 - signing boundary suppresses all secret-bearing details
-            raise RuntimeError("Kalshi private key could not be parsed") from None
-
+        except Exception:  # noqa: BLE001 - never expose key/parser details
+            raise KalshiCredentialError("private_key_malformed") from None
     def headers(self, method: str, request_path: str) -> dict[str, str]:
         timestamp = str(int(time.time() * 1000))
         path_without_query = request_path.split("?", 1)[0]
         message = (timestamp + method.upper() + path_without_query).encode()
 
-        if isinstance(self.private_key, Ed25519PrivateKey):
-            signature = self.private_key.sign(message)
-        else:
-            signature = self.private_key.sign(
-                message,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA256()),
-                    salt_length=padding.PSS.DIGEST_LENGTH,
-                ),
-                hashes.SHA256(),
-            )
+        try:
+            if isinstance(self.private_key, Ed25519PrivateKey):
+                signature = self.private_key.sign(message)
+            elif hasattr(self.private_key, "private_numbers"):
+                signature = self.private_key.sign(
+                    message,
+                    padding.PSS(
+                        mgf=padding.MGF1(hashes.SHA256()),
+                        salt_length=padding.PSS.DIGEST_LENGTH,
+                    ),
+                    hashes.SHA256(),
+                )
+            else:
+                raise KalshiCredentialError("private_key_incompatible")
+        except KalshiCredentialError:
+            raise
+        except Exception:  # noqa: BLE001 - signing implementation details may be sensitive
+            raise KalshiCredentialError("private_key_signing_failed") from None
 
         return {
             "KALSHI-ACCESS-KEY": self.key_id,
             "KALSHI-ACCESS-TIMESTAMP": timestamp,
             "KALSHI-ACCESS-SIGNATURE": base64.b64encode(signature).decode(),
         }
+
+
+class KalshiCredentialError(RuntimeError):
+    """Secret-safe, machine-readable local Kalshi credential failure."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 class KalshiVenue(VenueAdapter):
