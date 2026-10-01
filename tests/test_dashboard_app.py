@@ -29,7 +29,7 @@ def test_capital_sampler_targets_start_to_start_interval() -> None:
     assert _capital_sample_sleep_seconds(15, 100.0, now=117.0) == 0
 
 
-def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatch, tmp_path) -> None:
+def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatch, tmp_path, caplog) -> None:
     from noema import dashboard_app
 
     database = tmp_path / "worker.db"
@@ -78,6 +78,8 @@ def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatc
     assert persisted[0:2] == ("persist", str(state_path))
     assert persisted[4] == "24H"
     assert persisted[3]["observed_at"] == "wallet-observed-at"
+    assert "Account observation venue=polymarket_us status=projection_missing" in caplog.text
+    assert "Capital history sampler cycle completed venues=0 wallet_networks=0" in caplog.text
 
 
 def test_capital_sampler_logs_only_safe_stage_and_error_class(monkeypatch, tmp_path, caplog):
