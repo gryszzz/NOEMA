@@ -802,8 +802,9 @@ def _heartbeat_loop(
         while not stop_event.wait(interval_seconds):
             try:
                 store.refresh_heartbeat()
-            except sqlite3.Error:
-                _log("agent_heartbeat_error", status="unavailable")
+            except sqlite3.Error as exc:
+                _log("agent_heartbeat_error", status="unavailable",
+                     error=type(exc).__name__, **sqlite_error_fields(exc))
     finally:
         store.conn.close()
 
