@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import threading
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from time import perf_counter
@@ -84,11 +85,15 @@ def _polymarket_account_sample_interval() -> int:
         return 300
 
 
-async def _polymarket_account_sampler(db_path: str) -> None:
+async def _polymarket_account_sampler(
+    db_path: str, on_change: Callable[[], None] | None = None,
+) -> None:
     """Sample through the existing authenticated read-only path on the worker DB."""
     while True:
         try:
             result = await sample_polymarket_private_account(db_path)
+            if result.get("records_persisted", 0) and on_change is not None:
+                on_change()
             presence = result.get("credential_presence", {})
             stream = result.get("private_stream", {})
             _log(
@@ -110,6 +115,44 @@ async def _polymarket_account_sampler(db_path: str) -> None:
                 records_persisted=0,
             )
         await asyncio.sleep(_polymarket_account_sample_interval())
+
+
+async def _changed_console_snapshot_loop(
+    db_path: str,
+    changed: asyncio.Event,
+    publish_lock: asyncio.Lock,
+    publish: Callable[[str], Awaitable[dict[str, object]]] = publish_console_snapshot,
+    *,
+    debounce_seconds: float = 0.2,
+    min_interval_seconds: float = 1.0,
+) -> None:
+    """Refresh the console replica soon after real collector writes, with coalescing."""
+    loop = asyncio.get_running_loop()
+    last_started = float("-inf")
+    while True:
+        await changed.wait()
+        changed.clear()
+        await asyncio.sleep(debounce_seconds)
+        changed.clear()
+        delay = min_interval_seconds - (loop.time() - last_started)
+        if delay > 0:
+            await asyncio.sleep(delay)
+            changed.clear()
+        async with publish_lock:
+            # A periodic snapshot may have held the lock while newer collector
+            # writes arrived. This backup captures their current DB state too.
+            changed.clear()
+            last_started = loop.time()
+            try:
+                status = await publish(db_path)
+            except Exception as exc:  # noqa: BLE001 - keep live collectors independent
+                status = {
+                    "status": "unavailable",
+                    "failure_stage": "change_triggered_snapshot",
+                    "failure_classification": "snapshot_publish_failure",
+                    "error_type": type(exc).__name__,
+                }
+        _log("agent_console_snapshot", trigger="collector_change", **status)
 
 
 def bootstrap_hosted_bill_budget(db_path: str) -> str | None:
@@ -282,7 +325,11 @@ async def _trench_state(
         )
 
 
-async def _trench_sampler_loop(db_path: str, config: TrenchCollectorConfig) -> None:
+async def _trench_sampler_loop(
+    db_path: str,
+    config: TrenchCollectorConfig,
+    on_change: Callable[[], None] | None = None,
+) -> None:
     """Collect scheduled launch snapshots independently of the long reasoning cycle."""
     config.validate()
     jupiter = JupiterTrenchResearchClient(api_key=config.jupiter_api_key)
@@ -310,6 +357,11 @@ async def _trench_sampler_loop(db_path: str, config: TrenchCollectorConfig) -> N
                 request_pause_seconds=0,
                 discover_new=discover,
             )
+            if on_change is not None and any((
+                summary.discovered, summary.recorded,
+                summary.assessments_recorded, summary.counterfactuals_recorded,
+            )):
+                on_change()
             if summary.due:
                 _log(
                     "trench_forward_sampler",
@@ -831,21 +883,32 @@ async def run_agent(
     trench_sampler: asyncio.Task[None] | None = None
     polymarket_stream: asyncio.Task[None] | None = None
     polymarket_rest_sampler: asyncio.Task[None] | None = None
+    changed_records = asyncio.Event()
+    snapshot_lock = asyncio.Lock()
+    runtime_loop = asyncio.get_running_loop()
+
+    def request_snapshot_after_change(*_args: object) -> None:
+        runtime_loop.call_soon_threadsafe(changed_records.set)
+
+    changed_snapshot_task = asyncio.create_task(
+        _changed_console_snapshot_loop(config.db_path, changed_records, snapshot_lock),
+        name="noema-change-triggered-console-snapshot",
+    )
     trench_config = TrenchCollectorConfig.from_env()
     if trench_config.enabled:
         trench_sampler = asyncio.create_task(
-            _trench_sampler_loop(config.db_path, trench_config),
+            _trench_sampler_loop(config.db_path, trench_config, request_snapshot_after_change),
             name="noema-trench-forward-sampler",
         )
     if os.getenv("NOEMA_POLYMARKET_US_ENABLED", "1").strip() == "1":
         polymarket_stream = asyncio.create_task(
             run_polymarket_account_stream(
-                lambda: config.db_path, lambda _update: None,
+                lambda: config.db_path, request_snapshot_after_change,
             ),
             name="noema-polymarket-account-stream",
         )
         polymarket_rest_sampler = asyncio.create_task(
-            _polymarket_account_sampler(config.db_path),
+            _polymarket_account_sampler(config.db_path, request_snapshot_after_change),
             name="noema-polymarket-account-rest-sampler",
         )
         key_id_present, secret_present = polymarket_us_credentials_present()
@@ -892,7 +955,8 @@ async def run_agent(
                     KeyError, TypeError) as exc:
                 _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
             try:
-                snapshot_status = await publish_console_snapshot(config.db_path)
+                async with snapshot_lock:
+                    snapshot_status = await publish_console_snapshot(config.db_path)
             except Exception as exc:  # noqa: BLE001 - snapshot diagnostics must not stop collection.
                 # Keep the worker alive and report only a safe exception class.
                 snapshot_status = {
@@ -905,7 +969,9 @@ async def run_agent(
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
-        for task in (trench_sampler, polymarket_stream, polymarket_rest_sampler):
+        for task in (
+            trench_sampler, polymarket_stream, polymarket_rest_sampler, changed_snapshot_task,
+        ):
             if task is None:
                 continue
             task.cancel()

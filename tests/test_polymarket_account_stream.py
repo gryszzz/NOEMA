@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import sqlite3
+import sys
+from types import SimpleNamespace
 
 from noema import polymarket_account_stream, prediction_venues
 from noema.polymarket_account_stream import _account_rows
@@ -33,6 +35,65 @@ def test_unconfigured_private_stream_logs_presence_only(monkeypatch, caplog):
 
     assert "Polymarket private account stream unconfigured key_id_present=yes secret_present=no" in caplog.text
     assert "unused.db" not in caplog.text
+
+
+def test_persisted_private_stream_event_notifies_replication_callback(monkeypatch, tmp_path):
+    callbacks = {}
+    changed = []
+
+    class WebSocket:
+        async def connect(self):
+            callbacks["open"]()
+            callbacks["account_balance_update"]({
+                "accountBalancesUpdate": {"balanceChange": {"afterBalance": {
+                    "currency": "USD", "currentBalance": {"value": "12.50", "currency": "USD"},
+                }}},
+            })
+            raise asyncio.CancelledError
+
+        def on(self, name, callback):
+            callbacks[name] = callback
+
+        async def subscribe_account_balance(self, _name):
+            pass
+
+        async def subscribe_positions(self, _name):
+            pass
+
+        async def subscribe_orders(self, _name):
+            pass
+
+        async def subscribe(self, *_args):
+            pass
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.ws = SimpleNamespace(private=lambda: WebSocket())
+
+    monkeypatch.setitem(sys.modules, "polymarket_us", SimpleNamespace(PolymarketUS=Client))
+    monkeypatch.setattr(
+        polymarket_account_stream, "polymarket_us_credentials_present", lambda: (True, True),
+    )
+    monkeypatch.setattr(
+        polymarket_account_stream, "load_polymarket_us_credentials_in_api_boundary",
+        lambda: ("placeholder", "placeholder"),
+    )
+    monkeypatch.setattr(
+        polymarket_account_stream, "persist_prediction_account_records",
+        lambda *_args, **_kwargs: {"inserted": 1, "updated": 0, "skipped": 0},
+    )
+
+    try:
+        asyncio.run(polymarket_account_stream.run_polymarket_account_stream(
+            lambda: str(tmp_path / "worker.sqlite3"), lambda update: changed.append(update),
+        ))
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("test stream should be cancelled after the persisted account event")
+
+    assert len(changed) == 1
+    assert changed[0]["balances"][0]["currency"] == "USD"
 
 
 def test_private_balance_position_and_order_updates_normalize_to_existing_records(tmp_path):
