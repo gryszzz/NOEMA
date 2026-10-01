@@ -124,7 +124,7 @@ async def _changed_console_snapshot_loop(
     publish: Callable[[str], Awaitable[dict[str, object]]] = publish_console_snapshot,
     *,
     debounce_seconds: float = 0.2,
-    min_interval_seconds: float = 1.0,
+    min_interval_seconds: float = 15.0,
 ) -> None:
     """Refresh the console replica soon after real collector writes, with coalescing."""
     loop = asyncio.get_running_loop()
