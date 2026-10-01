@@ -35,6 +35,17 @@ services:
         value: 3600
       - key: NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC
         value: 500
+      # Enable only the allowlisted offline research workers. Their per-run
+      # snapshot, runtime and daily limits are explicit; model cognition, MCP
+      # network research and all financial execution remain separately gated.
+      - key: NOEMA_RESEARCH_WORK_ENABLED
+        value: "1"
+      - key: NOEMA_RESEARCH_MAX_RUNS_PER_DAY
+        value: 4
+      - key: NOEMA_RESEARCH_TIMEOUT_SECONDS
+        value: 30
+      - key: NOEMA_RESEARCH_MAX_ROWS_PER_TABLE
+        value: 20000
       # Read-only venue credentials are shared with the console through matching
       # Render-managed service secrets. Kalshi PEM uses the mounted
       # /etc/secrets/kalshi.pem file when present; base64 remains a fallback.
