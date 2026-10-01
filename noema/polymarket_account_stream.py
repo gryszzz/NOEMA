@@ -16,7 +16,7 @@ from .wallet_credentials import (
 )
 
 _log = logging.getLogger(__name__)
-_account_log = logging.getLogger("noema.account")
+_account_log = logging.getLogger("uvicorn.error")
 _account_log.setLevel(logging.INFO)
 _stream_health: dict[str, Any] = {
     "state": "not_started", "connected_at": None, "last_message_at": None,

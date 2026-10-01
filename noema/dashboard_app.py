@@ -64,7 +64,10 @@ _wallet_status_lock = asyncio.Lock()
 _capital_sampler_task: asyncio.Task | None = None
 _polymarket_stream_task: asyncio.Task | None = None
 _log = logging.getLogger(__name__)
-_account_log = logging.getLogger("noema.account")
+# Uvicorn's production dictConfig attaches the stderr handler to this logger's
+# parent (`uvicorn`). A custom logger propagates to root, which Uvicorn leaves
+# handler-free, so even explicitly enabled INFO records can otherwise vanish.
+_account_log = logging.getLogger("uvicorn.error")
 _account_log.setLevel(logging.INFO)
 
 
