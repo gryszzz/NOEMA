@@ -830,9 +830,15 @@ async def run_agent(
                 _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id)
             try:
                 snapshot_status = await publish_console_snapshot(config.db_path)
-            except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError):
-                snapshot_status = "unavailable"
-            _log("agent_console_snapshot", status=snapshot_status, cycle_id=cycle_id)
+            except Exception as exc:  # noqa: BLE001 - snapshot diagnostics must not stop collection.
+                # Keep the worker alive and report only a safe exception class.
+                snapshot_status = {
+                    "status": "unavailable",
+                    "failure_stage": "worker_snapshot_runtime",
+                    "failure_classification": "snapshot_publish_failure",
+                    "error_type": type(exc).__name__,
+                }
+            _log("agent_console_snapshot", **snapshot_status, cycle_id=cycle_id)
             elapsed = asyncio.get_running_loop().time() - started
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:

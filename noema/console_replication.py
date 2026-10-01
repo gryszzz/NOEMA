@@ -9,6 +9,7 @@ import re
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -131,16 +132,50 @@ def load_worker_metadata(db_path: str) -> dict[str, object] | None:
         return None
 
 
-async def publish_console_snapshot(db_path: str) -> str:
+def _snapshot_publish_failure(stage: str, exc: Exception) -> dict[str, Any]:
+    status_code = None
+    if isinstance(exc, httpx.HTTPStatusError):
+        candidate = exc.response.status_code
+        status_code = candidate if isinstance(candidate, int) else None
+        classification = "private_console_http_rejection"
+    elif isinstance(exc, httpx.RequestError):
+        classification = "private_console_transport_failure"
+    elif isinstance(exc, sqlite3.Error):
+        classification = "worker_snapshot_database_failure"
+    elif isinstance(exc, OSError):
+        classification = "worker_snapshot_storage_failure"
+    elif isinstance(exc, (ValueError, TypeError, KeyError)):
+        classification = "worker_snapshot_payload_failure"
+    else:
+        classification = "snapshot_publish_failure"
+    # Never include the exception message, URL, headers, or request/response
+    # content. Render's worker log needs a category and stage, not secret data.
+    return {
+        "status": "unavailable",
+        "failure_stage": stage,
+        "failure_classification": classification,
+        "error_type": type(exc).__name__,
+        "http_status": status_code,
+    }
+
+
+async def publish_console_snapshot(db_path: str) -> dict[str, Any]:
     """Push a consistent, compressed SQLite backup to the private console replica."""
     address = os.getenv("NOEMA_CONSOLE_INTERNAL_ADDRESS", "").strip()
     token = os.getenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "")
     if not address and not token:
-        return "disabled"
+        return {"status": "disabled"}
     if not address or not token or not _ADDRESS_PATTERN.fullmatch(address):
-        return "misconfigured"
+        return {"status": "misconfigured", "failure_stage": "configuration"}
     try:
         payload = await asyncio.to_thread(_snapshot_image, db_path)
+    except Exception as exc:  # noqa: BLE001 - isolate snapshot failures; log only safe classification.
+        return _snapshot_publish_failure("snapshot_backup", exc)
+    try:
+        metadata_header = _worker_metadata_header()
+    except Exception as exc:  # noqa: BLE001 - metadata errors must not abort the worker cycle.
+        return _snapshot_publish_failure("worker_metadata", exc)
+    try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
             response = await client.post(
                 f"http://{address}/internal/snapshot",
@@ -148,10 +183,10 @@ async def publish_console_snapshot(db_path: str) -> str:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/gzip",
-                    "X-NOEMA-Worker-Metadata": _worker_metadata_header(),
+                    "X-NOEMA-Worker-Metadata": metadata_header,
                 },
             )
         response.raise_for_status()
-        return "persisted"
-    except (httpx.HTTPError, OSError, sqlite3.Error, ValueError):
-        return "unavailable"
+        return {"status": "persisted"}
+    except Exception as exc:  # noqa: BLE001 - provider client errors are reduced to safe fields.
+        return _snapshot_publish_failure("private_console_post", exc)
