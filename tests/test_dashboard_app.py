@@ -34,6 +34,7 @@ def test_capital_observation_startup_uses_explicitly_enabled_account_logger(
     monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(tmp_path / "state.db"))
     monkeypatch.setattr(dashboard_app, "_merge_account_history_into_console_state", lambda *_: None)
     monkeypatch.setattr(dashboard_app, "polymarket_us_credentials_present", lambda: (True, True))
+    monkeypatch.setattr(dashboard_app._account_log, "propagate", True)
 
     def discard_task(coro, *, name=None):
         coro.close()
@@ -65,6 +66,7 @@ def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatc
 
     monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(database))
     monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(state_path))
+    monkeypatch.setattr(dashboard_app._account_log, "propagate", True)
 
     async def wallets(*, force=False):
         calls.append(("wallets", force))
@@ -115,6 +117,7 @@ def test_capital_sampler_logs_only_safe_stage_and_error_class(monkeypatch, tmp_p
     database.touch()
     monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(database))
     monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(tmp_path / "state.db"))
+    monkeypatch.setattr(dashboard_app._account_log, "propagate", True)
 
     async def fail_reads(*, force=False):
         raise RuntimeError("sensitive account body and credential placeholder")

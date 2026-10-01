@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .account_capital import value_native_wallets
+from .account_logging import account_logger
 from .agent_dashboard import build_agent_overview
 from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview, build_provider_health
@@ -64,8 +65,7 @@ _wallet_status_lock = asyncio.Lock()
 _capital_sampler_task: asyncio.Task | None = None
 _polymarket_stream_task: asyncio.Task | None = None
 _log = logging.getLogger(__name__)
-_account_log = logging.getLogger("noema.account")
-_account_log.setLevel(logging.INFO)
+_account_log = account_logger()
 
 
 _MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024

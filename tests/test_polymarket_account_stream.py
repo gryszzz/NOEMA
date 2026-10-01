@@ -11,10 +11,14 @@ def test_account_observability_info_logger_is_explicitly_enabled():
     account_log = logging.getLogger("noema.account")
     assert account_log.level == logging.INFO
     assert account_log.isEnabledFor(logging.INFO)
+    assert any(getattr(handler, "_noema_account_handler", False)
+               for handler in account_log.handlers)
+    assert account_log.propagate is False
 
 
 def test_unconfigured_private_stream_logs_presence_only(monkeypatch, caplog):
     monkeypatch.setattr(polymarket_account_stream, "polymarket_us_credentials_present", lambda: (True, False))
+    monkeypatch.setattr(polymarket_account_stream._account_log, "propagate", True)
     monkeypatch.setitem(polymarket_account_stream._stream_health, "state", "not_started")
 
     async def cancel_after_unconfigured_wait(_seconds):

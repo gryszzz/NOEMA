@@ -9,6 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from .account_logging import account_logger
 from .prediction_account_history import persist_prediction_account_records
 from .wallet_credentials import (
     load_polymarket_us_credentials_in_api_boundary,
@@ -16,8 +17,7 @@ from .wallet_credentials import (
 )
 
 _log = logging.getLogger(__name__)
-_account_log = logging.getLogger("noema.account")
-_account_log.setLevel(logging.INFO)
+_account_log = account_logger()
 _stream_health: dict[str, Any] = {
     "state": "not_started", "connected_at": None, "last_message_at": None,
     "last_persisted_at": None, "events_received": 0, "reconnects": 0,
