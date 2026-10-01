@@ -286,6 +286,8 @@ try {
  assert.ok((await solCard.innerText()).includes('$10.16 included in known subtotal'));
  await solCard.locator('.capital-account-main').click();
  assert.equal(await capitalPage.locator('#shared-selection-title').innerText(),'Solana');
+ await capitalPage.waitForFunction(()=>document.getElementById('feed-window').textContent.includes('· Solana ·'),
+  null,{timeout:5000});
  assert.ok((await capitalPage.locator('#feed-window').innerText()).includes('Solana'));
  assert.equal(await capitalPage.locator('#web3-live-details .category-card').count(),1,'shared wallet selection scopes category detail');
  await capitalPage.locator('#category-clear').click();
