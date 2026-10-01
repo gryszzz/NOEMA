@@ -29,3 +29,17 @@ test('isolates native units, account identities, and stale sources', () => {
   assert.equal(capitalAccounts(venues, wallets, {}, now - 10000)[0].status, 'Stale');
   assert.equal(capitalAccounts(null, null, {}, now).filter(a => a.amount !== null).length, 0);
 });
+
+test('projects newly registered chain balances without a fixed chain list', () => {
+  const wallets = { observed_at: at, networks: [{
+    chain: 'avalanche', canonical_network_id: 'eip155:43114', chain_id: 43114,
+    native_symbol: 'AVAX', native_balance: '3', native_value_usd: '90',
+    address: 'agent-address', readable: true, data_freshness: 'fresh',
+  }] };
+  const account = capitalAccounts({}, wallets, {}, now).find((item) => item.kind === 'wallet');
+  assert.equal(account.label, 'avalanche');
+  assert.equal(account.unit, 'AVAX');
+  assert.equal(account.amount, 3);
+  assert.equal(account.usd, 90);
+  assert.equal(account.id, 'wallet:eip155:43114:agent-address');
+});

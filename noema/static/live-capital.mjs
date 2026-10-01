@@ -11,7 +11,7 @@ export function agentBalanceState(current, historyFailed = false) {
   // The current projector excludes positions, unpriced tokens, and liabilities.
   return 'UNRECONCILED';
 }
-const chains = [['solana', 'Solana', 'SOL'], ['ethereum', 'Ethereum', 'ETH'], ['base', 'Base', 'ETH'], ['polygon', 'Polygon', 'POL'], ['bitcoin', 'Bitcoin', 'BTC']];
+const chainLabels = { solana: ['Solana', 'SOL'], ethereum: ['Ethereum', 'ETH'], base: ['Base', 'ETH'], polygon: ['Polygon', 'POL'], bitcoin: ['Bitcoin', 'BTC'] };
 export const timeLabel = (at) => at === null ? 'Source time unknown' : new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 export const format = (value, unit = 'USD') => value === null ? 'Unknown' : unit === 'USD'
   ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
@@ -54,12 +54,16 @@ export function capitalAccounts(venues, wallets, failures = {}, now = Date.now()
       status: status(readable, at, failures.venues, now), usd: readable ? amount : null, kind: 'venue', account,
       detail: readable ? 'Account cash · read only' : String(account.status ?? 'Account data unavailable').replaceAll('_', ' ') };
   });
-  for (const [chain, name, unit] of chains) {
-    const wallet = wallets?.networks?.find((item) => item.chain === chain) ?? {};
+  for (const wallet of wallets?.networks ?? []) {
+    const chain = String(wallet.chain ?? 'unknown');
+    const [name, defaultUnit] = chainLabels[chain] ?? [wallet.chain ?? 'Network', wallet.native_symbol ?? ''];
+    const unit = wallet.native_symbol ?? defaultUnit;
     const amount = capitalNumber(wallet.sol ?? wallet.native_balance ?? wallet.btc);
     const at = eventTime(wallet.observed_at ?? wallets?.observed_at);
-    const readable = (wallet.readable === true || String(wallet.status ?? '').startsWith('read_only')) && amount !== null;
-    accounts.push({ id: `wallet:${chain}:${wallet.address || 'unknown'}`, label: name, unit, amount: readable ? amount : null, at,
+    const readable = (wallet.readable === true || String(wallet.status ?? '').startsWith('read_only'))
+      && wallet.data_freshness !== 'stale' && amount !== null;
+    const identity = wallet.canonical_network_id ?? chain;
+    accounts.push({ id: `wallet:${identity}:${wallet.address || 'unknown'}`, label: name, unit, amount: readable ? amount : null, at,
       status: status(readable, at, failures.wallets, now), usd: readable ? capitalNumber(wallet.native_value_usd) : null, kind: 'wallet', account: wallet,
       detail: wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'No wallet observation' });
   }

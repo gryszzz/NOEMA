@@ -1,6 +1,7 @@
 """Strict display projections of official account observations, never execution inputs."""
 
 import asyncio
+import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -79,8 +80,8 @@ async def value_native_wallets(networks: list[dict[str, Any]]) -> list[dict[str,
     for row in networks:
         amount = _decimal(row.get("sol", row.get("native_balance", row.get("btc"))))
         if row.get("readable") is True and amount is not None and amount > 0:
-            symbol = symbols.get(row.get("chain"))
-            if symbol:
+            symbol = row.get("native_price_symbol") or symbols.get(row.get("chain"))
+            if isinstance(symbol, str) and re.fullmatch(r"[A-Z][A-Z0-9]{0,11}", symbol):
                 needed.add(symbol)
     async with httpx.AsyncClient(timeout=3.0) as client:
         async def quote(symbol: str):
@@ -102,12 +103,14 @@ async def value_native_wallets(networks: list[dict[str, Any]]) -> list[dict[str,
     for original in networks:
         row = dict(original)
         amount = _decimal(row.get("sol", row.get("native_balance", row.get("btc"))))
-        mark = quotes.get(symbols.get(row.get("chain")))
+        price_symbol = row.get("native_price_symbol") or symbols.get(row.get("chain"))
+        mark = quotes.get(price_symbol)
         usable = row.get("readable") is True and amount is not None and amount >= 0
         row["native_value_usd"] = (
             "0" if usable and amount == 0 else
             str(amount * Decimal(mark["price_usd"])) if usable and mark else None
         )
+        row["native_price_symbol"] = price_symbol
         row["native_valuation"] = mark
         result.append(row)
     return result

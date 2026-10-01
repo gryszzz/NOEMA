@@ -72,3 +72,31 @@ def test_native_valuation_uses_official_quotes_and_never_values_missing_reads(mo
     assert rows[1]["native_value_usd"] == "0"
     assert rows[2]["native_value_usd"] is None
     assert requests == ["https://api.coinbase.com/v2/prices/SOL-USD/spot"]
+
+
+def test_registry_price_symbols_value_new_chain_only_with_matching_official_quote(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from noema.account_capital import value_native_wallets
+
+    requested = []
+
+    def handler(request):
+        requested.append(str(request.url))
+        return httpx.Response(200, json={
+            "data": {"base": "ETH", "currency": "USD", "amount": "2000"},
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("noema.account_capital.httpx.AsyncClient", lambda **_kwargs: client)
+    rows = asyncio.run(value_native_wallets([{
+        "chain": "arbitrum", "readable": True, "native_balance": "0.25",
+        "native_price_symbol": "ETH",
+    }, {
+        "chain": "unknown", "readable": True, "native_balance": "10",
+    }]))
+    assert rows[0]["native_value_usd"] == "500.00"
+    assert rows[1]["native_value_usd"] is None
+    assert requested == ["https://api.coinbase.com/v2/prices/ETH-USD/spot"]

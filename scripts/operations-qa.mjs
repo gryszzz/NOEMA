@@ -289,7 +289,8 @@ try {
  assert.ok((await capitalPage.locator('#feed-window').innerText()).includes('Solana'));
  assert.equal(await capitalPage.locator('#web3-live-details .category-card').count(),1,'shared wallet selection scopes category detail');
  await capitalPage.locator('#category-clear').click();
- assert.equal(await capitalPage.locator('#web3-live-details .category-card').count(),5);
+ assert.equal(await capitalPage.locator('#web3-live-details .category-card').count(),2,
+  'Web3 details show only the two wallet networks present in the live fixture');
  await capitalPage.locator('[data-category=revenue]').click();
  assert.ok((await capitalPage.locator('#revenue-live-details').innerText()).includes('Excluded'));
  await capitalPage.waitForFunction(()=>!document.getElementById('refresh').disabled);

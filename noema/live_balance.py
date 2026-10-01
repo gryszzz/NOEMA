@@ -31,10 +31,17 @@ def project_balance(venues: dict, wallets: dict, now: datetime, stripe: dict | N
                               "amount_usd": str(amount) if readable and amount is not None else None,
                               "observed_at": account.get("observed_at", venues.get("as_of")),
                               "observed": readable, "funded": amount is not None and amount > 0})
-    for chain in ("solana", "ethereum", "base", "polygon", "bitcoin"):
-        row = next((item for item in wallets.get("networks", []) if item.get("chain") == chain), {})
+    known_native_symbols = {
+        "solana": "SOL", "ethereum": "ETH", "base": "ETH",
+        "polygon": "POL", "bitcoin": "BTC",
+    }
+    for row in wallets.get("networks", []):
+        if not isinstance(row, dict):
+            continue
+        chain = str(row.get("chain", "unknown"))
+        chain_identity = str(row.get("canonical_network_id") or chain)
         amount = _decimal(row.get("native_value_usd"))
-        readable = row.get("readable") is True
+        readable = row.get("readable") is True and row.get("data_freshness", "fresh") != "stale"
         tokens = row.get("tokens") if isinstance(row.get("tokens"), list) else []
         unpriced_tokens = sum(
             1 for token in tokens if isinstance(token, dict)
@@ -58,13 +65,16 @@ def project_balance(venues: dict, wallets: dict, now: datetime, stripe: dict | N
             })
         native_amount = next((str(row[key]) for key in ("sol", "native_balance", "btc")
                               if _decimal(row.get(key)) is not None), None)
-        contributions.append({"id": f"wallet:{chain}:{row.get('address') or 'unknown'}",
-                              "label": chain, "amount_usd": str(amount) if readable and amount is not None else None,
+        contributions.append({"id": f"wallet:{chain_identity}:{row.get('address') or 'unknown'}",
+                              "label": row.get("chain") or chain,
+                              "amount_usd": str(amount) if readable and amount is not None else None,
                               "observed_at": row.get("observed_at", wallets.get("observed_at")),
-                              "observed": readable, "funded": row.get("funded") is True,
+                              "observed": row.get("connected") is True or readable,
+                              "funded": row.get("funded") is True,
+                              "data_freshness": row.get("data_freshness"),
                               "unpriced_assets": unpriced_tokens,
-                              "assets": [{"asset": {"solana": "SOL", "ethereum": "ETH", "base": "ETH",
-                                                   "polygon": "POL", "bitcoin": "BTC"}.get(chain, chain),
+                              "assets": [{"asset": row.get("native_symbol")
+                                                   or known_native_symbols.get(chain, chain),
                                           "amount": native_amount, "amount_usd": str(amount) if amount is not None else None,
                                           "observed_at": row.get("observed_at", wallets.get("observed_at"))}, *token_assets],
                               "price_observed_at": (row.get("native_valuation") or {}).get("observed_at")})
@@ -82,6 +92,8 @@ def project_balance(venues: dict, wallets: dict, now: datetime, stripe: dict | N
         at = _time(row["observed_at"])
         price_at = _time(row.get("price_observed_at"))
         current = at and 0 <= (now - at).total_seconds() <= 120
+        if row.get("data_freshness") == "stale":
+            current = False
         if price_at and not 0 <= (now - price_at).total_seconds() <= 120:
             current = False
         row["status"] = ("DISCONNECTED" if not row["observed"] else
