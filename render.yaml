@@ -16,6 +16,9 @@ services:
     buildCommand: pip install .
     startCommand: noema-agent
     autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - "**/*"
     numInstances: 1
     disk:
       name: noema-paper-data
@@ -33,7 +36,8 @@ services:
       - key: NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC
         value: 500
       # Read-only venue credentials are shared with the console through matching
-      # Render-managed service secrets. Values never belong in this Blueprint.
+      # Render-managed service secrets. Kalshi PEM uses the mounted
+      # /etc/secrets/kalshi.pem file when present; base64 remains a fallback.
       - key: KALSHI_API_KEY_ID
         sync: false
       - key: KALSHI_PRIVATE_KEY_PEM_B64
@@ -130,6 +134,9 @@ services:
     buildCommand: pip install .
     startCommand: noema-dashboard-web
     autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - "**/*"
     numInstances: 1
     healthCheckPath: /healthz
     disk:

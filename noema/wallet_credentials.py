@@ -19,6 +19,7 @@ KALSHI_KEY_ID_KEYCHAIN_ACCOUNT = "noema-owner"
 POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE = "com.noema.polymarket-us.key-id"
 POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE = "com.noema.polymarket-us.secret-key"
 POLYMARKET_US_KEYCHAIN_ACCOUNT = "noema-owner"
+RENDER_KALSHI_SECRET_FILE = Path("/etc/secrets/kalshi.pem")
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,19 @@ def _environment_credential(name: str) -> ResolvedCredential | None:
     if value is None or not value.strip():
         return None
     return ResolvedCredential(value=value.strip(), provider="environment")
+
+
+def private_key_file_status(path: str | Path | None) -> str:
+    """Check a PEM path without reading or returning any key material."""
+    if not path:
+        return "not_configured"
+    try:
+        with Path(path).open("rb"):
+            return "readable"
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "unreadable"
 
 
 def _resolve_secret(
@@ -67,19 +81,42 @@ def credential_source(env_name: str, *, keychain_service: str | None = None,
 
 
 def resolve_kalshi_private_key() -> tuple[str | None, str | bytes | None, str]:
-    """Resolve private-key material while leaving hosted PEM decoding to the signer."""
+    """Resolve a mounted PEM path first, with environment PEM as a fallback.
+
+    Render Secret Files are mounted at ``/etc/secrets/<filename>``. Keep PEM
+    bytes out of the application config; the signer reads the selected path
+    only when it needs to sign an authenticated request.
+    """
+    configured_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
+    if configured_path and configured_path.strip():
+        path = Path(configured_path.strip()).expanduser()
+        provider = (
+            "render_secret_file"
+            if os.getenv("RENDER", "").strip().lower() == "true"
+            and path.is_relative_to(Path("/etc/secrets"))
+            else "environment_path"
+        )
+        # Retain an explicitly configured missing path so diagnostics can say
+        # MISSING instead of silently selecting another credential source.
+        return str(path), None, provider
+
+    if os.getenv("RENDER", "").strip().lower() == "true":
+        status = private_key_file_status(RENDER_KALSHI_SECRET_FILE)
+        if status != "missing":
+            return str(RENDER_KALSHI_SECRET_FILE), None, "render_secret_file"
+
+    # Retain compatibility for local/dev and existing hosted configurations
+    # that supply a base64 PEM in the environment.
     encoded = _environment_credential("KALSHI_PRIVATE_KEY_PEM_B64")
     if encoded is not None:
         return None, str(encoded.value), "environment"
 
-    configured_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
     default_path = Path.home() / ".config/noema/credentials/kalshi.pem"
-    path = Path(configured_path) if configured_path else default_path
-    if not path.is_file():
+    if private_key_file_status(default_path) == "missing":
         return None, None, "unavailable"
     # Keep local private-key bytes out of config and diagnostics. The signer
     # boundary reads the configured file only when it must construct a signer.
-    return str(path), None, "local_file"
+    return str(default_path), None, "local_file"
 
 
 def solana_signing_credential_present() -> bool:

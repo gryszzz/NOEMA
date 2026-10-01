@@ -36,7 +36,7 @@ KALSHI_PRIVATE_KEY_PATH=/secure/path/key.pem
 
 The runtime uses authenticated read-only telemetry for account health and bounded public market collection for perception.
 
-The runtime uses the production Kalshi API for read-only market/account observation with order authority explicitly disabled. Hosted environments use Render-managed `KALSHI_API_KEY_ID` and `KALSHI_PRIVATE_KEY_PEM_B64` secrets. Local development retains Keychain Key ID lookup and the protected PEM path `~/.config/noema/credentials/kalshi.pem` through `KALSHI_PRIVATE_KEY_PATH`.
+The runtime uses the production Kalshi API for read-only market/account observation with order authority explicitly disabled. Hosted environments use the Render-managed `KALSHI_API_KEY_ID` and a Secret File named `kalshi.pem`, mounted at `/etc/secrets/kalshi.pem`. `KALSHI_PRIVATE_KEY_PATH` can select a different mounted path. `KALSHI_PRIVATE_KEY_PEM_B64` remains a compatibility fallback. Local development retains Keychain Key ID lookup and the protected PEM path `~/.config/noema/credentials/kalshi.pem` through `KALSHI_PRIVATE_KEY_PATH`.
 
 ### Polymarket US
 

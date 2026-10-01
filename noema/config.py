@@ -7,6 +7,7 @@ from pathlib import Path
 from .wallet_credentials import (
     kalshi_key_id_present,
     load_kalshi_key_id_in_api_boundary,
+    private_key_file_status,
     resolve_kalshi_private_key,
 )
 
@@ -19,12 +20,18 @@ def resolve_kalshi_private_key_path() -> str | None:
 def kalshi_credential_presence() -> tuple[bool, bool, bool]:
     """Return key ID/PEM presence without retrieving or exposing credentials."""
     key_id_present = bool(os.getenv("KALSHI_API_KEY_ID")) or kalshi_key_id_present()
-    pem_path, pem, _provider = resolve_kalshi_private_key()
-    protected = bool(
-        pem is not None and pem_path is None
-        or pem_path and Path(pem_path).is_file()
-        and (Path(pem_path).stat().st_mode & 0o077) == 0
-    )
+    pem_path, pem, provider = resolve_kalshi_private_key()
+    if pem is not None:
+        protected = True
+    elif pem_path and private_key_file_status(pem_path) == "readable":
+        try:
+            mode_is_private = (Path(pem_path).stat().st_mode & 0o077) == 0
+        except OSError:
+            mode_is_private = False
+        # Render manages the isolation and permissions of mounted secret files.
+        protected = provider == "render_secret_file" or mode_is_private
+    else:
+        protected = False
     return key_id_present, bool(pem_path or pem), protected
 
 
@@ -67,9 +74,6 @@ class KalshiConfig:
                                if isinstance(private_key_material, str) else None)
         allow_live = os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") == "1"
         master_halt = os.getenv("NOEMA_MASTER_HALT", "0") == "1"
-
-        if private_key_path and not Path(private_key_path).is_file():
-            raise FileNotFoundError(private_key_path)
 
         return cls(
             environment=environment,

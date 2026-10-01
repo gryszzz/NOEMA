@@ -72,7 +72,7 @@ def doctor_report(db_path: str = "data/noema.db") -> dict[str, Any]:
                 "ready" if kalshi_pem_present else "error",
                 "API key ID and PEM file available through configured sources"
                 if kalshi_pem_present
-                else "API key ID present but PEM path is not a file",
+                else "API key ID present but PEM path is missing or unreadable",
             )
         )
     elif kalshi_id_present or kalshi_path_configured:

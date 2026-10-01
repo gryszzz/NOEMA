@@ -58,6 +58,7 @@ from .wallet_credentials import (
     load_polymarket_us_credentials_in_api_boundary,
     polymarket_us_credential_sources,
     polymarket_us_credentials_present,
+    private_key_file_status,
 )
 
 _cache: dict[str, Any] = {"at": 0.0, "payload": None}
@@ -661,10 +662,20 @@ async def _kalshi_status() -> dict[str, Any]:
 
     keychain_present = config.key_id is not None
     pem = Path(config.private_key_path) if config.private_key_path else None
+    pem_file_status = (
+        "environment"
+        if config.private_key_pem is not None or config.private_key_pem_b64 is not None
+        else private_key_file_status(pem)
+    )
+    render_secret_file = config.private_key_source == "render_secret_file"
+    try:
+        pem_mode_is_private = bool(pem and (pem.stat().st_mode & 0o077) == 0)
+    except OSError:
+        pem_mode_is_private = False
     protected_key_present = bool(
         config.private_key_pem is not None
         or config.private_key_pem_b64 is not None
-        or (pem and pem.is_file() and (pem.stat().st_mode & 0o077) == 0)
+        or (pem_file_status == "readable" and (render_secret_file or pem_mode_is_private))
     )
     account: dict[str, Any] = {
         "status": "unconfigured",
@@ -678,6 +689,7 @@ async def _kalshi_status() -> dict[str, Any]:
                 "KALSHI_API_KEY_ID", keychain_service=KALSHI_KEY_ID_KEYCHAIN_SERVICE,
             ),
             "private_key_provider": config.private_key_source,
+            "private_key_file_status": pem_file_status,
         },
         "balance_available": False,
         "positions": None,
