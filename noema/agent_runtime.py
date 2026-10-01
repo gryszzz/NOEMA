@@ -25,7 +25,7 @@ from .cognition_models import CognitionResult
 from .config import kalshi_production_read_only_config
 from .console_replication import publish_console_snapshot
 from .cross_venue_experiment import mature_paper_pairs
-from .diagnostics import diagnose as diagnose_kalshi_config
+from .diagnostics import kalshi_runtime_credential_diagnostic
 from .economic_dashboard import build_economic_overview
 from .economic_investigations import advance_current_period_investigation
 from .economic_ledger import EconomicLedger
@@ -85,19 +85,12 @@ def bootstrap_hosted_bill_budget(db_path: str) -> str | None:
 
 async def _kalshi_state() -> AgentConnectionState:
     config = kalshi_production_read_only_config()
-    diagnostic = diagnose_kalshi_config(config)
-    safe_presence = (
-        f"key_id={'present' if diagnostic.api_key_id_present else 'missing'}"
-        f", private_key={diagnostic.private_key_file_status}"
-        f", provider={diagnostic.private_key_provider}"
-    )
+    _log("agent_kalshi_credential_diagnostic",
+         **kalshi_runtime_credential_diagnostic(config))
     try:
         telemetry = KalshiTelemetry(config)
     except (RuntimeError, ValueError, OSError, TypeError) as exc:
-        return AgentConnectionState(
-            "unconfigured",
-            f"{type(exc).__name__}: account unavailable; credential {safe_presence}",
-        )
+        return AgentConnectionState("unconfigured", f"{type(exc).__name__}: account unavailable")
 
     try:
         orders, fills, positions = await asyncio.gather(
