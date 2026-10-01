@@ -96,9 +96,20 @@ def _merge_account_history_into_console_state(source_path: str, state_path: str)
         if not source_tables.intersection(retained_tables):
             return
         state.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(state, timeout=5) as target:
+        with sqlite3.connect(state, timeout=30) as target:
+            target.execute("PRAGMA busy_timeout=30000")
             _copy_account_history_tables(source, target, source_tables)
             _copy_console_research_history(source, target, source_tables)
+
+
+def _enable_console_state_wal(state_path: str) -> None:
+    """Allow the persistent sidecar's account readers and snapshot writer to coexist."""
+    state = Path(state_path)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(state, timeout=30) as conn:
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
 
 
 def _copy_account_history_tables(
@@ -540,6 +551,7 @@ async def start_capital_sampler() -> None:
     # Import console-owned rows written by the previous colocated-database
     # version before enabling the sidecar writers. SQLite uniqueness makes
     # concurrent web-process startup migrations idempotent.
+    _enable_console_state_wal(_console_state_db_path())
     _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
     sampler_enabled = _capital_history_sampler_enabled()
     key_id_present, secret_present = polymarket_us_credentials_present()
