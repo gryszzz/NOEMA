@@ -1,3 +1,6 @@
+import asyncio
+
+from noema import agent_runtime
 from noema.agent_config import AgentConfig
 from noema.agent_runtime import bootstrap_hosted_bill_budget
 from noema.bill_tracker import BillTracker
@@ -11,6 +14,65 @@ def test_agent_config_requires_evm_pair() -> None:
         assert "configured together" in str(exc)
     else:
         raise AssertionError("expected config validation failure")
+
+
+def test_collector_change_triggers_serialized_console_snapshot() -> None:
+    async def run() -> None:
+        changed = asyncio.Event()
+        publish_lock = asyncio.Lock()
+        await publish_lock.acquire()
+        published = asyncio.Event()
+        calls = []
+
+        async def publish(path: str) -> dict[str, object]:
+            calls.append(path)
+            published.set()
+            return {"status": "persisted"}
+
+        task = asyncio.create_task(agent_runtime._changed_console_snapshot_loop(
+            "worker.sqlite3", changed, publish_lock, publish,
+            debounce_seconds=0, min_interval_seconds=0,
+        ))
+        changed.set()
+        await asyncio.sleep(0)
+        assert calls == []
+        publish_lock.release()
+        await asyncio.wait_for(published.wait(), timeout=1)
+        assert calls == ["worker.sqlite3"]
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+
+
+def test_polymarket_rest_sample_requests_snapshot_only_for_persisted_changes(monkeypatch) -> None:
+    async def run(records_persisted: int) -> list[bool]:
+        changes = []
+
+        async def sample(_path: str) -> dict[str, object]:
+            return {
+                "status": "authenticated_read_only",
+                "records_persisted": records_persisted,
+            }
+
+        async def stop(_seconds: int) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(agent_runtime, "sample_polymarket_private_account", sample)
+        monkeypatch.setattr(agent_runtime.asyncio, "sleep", stop)
+        try:
+            await agent_runtime._polymarket_account_sampler(
+                "worker.sqlite3", lambda: changes.append(True),
+            )
+        except asyncio.CancelledError:
+            pass
+        return changes
+
+    assert asyncio.run(run(3)) == [True]
+    assert asyncio.run(run(0)) == []
 
 
 def test_render_budget_bootstrap_runs_only_for_hosted_runtime_and_persists_once(
