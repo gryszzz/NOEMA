@@ -12,6 +12,23 @@ def test_demo_is_default_environment() -> None:
     assert config.allow_live_orders is False
 
 
+def test_environment_key_id_strips_copy_paste_whitespace(monkeypatch):
+    monkeypatch.setenv("KALSHI_API_KEY_ID", "  fixture-id\n")
+    config = KalshiConfig.from_env()
+    assert config.key_id == "fixture-id"
+
+
+def test_signer_rejects_key_id_control_characters_without_echoing_them():
+    try:
+        KalshiSigner("fixture-id\nsecret-suffix", private_key_pem=b"unused")
+    except KalshiCredentialError as error:
+        assert error.code == "api_key_id_invalid_header_value"
+        assert "fixture-id" not in str(error)
+        assert "secret-suffix" not in str(error)
+    else:
+        raise AssertionError("invalid HTTP header characters must fail closed")
+
+
 def test_environment_uses_keychain_id_and_standard_owner_only_pem(monkeypatch, tmp_path) -> None:
     from pathlib import Path
 

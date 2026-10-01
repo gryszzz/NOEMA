@@ -59,6 +59,9 @@ class KalshiConfig:
             raise ValueError("NOEMA_KALSHI_ENV must be demo or production")
 
         key_id = os.getenv("KALSHI_API_KEY_ID")
+        if key_id is not None:
+            # Environment managers can preserve a terminal newline from copy/paste.
+            key_id = key_id.strip() or None
         if not key_id and kalshi_key_id_present():
             try:
                 key_id = load_kalshi_key_id_in_api_boundary()

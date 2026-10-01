@@ -53,6 +53,10 @@ class KalshiSigner:
         private_key_pem: bytes | None = None,
         private_key_pem_b64: str | None = None,
     ) -> None:
+        if not key_id or not key_id.isascii() or any(
+            ord(char) < 0x21 or ord(char) > 0x7E for char in key_id
+        ):
+            raise KalshiCredentialError("api_key_id_invalid_header_value")
         if private_key_pem is None and private_key_pem_b64 is None and private_key_path is None:
             raise KalshiCredentialError("private_key_unavailable")
         self.key_id = key_id

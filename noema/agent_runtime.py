@@ -91,6 +91,7 @@ async def _kalshi_state() -> AgentConnectionState:
         telemetry = KalshiTelemetry(config)
     except KalshiCredentialError as exc:
         detail_by_code = {
+            "api_key_id_invalid_header_value": "API key ID has invalid request-header formatting",
             "private_key_unavailable": "private key unavailable",
             "private_key_source_unavailable": "private key source unreadable",
             "private_key_malformed": "private key malformed or incompatible",
@@ -130,6 +131,10 @@ async def _kalshi_state() -> AgentConnectionState:
             result, detail = "api_rejection", f"Kalshi API rejected account request (HTTP {code})"
         _log("agent_kalshi_account_check", result=result, http_status=code)
         return AgentConnectionState("degraded", detail)
+    except httpx.LocalProtocolError as exc:
+        error_class = type(exc).__name__
+        _log("agent_kalshi_account_check", result="request_protocol_failure", error_class=error_class)
+        return AgentConnectionState("degraded", "Kalshi request could not be formed safely")
     except httpx.RequestError as exc:
         # URLs, request headers, and exception strings are intentionally omitted.
         error_class = type(exc).__name__
