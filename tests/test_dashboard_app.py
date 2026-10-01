@@ -7,7 +7,20 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from noema.dashboard_app import _capital_sample_sleep_seconds, _runtime_change_stream, app
+from noema.dashboard_app import (
+    _capital_history_sampler_enabled,
+    _capital_sample_sleep_seconds,
+    _runtime_change_stream,
+    app,
+)
+
+
+def test_capital_history_sampler_configuration_defaults_enabled_and_can_be_disabled(monkeypatch):
+    monkeypatch.delenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", raising=False)
+    assert _capital_history_sampler_enabled() is True
+    for value in ("0", "false", "no"):
+        monkeypatch.setenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", value)
+        assert _capital_history_sampler_enabled() is False
 
 
 def test_capital_sampler_targets_start_to_start_interval() -> None:
@@ -65,6 +78,35 @@ def test_capital_sampler_forces_live_reads_and_writes_console_history(monkeypatc
     assert persisted[0:2] == ("persist", str(state_path))
     assert persisted[4] == "24H"
     assert persisted[3]["observed_at"] == "wallet-observed-at"
+
+
+def test_capital_sampler_logs_only_safe_stage_and_error_class(monkeypatch, tmp_path, caplog):
+    from noema import dashboard_app
+
+    database = tmp_path / "worker.db"
+    database.touch()
+    monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(database))
+    monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(tmp_path / "state.db"))
+
+    async def fail_reads(*, force=False):
+        raise RuntimeError("sensitive account body and credential placeholder")
+
+    async def cancel_after_failure(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(dashboard_app, "wallet_status", fail_reads)
+    monkeypatch.setattr(dashboard_app, "prediction_venues", fail_reads)
+    monkeypatch.setattr(dashboard_app.asyncio, "sleep", cancel_after_failure)
+    try:
+        asyncio.run(dashboard_app._sample_capital_history())
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("sampler should retry after the isolated source-read failure")
+
+    assert "stage=authenticated_source_reads error_type=RuntimeError" in caplog.text
+    assert "sensitive account body" not in caplog.text
+    assert "credential placeholder" not in caplog.text
 
 
 def test_dashboard_root_renders_console() -> None:

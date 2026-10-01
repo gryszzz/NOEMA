@@ -9,7 +9,7 @@ production-proven autonomous trading system.
 
 | Layer | Existing implementation | Important boundary |
 | --- | --- | --- |
-| Prediction-market collection | Kalshi and Polymarket US market/account adapters, activity persistence, sampler, SSE console | Render Kalshi private reads succeeded repeatedly; Polymarket public market collection is separate evidence from authenticated account/stream health |
+| Prediction-market collection | Kalshi and Polymarket US market/account adapters, activity persistence, console sampler, private account stream, SSE console | Render Kalshi private reads succeeded repeatedly; Polymarket public market collection is separate evidence from authenticated account/stream health |
 | Forecast and evidence | immutable forecast ledger, market baselines, Brier/log-loss/calibration, truth and market-data qualification | strategy outcomes and venue account economics are separate evidence streams |
 | Specialist research | specialist registry/evolution, research queue, Trench-1, EVM public wallet observation, cross-venue experiments | specialist activation is research scheduling, not financial authority |
 | Economic accounting | venue fills/orders/positions/settlements, account history, balance history, economic ledger and paper execution | deposits/transfers are not profit; missing fees, marks or cost basis stay unknown |
@@ -26,34 +26,38 @@ production-proven autonomous trading system.
    proves account-read access, not order placement; keep execution disabled.
 2. Diagnose and restore worker-to-console snapshot replication. Verify its next
    persisted cycle and confirm the console replica advances with the worker.
-3. Deploy safe Polymarket account/stream diagnostics, then verify the account
+3. Deploy the sampler lifecycle diagnostics. The current console starts account
+   sampling and the private stream in background tasks; hosted logs have not yet
+   shown sampler cycles, so record startup state, source-read stage and safe error
+   class before claiming that work is running.
+4. Deploy safe Polymarket account/stream diagnostics, then verify the account
    endpoint and private stream separately. Record
    authenticated balance/position/activity coverage, append/update counts, and
    stream connect/message/persist times without logging account values, response
    bodies or secrets. Safe private request diagnostics distinguish stage, failure
    category, error class and HTTP status.
-4. Connect normalized quote observations to a bounded research scheduler and
+5. Connect normalized quote observations to a bounded research scheduler and
    persistent evidence record. Keep request identity, quote freshness, route,
    fees, liquidity and provider failures explicit. Quote polling needs provider
    cadence and budget limits.
-5. Implement token identity/decimal registry and independent source checks.
+6. Implement token identity/decimal registry and independent source checks.
    Reject unknown token metadata rather than using guessed decimals or ticker
    symbols.
-6. Build paper fills from forward quote snapshots with measured quote-to-decision
+7. Build paper fills from forward quote snapshots with measured quote-to-decision
    and decision-to-observation latency. Account for fees in their native asset;
    do not convert to USD without a timestamped price source.
-7. Add testnet/dev adapter simulation and receipt lifecycle for swaps. Record
+8. Add testnet/dev adapter simulation and receipt lifecycle for swaps. Record
    submitted, pending, confirmed, failed, partial, replaced and reverted states;
    reconcile chain token deltas and native fees before computing realized P&L.
-8. Provision a separate bounded agent wallet through an isolated programmable
+9. Provision a separate bounded agent wallet through an isolated programmable
    signer only after provider threat-model, chain policy, address verification,
    owner recovery, audit, and remote key custody are established. The cognition
    runtime should receive intent/receipt schemas only.
-9. Persist strategy promotion evidence as versioned, immutable criteria/results
+10. Persist strategy promotion evidence as versioned, immutable criteria/results
    spanning forward expectancy, uncertainty, drawdown, fees, slippage, latency,
    capacity, and operating cost. Promotion must remain distinct from explicit
    wallet/venue authority.
-10. Surface human treasury and agent wallet as distinct entities in the console;
+11. Surface human treasury and agent wallet as distinct entities in the console;
    expose balances, exposure, P&L, fees, source freshness and evidence coverage
    only when supported by account/chain records. Keep unpriced or stale values
    visible as such.

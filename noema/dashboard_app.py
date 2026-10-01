@@ -54,6 +54,7 @@ from .research_state import research_trial_update_is_newer
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
+from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 
 app = FastAPI(title="NOEMA Ops Console", docs_url=None, redoc_url=None)
@@ -429,6 +430,12 @@ def _capital_sample_interval() -> int:
         return 15
 
 
+def _capital_history_sampler_enabled() -> bool:
+    return os.getenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "1").strip().lower() not in {
+        "0", "false", "no",
+    }
+
+
 def _capital_sample_sleep_seconds(interval: int, cycle_started: float,
                                  now: float | None = None) -> float:
     """Keep the sampler start-to-start cadence bounded by its target interval."""
@@ -440,14 +447,18 @@ async def _sample_capital_history() -> None:
     """Persist observed account marks on a bounded cadence, independent of page clients."""
     while True:
         cycle_started = time.monotonic()
+        stage = "worker_database_check"
         if not Path(_db_path()).is_file():
+            _log.warning("Capital history sampler status=waiting_for_worker_snapshot")
             await asyncio.sleep(_capital_sample_sleep_seconds(
                 _capital_sample_interval(), cycle_started,
             ))
             continue
+        _log.info("Capital history sampler cycle started")
         try:
             # Bypass request caches: this sampler owns the collection cadence,
             # so each runtime cycle must perform a new authenticated read.
+            stage = "authenticated_source_reads"
             wallets, venues = await asyncio.gather(wallet_status(force=True), prediction_venues(force=True))
             for venue in venues.get("venues", []):
                 if not isinstance(venue, dict):
@@ -480,14 +491,22 @@ async def _sample_capital_history() -> None:
                         stream.get("last_message_at"),
                         stream.get("last_persisted_at"),
                     )
+            stage = "persist_balance_history"
             stripe = await asyncio.to_thread(stripe_economy_overview, _db_path())
             await asyncio.to_thread(
                 balance_history, _console_state_db_path(), venues,
                 {"networks": wallets.get("networks", []), "observed_at": wallets.get("observed_at")},
                 window="24H", stripe=stripe,
             )
-        except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error, TimeoutError):
-            _log.warning("Capital history sampler could not complete an observation")
+            _log.info(
+                "Capital history sampler cycle completed venues=%d wallet_networks=%d",
+                len(venues.get("venues", [])), len(wallets.get("networks", [])),
+            )
+        except Exception as exc:  # noqa: BLE001 - persist safe stage/type and keep sampler retrying.
+            _log.warning(
+                "Capital history sampler failed stage=%s error_type=%s",
+                stage, type(exc).__name__,
+            )
         await asyncio.sleep(_capital_sample_sleep_seconds(
             _capital_sample_interval(), cycle_started,
         ))
@@ -500,8 +519,18 @@ async def start_capital_sampler() -> None:
     # version before enabling the sidecar writers. SQLite uniqueness makes
     # concurrent web-process startup migrations idempotent.
     _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
-    if os.getenv("NOEMA_CAPITAL_HISTORY_SAMPLER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+    sampler_enabled = _capital_history_sampler_enabled()
+    key_id_present, secret_present = polymarket_us_credentials_present()
+    _log.info(
+        "Capital observation startup sampler_enabled=%s sample_interval_seconds=%s "
+        "worker_database_present=%s polymarket_key_id_present=%s polymarket_secret_present=%s",
+        sampler_enabled, _capital_sample_interval(), Path(_db_path()).is_file(),
+        key_id_present, secret_present,
+    )
+    if sampler_enabled:
         _capital_sampler_task = asyncio.create_task(_sample_capital_history(), name="noema-capital-history")
+    else:
+        _log.warning("Capital history sampler is disabled by configuration")
     _polymarket_stream_task = asyncio.create_task(
         run_polymarket_account_stream(_console_state_db_path, apply_polymarket_stream_projection),
         name="noema-polymarket-account-stream",
