@@ -585,6 +585,59 @@ def test_worker_snapshot_logs_only_safe_storage_errno(monkeypatch, tmp_path, cap
     assert "snapshot-test-token" not in caplog.text
 
 
+def test_worker_snapshot_rejects_invalid_gzip_without_creating_replica(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "console-replica.db"))
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+    response = TestClient(app).post(
+        "/internal/snapshot", content=b"not-gzip",
+        headers={"Authorization": "Bearer snapshot-test-token"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid snapshot encoding"
+    assert not (tmp_path / "console-replica.db").exists()
+
+
+def test_snapshot_stream_enforces_compressed_and_expanded_size_limits(monkeypatch, tmp_path) -> None:
+    from fastapi import HTTPException
+
+    from noema.dashboard_app import _decompress_snapshot_to_file
+
+    class ChunkedRequest:
+        def __init__(self, chunks):
+            self.chunks = chunks
+            self.headers = {}
+
+        async def stream(self):
+            for chunk in self.chunks:
+                yield chunk
+
+    async def run():
+        monkeypatch.setattr("noema.dashboard_app._MAX_SNAPSHOT_BYTES", 8)
+        try:
+            await _decompress_snapshot_to_file(ChunkedRequest([b"1234", b"56789"]), tmp_path)
+        except HTTPException as exc:
+            assert exc.status_code == 413
+        else:
+            raise AssertionError("oversized compressed stream was accepted")
+
+        monkeypatch.setattr("noema.dashboard_app._MAX_SNAPSHOT_BYTES", 1024)
+        monkeypatch.setattr("noema.dashboard_app._MAX_DATABASE_BYTES", 12)
+        monkeypatch.setattr("noema.dashboard_app._SNAPSHOT_IO_CHUNK_BYTES", 4)
+        expanded = gzip.compress(b"x" * 100)
+        try:
+            await _decompress_snapshot_to_file(
+                ChunkedRequest([expanded[:5], expanded[5:]]), tmp_path,
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 413
+            assert exc.detail == "database snapshot is too large"
+        else:
+            raise AssertionError("oversized expanded database was accepted")
+
+    asyncio.run(run())
+    assert not list(tmp_path.glob("tmp*"))
+
+
 def test_snapshot_persistence_failure_logs_only_safe_stage_and_type(
     monkeypatch, tmp_path, caplog,
 ) -> None:

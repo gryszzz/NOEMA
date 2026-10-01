@@ -6,8 +6,11 @@ import gzip
 import json
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -17,17 +20,48 @@ _ADDRESS_PATTERN = re.compile(r"^[a-zA-Z0-9.-]+:[0-9]{1,5}$")
 _COMMIT_PATTERN = re.compile(r"^(?:[a-fA-F0-9]{7,64}|unknown)$")
 
 
-def _snapshot_image(db_path: str) -> bytes:
+@contextmanager
+def _snapshot_file(db_path: str) -> Iterator[Path]:
+    """Create a compressed SQLite backup on disk without whole-file byte copies."""
     source_path = Path(db_path).resolve()
     if not source_path.is_file():
         raise FileNotFoundError("worker database is not initialized")
-    with tempfile.NamedTemporaryFile(suffix=".sqlite3") as snapshot:
+    snapshot_path: Path | None = None
+    compressed_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as snapshot:
+            snapshot_path = Path(snapshot.name)
         with sqlite3.connect(source_path.as_uri() + "?mode=ro", uri=True, timeout=5) as source:
             source.execute("PRAGMA query_only=ON")
-            with sqlite3.connect(snapshot.name) as target:
+            with sqlite3.connect(snapshot_path) as target:
                 source.backup(target)
-        snapshot.flush()
-        return gzip.compress(Path(snapshot.name).read_bytes(), compresslevel=6)
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3.gz", delete=False) as compressed:
+            compressed_path = Path(compressed.name)
+        with snapshot_path.open("rb") as source, gzip.open(
+            compressed_path, "wb", compresslevel=6,
+        ) as target:
+            shutil.copyfileobj(source, target, length=1024 * 1024)
+        yield compressed_path
+    finally:
+        for path in (snapshot_path, compressed_path):
+            if path is not None:
+                path.unlink(missing_ok=True)
+
+
+def _snapshot_image(db_path: str) -> bytes:
+    """Compatibility helper for bounded tests; production upload streams the file."""
+    with _snapshot_file(db_path) as path:
+        return path.read_bytes()
+
+
+async def _file_chunks(path: Path) -> AsyncIterator[bytes]:
+    """Yield a snapshot file in bounded chunks for httpx.AsyncClient."""
+    with path.open("rb") as source:
+        while True:
+            chunk = await asyncio.to_thread(source.read, 1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
 
 
 def _worker_metadata_header() -> str:
@@ -167,26 +201,31 @@ async def publish_console_snapshot(db_path: str) -> dict[str, Any]:
         return {"status": "disabled"}
     if not address or not token or not _ADDRESS_PATTERN.fullmatch(address):
         return {"status": "misconfigured", "failure_stage": "configuration"}
+    snapshot_context = _snapshot_file(db_path)
     try:
-        payload = await asyncio.to_thread(_snapshot_image, db_path)
+        payload_path = await asyncio.to_thread(snapshot_context.__enter__)
     except Exception as exc:  # noqa: BLE001 - isolate snapshot failures; log only safe classification.
         return _snapshot_publish_failure("snapshot_backup", exc)
     try:
-        metadata_header = _worker_metadata_header()
-    except Exception as exc:  # noqa: BLE001 - metadata errors must not abort the worker cycle.
-        return _snapshot_publish_failure("worker_metadata", exc)
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
-            response = await client.post(
-                f"http://{address}/internal/snapshot",
-                content=payload,
+        try:
+            metadata_header = _worker_metadata_header()
+        except Exception as exc:  # noqa: BLE001 - metadata errors must not abort the worker cycle.
+            return _snapshot_publish_failure("worker_metadata", exc)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as client, \
+                    client.stream(
+                "POST", f"http://{address}/internal/snapshot",
+                content=_file_chunks(payload_path),
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/gzip",
+                    "Content-Length": str(payload_path.stat().st_size),
                     "X-NOEMA-Worker-Metadata": metadata_header,
                 },
-            )
-        response.raise_for_status()
-        return {"status": "persisted"}
-    except Exception as exc:  # noqa: BLE001 - provider client errors are reduced to safe fields.
-        return _snapshot_publish_failure("private_console_post", exc)
+            ) as response:
+                response.raise_for_status()
+            return {"status": "persisted"}
+        except Exception as exc:  # noqa: BLE001 - provider client errors are reduced to safe fields.
+            return _snapshot_publish_failure("private_console_post", exc)
+    finally:
+        await asyncio.to_thread(snapshot_context.__exit__, None, None, None)
