@@ -36,6 +36,11 @@ from .ecosystem_evolution import evolve_default_specialists
 from .history_forecaster import MODEL_VERSION, record_history_candidate
 from .kalshi_telemetry import KalshiTelemetry
 from .ledger import ForecastLedger
+from .market_discovery import (
+    MarketDiscoveryConfig,
+    MarketDiscoveryError,
+    collect_and_persist_market_discovery,
+)
 from .opportunity_radar import build_radar
 from .outcomes import OutcomeStore
 from .paper_research import PaperResearchStore, collect_paper_quote
@@ -392,6 +397,54 @@ async def _trench_sampler_loop(
                  **sqlite_error_fields(exc))
         elapsed = asyncio.get_running_loop().time() - started
         await asyncio.sleep(max(0.0, interval - elapsed))
+
+
+async def _market_discovery_sampler_loop(
+    db_path: str,
+    config: MarketDiscoveryConfig,
+    on_change: Callable[[], None] | None = None,
+) -> None:
+    """Collect a small read-only DEX discovery batch on a bounded cadence."""
+    config.validate()
+    while True:
+        started = asyncio.get_running_loop().time()
+        try:
+            result = await collect_and_persist_market_discovery(
+                db_path,
+                token_limit=config.token_limit,
+                pair_limit_per_token=config.pair_limit_per_token,
+            )
+            if result.get("observations_persisted", 0) and on_change is not None:
+                on_change()
+            _log(
+                "market_pair_discovery",
+                status=result.get("status", "unavailable"),
+                profiles_seen=result.get("profiles_seen", 0),
+                tokens_queried=result.get("tokens_queried", 0),
+                pairs_observed=result.get("pairs_observed", 0),
+                pairs_rejected=result.get("pairs_rejected", 0),
+                observations_persisted=result.get("observations_persisted", 0),
+                duplicates=result.get("duplicates", 0),
+                failed_requests=result.get("failed_requests", 0),
+            )
+        except asyncio.CancelledError:
+            raise
+        except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
+                KeyError, TypeError) as exc:
+            diagnostics: dict[str, object] = {"error": type(exc).__name__}
+            if isinstance(exc, MarketDiscoveryError):
+                diagnostics.update(
+                    operation=exc.operation,
+                    failure_class=exc.error_class,
+                    http_status=exc.http_status,
+                )
+            _log(
+                "market_pair_discovery_error",
+                **diagnostics,
+                **sqlite_error_fields(exc),
+            )
+        elapsed = asyncio.get_running_loop().time() - started
+        await asyncio.sleep(max(0.0, config.interval_seconds - elapsed))
 
 
 def _cycle_health(
@@ -910,6 +963,7 @@ async def run_agent(
     heartbeat_thread.start()
 
     trench_sampler: asyncio.Task[None] | None = None
+    market_discovery_sampler: asyncio.Task[None] | None = None
     polymarket_stream: asyncio.Task[None] | None = None
     polymarket_rest_sampler: asyncio.Task[None] | None = None
     changed_records = asyncio.Event()
@@ -938,6 +992,24 @@ async def run_agent(
         )
     else:
         _log("trench_forward_sampler_started", enabled=False, reason="collector_disabled")
+    market_discovery_config = MarketDiscoveryConfig.from_env()
+    if market_discovery_config.enabled:
+        market_discovery_sampler = asyncio.create_task(
+            _market_discovery_sampler_loop(
+                config.db_path, market_discovery_config, request_snapshot_after_change,
+            ),
+            name="noema-market-pair-discovery",
+        )
+        _log(
+            "market_pair_discovery_started",
+            enabled=True,
+            interval_seconds=market_discovery_config.interval_seconds,
+            token_limit=market_discovery_config.token_limit,
+            pair_limit_per_token=market_discovery_config.pair_limit_per_token,
+            execution_authority="disabled",
+        )
+    else:
+        _log("market_pair_discovery_started", enabled=False, reason="collector_disabled")
     if os.getenv("NOEMA_POLYMARKET_US_ENABLED", "1").strip() == "1":
         polymarket_stream = asyncio.create_task(
             run_polymarket_account_stream(
@@ -1009,7 +1081,8 @@ async def run_agent(
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
         for task in (
-            trench_sampler, polymarket_stream, polymarket_rest_sampler, changed_snapshot_task,
+            trench_sampler, market_discovery_sampler, polymarket_stream,
+            polymarket_rest_sampler, changed_snapshot_task,
         ):
             if task is None:
                 continue

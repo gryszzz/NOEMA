@@ -21,43 +21,50 @@ production-proven autonomous trading system.
 
 ## Near-term implementation sequence
 
-1. Render Kalshi cycles repeatedly report authenticated read-only access
+1. Diagnose console disk capacity. The latest hosted failure is explicit
+   `ENOSPC` while writing the incoming database image on the 10 GB persistent
+   disk. Measure free space and the replica/sidecar sizes before considering
+   storage expansion or any cleanup; preserve all persisted history.
+2. Restore worker-to-console snapshot replication after the disk diagnosis.
+   Confirm a persisted snapshot and that console snapshot time advances; `/healthz`
+   alone does not prove replica freshness.
+3. Render Kalshi cycles repeatedly report authenticated read-only access
    (`orders=1`, `fills=1`, `positions=0`) after request-header sanitation. This
    proves account-read access, not order placement; keep execution disabled.
-2. Diagnose and restore worker-to-console snapshot replication. Verify its next
-   persisted cycle and confirm the console replica advances with the worker.
-3. Deploy the sampler lifecycle diagnostics. The current console starts account
-   sampling and the private stream in background tasks; hosted logs have not yet
-   shown sampler cycles, so record startup state, source-read stage and safe error
-   class before claiming that work is running.
-4. Deploy safe Polymarket account/stream diagnostics, then verify the account
-   endpoint and private stream separately. Record
-   authenticated balance/position/activity coverage, append/update counts, and
-   stream connect/message/persist times without logging account values, response
-   bodies or secrets. Safe private request diagnostics distinguish stage, failure
-   category, error class and HTTP status.
-5. Connect normalized quote observations to a bounded research scheduler and
+4. Continue Polymarket account/stream verification. A post-deploy sample at
+   00:58:43 UTC reported authenticated read-only status, connected private stream,
+   and one record persisted. Verify sustained cadence and account-history coverage,
+   including append/update counts and stream connect/message/persist times, without
+   logging account values, response bodies or secrets.
+5. After console storage recovers, enable the new bounded pair-discovery sampler.
+   It uses DEX Screener's documented latest-token-profile and token-pair read
+   endpoints, caps each run at eight tokens and five pairs per token, and leaves
+   each result as an unreviewed provider observation. The API reference lists
+   limits of 60 requests/minute for latest profiles and 300 requests/minute for
+   token-pair lookup; NOEMA's proposed cadence is one profile read plus at most
+   eight lookups every 15 minutes. See the [official API reference](https://docs.dexscreener.com/api/reference).
+6. Connect normalized quote observations to a bounded research scheduler and
    persistent evidence record. Keep request identity, quote freshness, route,
    fees, liquidity and provider failures explicit. Quote polling needs provider
    cadence and budget limits.
-6. Implement token identity/decimal registry and independent source checks.
+7. Implement token identity/decimal registry and independent source checks.
    Reject unknown token metadata rather than using guessed decimals or ticker
    symbols.
-7. Build paper fills from forward quote snapshots with measured quote-to-decision
+8. Build paper fills from forward quote snapshots with measured quote-to-decision
    and decision-to-observation latency. Account for fees in their native asset;
    do not convert to USD without a timestamped price source.
-8. Add testnet/dev adapter simulation and receipt lifecycle for swaps. Record
+9. Add testnet/dev adapter simulation and receipt lifecycle for swaps. Record
    submitted, pending, confirmed, failed, partial, replaced and reverted states;
    reconcile chain token deltas and native fees before computing realized P&L.
-9. Provision a separate bounded agent wallet through an isolated programmable
+10. Provision a separate bounded agent wallet through an isolated programmable
    signer only after provider threat-model, chain policy, address verification,
    owner recovery, audit, and remote key custody are established. The cognition
    runtime should receive intent/receipt schemas only.
-10. Persist strategy promotion evidence as versioned, immutable criteria/results
+11. Persist strategy promotion evidence as versioned, immutable criteria/results
    spanning forward expectancy, uncertainty, drawdown, fees, slippage, latency,
    capacity, and operating cost. Promotion must remain distinct from explicit
    wallet/venue authority.
-11. Surface human treasury and agent wallet as distinct entities in the console;
+12. Surface human treasury and agent wallet as distinct entities in the console;
    expose balances, exposure, P&L, fees, source freshness and evidence coverage
    only when supported by account/chain records. Keep unpriced or stale values
    visible as such.

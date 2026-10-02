@@ -807,6 +807,10 @@ def test_worker_snapshot_logs_only_safe_storage_errno(monkeypatch, tmp_path, cap
 
     assert response.status_code == 500
     assert "stage=write_snapshot exception_type=OSError errno=28 errno_name=ENOSPC" in caplog.text
+    assert "disk_total_bytes=" in caplog.text
+    assert "disk_free_bytes=" in caplog.text
+    assert "replica_bytes=" in caplog.text
+    assert "console_state_bytes=" in caplog.text
     assert "private secret path" not in caplog.text
     assert "snapshot-test-token" not in caplog.text
 
