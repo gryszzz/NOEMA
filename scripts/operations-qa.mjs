@@ -50,7 +50,11 @@ try {
   const page = await browser.newPage({viewport:{width,height:1000}, reducedMotion:'reduce'}), errors=[], failedRequests=[], externalRequests=[], consoleErrors=[], failedResponses=[];
   page.on('pageerror',e=>errors.push(e.message));
   page.on('console', message=>{if(message.type()==='error')consoleErrors.push(message.text());});
-  page.on('requestfailed', request=>failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
+  page.on('requestfailed', request=>{
+   const failure=request.failure()?.errorText;
+   // Closing the viewport cancels optional polling requests that are still in flight.
+   if(failure!=='net::ERR_ABORTED')failedRequests.push(`${request.method()} ${request.url()}: ${failure}`);
+  });
   page.on('request', request=>{if(new URL(request.url()).origin!==url)externalRequests.push(request.url());});
   page.on('response', response=>{if(response.status()>=400)failedResponses.push(`${response.status()} ${response.url()}`);});
   await page.goto(url); await page.getByRole('heading',{name:'NOEMA OPERATING WORLD'}).waitFor();
