@@ -12,6 +12,7 @@ from .cognition_models import CognitionPacket, CognitionResult
 from .cognition_request import PACKET_SCHEMA, build_cognition_request
 from .openai_config import OPENAI_RESPONSES_URL, OpenAIConfig
 from .openai_tracing import openai_trace
+from .openai_usage import record_openai_response_usage
 from .opportunity_radar import RadarRow
 
 
@@ -66,6 +67,8 @@ def _parse_packet(raw: object, row: RadarRow) -> CognitionPacket:
 class OpenAICognitionClient:
     def __init__(
         self, config: OpenAIConfig | None = None, client: httpx.AsyncClient | None = None,
+        *, usage_db_path: str | None = None, subsystem: str = "unspecified",
+        decision_id: str | None = None,
     ) -> None:
         self.config = config or OpenAIConfig.from_env()
         self.config.validate()
@@ -80,6 +83,9 @@ class OpenAICognitionClient:
             self._headers["OpenAI-Project"] = self.config.project_id
         self.last_trace_id: str | None = None
         self.last_trace_status: str = "not_started"
+        self.usage_db_path = usage_db_path
+        self.subsystem = subsystem
+        self.decision_id = decision_id
         # No retries: an uncertain failed request keeps its existing reservation.
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(self.config.request_timeout_seconds), follow_redirects=False,
@@ -125,21 +131,63 @@ class OpenAICognitionClient:
     async def structured_research(
         self, body: dict[str, Any], *, trace_metadata: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        metadata = trace_metadata or {}
+        subsystem = self.subsystem if self.subsystem != "unspecified" else (
+            metadata.get("specialist") or "unspecified"
+        )
+        decision_id = self.decision_id or metadata.get("decision_id")
+        _log_openai_call("openai_model_call_started", subsystem=subsystem,
+                         model=self.config.model, decision_id=decision_id)
         try:
             with openai_trace(
-                trace_metadata or {}, enabled=self.config.tracing_enabled,
+                metadata, enabled=self.config.tracing_enabled,
             ) as run:
-                response = await self.client.post(
-                    OPENAI_RESPONSES_URL,
-                    json=body,
-                    headers=self._headers,
-                )
+                try:
+                    response = await self.client.post(
+                        OPENAI_RESPONSES_URL,
+                        json=body,
+                        headers=self._headers,
+                    )
+                except httpx.HTTPError as exc:
+                    _log_openai_call(
+                        "openai_model_call_failed", subsystem=subsystem,
+                        model=self.config.model, decision_id=decision_id,
+                        failure_type=type(exc).__name__,
+                    )
+                    raise
         finally:
             self.last_trace_id = run.trace_id
             self.last_trace_status = run.status
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            _log_openai_call(
+                "openai_model_call_failed", subsystem=subsystem,
+                model=self.config.model, decision_id=decision_id,
+                http_status=response.status_code, failure_type=type(exc).__name__,
+            )
+            raise
         payload = response.json()
         if not isinstance(payload, dict):
             raise TypeError("invalid OpenAI response")
+        usage_status: dict[str, Any] = {"status": "not_persisted"}
+        if self.usage_db_path:
+            usage_status = record_openai_response_usage(
+                self.usage_db_path, payload, model=str(self.config.model),
+                subsystem=subsystem, decision_id=decision_id,
+                trace_id=self.last_trace_id, trace_status=self.last_trace_status,
+            )
+        _log_openai_call(
+            "openai_model_call_completed", subsystem=subsystem,
+            model=self.config.model, decision_id=decision_id,
+            http_status=response.status_code, trace_id=self.last_trace_id,
+            trace_status=self.last_trace_status,
+            **{key: value for key, value in usage_status.items() if key != "subsystem"},
+        )
         _completed_text(payload)
         return payload
+
+
+def _log_openai_call(event: str, **fields: Any) -> None:
+    """Log routing/cost metadata only; never include prompts, bodies, or headers."""
+    print(json.dumps({"event": event, **fields}, sort_keys=True, default=str))

@@ -610,7 +610,7 @@ async def _openai_triage(
                 estimated_tokens=estimate + config.max_output_tokens,
                 hourly_token_limit=policy.max_tokens_per_hour,
                 market_id="economic-research-session",
-                activity_id=session_id,
+                activity_id=decision_id,
                 provider="openai",
                 model=config.model,
             )
@@ -623,7 +623,10 @@ async def _openai_triage(
         return None
 
     store.event(session_id, "cognition", "started", "Budget-reserved hosted triage", tool="openai")
-    client = OpenAICognitionClient(config)
+    client = OpenAICognitionClient(
+        config, usage_db_path=store.path, subsystem="research_allocator",
+        decision_id=decision_id,
+    )
     try:
         payload = await client.structured_research(body, trace_metadata={
             "mission_id": "unassigned",
@@ -761,6 +764,9 @@ async def choose_research(
         )
     schema = _schema(trial_ids)
     preferred_provider = os.getenv("NOEMA_COGNITION_PROVIDER", "auto").strip().lower()
+    if not trial_ids:
+        # There is no decision to make; deterministic idle is cheaper than a call.
+        preferred_provider = "deterministic"
     # An explicit provider is authoritative for this cognition request. In
     # particular, selecting OpenAI must not silently route strategic work to a
     # ready Cloudflare account (or a local model). Automatic fallback remains
@@ -947,7 +953,7 @@ async def choose_research(
                 session_id,
             ),
         )
-    if model_cost is not None and provider in {"openai", "cloudflare"}:
+    if model_cost is not None and provider == "cloudflare":
         economics = EconomicLedger(store.path)
         try:
             usage_cost = Decimal(str(model_cost))

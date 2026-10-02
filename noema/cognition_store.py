@@ -274,6 +274,22 @@ class CognitionStore:
         now = now or datetime.now(UTC)
         return self.tokens_since(now - timedelta(hours=1))
 
+    def monthly_model_budget_remaining(
+        self, monthly_budget_usd: Decimal, *, now: datetime | None = None,
+    ) -> Decimal:
+        """Return remaining model budget after conservative monthly reservations."""
+        if not monthly_budget_usd.is_finite() or monthly_budget_usd < 0:
+            raise ValueError("monthly model budget must be finite and non-negative")
+        now = _utc_time(now)
+        start = now.strftime("%Y-%m-01")
+        end = _next_month(start)
+        rows = self.conn.execute(
+            "SELECT estimated_usd FROM cognition_budget_reservations "
+            "WHERE day_utc >= ? AND day_utc < ?", (start, end),
+        ).fetchall()
+        reserved = sum((Decimal(str(row[0])) for row in rows), Decimal(0))
+        return max(Decimal(0), monthly_budget_usd - reserved)
+
     def seconds_since_market_call(
         self,
         market_id: str,

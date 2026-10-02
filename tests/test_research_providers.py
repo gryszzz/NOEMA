@@ -311,6 +311,31 @@ async def test_explicit_openai_selection_does_not_route_to_local_or_cloudflare(
     assert row == ('openai', 'gpt-5.6-luna')
 
 
+@pytest.mark.asyncio
+async def test_openai_research_selector_skips_model_when_no_candidate_exists(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv('NOEMA_COGNITION_PROVIDER', 'openai')
+    monkeypatch.setenv('NOEMA_OPENAI_ENABLED', '1')
+    monkeypatch.setenv('NOEMA_COGNITION_ENABLED', '1')
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-only')
+    monkeypatch.setenv('NOEMA_OPENAI_MODEL', 'gpt-5.6-luna')
+
+    async def unexpected_call(*_args, **_kwargs):
+        pytest.fail('empty research queue must not call OpenAI')
+
+    monkeypatch.setattr('noema.research_session._openai_triage', unexpected_call)
+    store = SessionStore(str(tmp_path / 'empty-research.db'))
+    session_id = store.begin_worker('empty evidence queue')
+    selected = await choose_research(store, session_id, [], None)
+    assert selected == 'idle'
+    row = store.conn.execute(
+        'SELECT provider,objective FROM cognitive_sessions WHERE session_id=?',
+        (session_id,),
+    ).fetchone()
+    assert row == ('deterministic', 'idle')
+
+
 def test_local_provider_cannot_silently_send_evidence_to_external_host():
     with pytest.raises(ValueError,match='loopback'):
         LocalCognitionConfig(endpoint='https://example.com/v1').validate()

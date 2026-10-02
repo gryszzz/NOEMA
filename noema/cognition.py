@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import UTC, datetime
-from decimal import Decimal
 
 import httpx
 
@@ -19,7 +17,6 @@ from .cognition_config import (
 from .cognition_models import CognitionResult
 from .cognition_policy import CognitionPolicy, assess_cognition
 from .cognition_store import CognitionStore
-from .economic_ledger import EconomicEvent, EconomicLedger
 from .foundry_client import FoundryCognitionClient
 from .llm_evidence import context_for_row
 from .openai_client import OpenAICognitionClient
@@ -92,7 +89,10 @@ async def maybe_run_cognition(
         return CognitionResult("degraded", detail="bill budget unavailable")
     try:
         if isinstance(config, OpenAIConfig):
-            client = OpenAICognitionClient(config)
+            client = OpenAICognitionClient(
+                config, usage_db_path=db_path, subsystem="market_cognition",
+                decision_id=decision_id,
+            )
         elif isinstance(config, CloudflareConfig):
             client = CloudflareCognitionClient(config)
         else:
@@ -192,38 +192,6 @@ async def maybe_run_cognition(
         )
     except (ValueError, sqlite3.Error):
         return CognitionResult("degraded", detail="model usage or result persistence invalid")
-
-    if policy.input_usd_per_million is not None and policy.output_usd_per_million is not None:
-        usage_cost = Decimal(result.input_tokens) * Decimal(str(policy.input_usd_per_million))
-        usage_cost += Decimal(result.output_tokens) * Decimal(str(policy.output_usd_per_million))
-        usage_cost /= Decimal(1_000_000)
-        economics = EconomicLedger(db_path)
-        try:
-            economics.record_event(EconomicEvent(
-                provider=provider,
-                external_reference_id=(
-                    f"openai-response:{result.detail}" if provider == "openai" and result.detail
-                    else f"cognition-usage:{uuid.uuid4()}"
-                ),
-                event_type="model_usage_cost_estimate", occurred_at=datetime.now(UTC),
-                currency="USD", amount=usage_cost, amount_usd=usage_cost,
-                reconciliation_state="ESTIMATED", value_state="realized",
-                capital_class="cost", confidence_state="estimated",
-                completeness_state="incomplete", lane="cognition",
-                activity_id=result.decision_id,
-                evidence={"deployment": (config.model if isinstance(
-                    config, (OpenAIConfig, CloudflareConfig)) else str(config.deployment)),
-                          "market_id": target.market_id,
-                          "input_tokens": result.input_tokens,
-                          "output_tokens": result.output_tokens,
-                          "response_id": result.detail if provider == "openai" else None,
-                          "decision_id": result.decision_id,
-                          "trace_id": result.trace_id,
-                          "trace_status": result.trace_status,
-                          "price_source": "configured model rate; provider invoice not reconciled"},
-            ))
-        finally:
-            economics.conn.close()
 
     queue = ResearchQueueStore(db_path)
     for request in result.packet.requested_research:
