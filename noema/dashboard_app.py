@@ -71,8 +71,8 @@ _account_log = logging.getLogger("uvicorn.error")
 _account_log.setLevel(logging.INFO)
 
 
-_MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
-_MAX_DATABASE_BYTES = 512 * 1024 * 1024
+_MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024
+_MAX_DATABASE_BYTES = 1024 * 1024 * 1024
 _SNAPSHOT_IO_CHUNK_BYTES = 1024 * 1024
 
 
