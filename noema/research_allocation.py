@@ -81,9 +81,11 @@ def collection_quotas(
 ) -> CollectionQuotas:
     """Schedule discretionary work from each specialist's existing attention share.
 
-    A stable plan grants at most floor(cycles * limit * share) work cumulatively.
-    Fractions carry through the monotonic persisted cycle id, so an enrichment limit
-    of one can support occasional shadow research without rounding up every cycle.
+    A stable plan grants at most floor(cycles * limit * share) discretionary work
+    cumulatively. Fractions carry through the monotonic persisted cycle id, so an
+    enrichment limit of one can support occasional shadow research without rounding
+    up every cycle. A single bounded Kalshi event-membership probe is reserved for
+    an enabled, non-quarantined history specialist as observational data qualification.
     Unknown specialists, unavailable domains and idle capacity are never redistributed.
     Missing or invalid plans grant no discretionary work.
 
@@ -105,9 +107,21 @@ def collection_quotas(
     shares = validated_research_shares(plan)
     kalshi = shares.get("kalshi-history", 0.0)
     trench = shares.get("trench-1", 0.0)
+    # Keep the public evidence pipeline observable even when adaptive attention
+    # assigns no discretionary share. This single event-membership probe is
+    # read-only data qualification, not a forecast, cognition call, or trade.
+    # Quarantined/unknown specialists and zero configured limits still fail closed.
+    kalshi_history_enabled = any(
+        item.specialist == "kalshi-history"
+        and item.state is not SpecialistState.QUARANTINED
+        for item in plan.allocations
+    ) if plan is not None and "kalshi-history" in shares else False
+    kalshi_event_checks = _scheduled(kalshi_event_limit, kalshi, cycle_id)
+    if kalshi_history_enabled and kalshi_event_limit > 0:
+        kalshi_event_checks = max(1, kalshi_event_checks)
     return CollectionQuotas(
         kalshi_markets=_scheduled(kalshi_market_limit, kalshi, cycle_id),
-        kalshi_event_checks=_scheduled(kalshi_event_limit, kalshi, cycle_id),
+        kalshi_event_checks=kalshi_event_checks,
         trench_due=_scheduled(trench_due_limit, trench, cycle_id),
         trench_enrichment=_scheduled(trench_enrichment_limit, trench, cycle_id),
     )
