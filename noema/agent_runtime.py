@@ -68,7 +68,7 @@ from .sync import (
     sync_kalshi_outcomes,
     sync_polymarket_us_outcomes,
 )
-from .trench_collector import collect_trench_cycle
+from .trench_collector import TrenchCollectorStore, collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
 from .venues.kalshi import KalshiCredentialError, KalshiVenue
 from .venues.kalshi_history import KalshiHistory
@@ -280,76 +280,66 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
 async def _trench_state(
     db_path: str, *, quotas: CollectionQuotas | None = None,
 ) -> AgentConnectionState:
+    del quotas  # Collection policy belongs to the independent forward sampler.
     config = TrenchCollectorConfig.from_env()
     if not config.enabled:
         return AgentConnectionState("disabled", "Trench collector disabled")
-    solana_client: SolanaRpcResearchClient | None = None
+    store: TrenchCollectorStore | None = None
     try:
         config.validate()
-        solana_client = SolanaRpcResearchClient(
-            rpc_url=config.solana_rpc_url,
-            fallback_rpc_url=config.solana_rpc_fallback_url,
-        )
-        summary = await collect_trench_cycle(
-            db_path=db_path,
-            jupiter=JupiterTrenchResearchClient(api_key=config.jupiter_api_key),
-            solana=solana_client,
-            price_fallback=DexScreenerTrenchPriceClient(),
-            due_limit=config.due_limit,
-            enrichment_limit=(config.enrichment_limit if quotas is None
-                              else quotas.trench_enrichment),
-            request_pause_seconds=config.request_pause_seconds,
-            discover_new=quotas is None or quotas.trench_due > 0,
-        )
-        required_provider_failures = tuple(
-            failure for failure in summary.provider_failures
-            if not failure.startswith("solana_rpc:")
-        )
-        status = ("degraded" if summary.failed or summary.unavailable
-                  or required_provider_failures else "connected")
+        # The worker's forward sampler already owns collection on a bounded
+        # 10-second cadence. Running a second full collect_trench_cycle here
+        # delayed cognition after fresh market quotes were captured. Health is
+        # observational: read the sampler's durable provider/collection state.
+        store = TrenchCollectorStore(db_path)
+        providers = store.provider_states()
+        counts = store.counts()
+        core = ("jupiter_discovery", "jupiter_market", "jupiter_price",
+                "dexscreener_market")
+        known_core = [name for name in core if name in providers]
+        missing_core = [name for name in core if name not in providers]
+        core_degraded = [name for name in known_core
+                         if providers[name]["state"] != "healthy"]
+        optional_degraded = [name for name, value in sorted(providers.items())
+                             if name.startswith("solana_rpc:")
+                             and value["state"] != "healthy"]
+        core_healthy = not missing_core and not core_degraded
+        status = "connected" if core_healthy else "degraded"
+        details = []
+        for name, value in sorted(providers.items()):
+            detail = f"{name}={value['state']}"
+            if value.get("last_attempt_at"):
+                detail += f";last_attempt_at:{value['last_attempt_at']}"
+            if value.get("last_success_at"):
+                detail += f";last_success_at:{value['last_success_at']}"
+            if value.get("last_error_class"):
+                detail += f";last_error_class:{value['last_error_class']}"
+            if value.get("consecutive_failures"):
+                detail += f";consecutive_failures:{value['consecutive_failures']}"
+            details.append(detail)
         return AgentConnectionState(
             status,
             (
-                f"discovered={summary.discovered} due={summary.due} "
-                f"recorded={summary.recorded} unavailable={summary.unavailable} "
-                f"failed={summary.failed} assessments={summary.assessments_recorded} "
-                f"counterfactuals={summary.counterfactuals_recorded} "
-                f"cycle_provider_failures={','.join(summary.provider_failures) or 'none'} "
-                f"provider_health={','.join(summary.provider_health) or 'unknown'}"
+                f"forward_sampler=independent; launches={counts['launches']} "
+                f"observations={counts['observations']} attempts={counts['attempts']} "
+                f"core_providers={'healthy' if core_healthy else 'degraded'} "
+                f"core_missing={','.join(missing_core) or 'none'} "
+                f"core_failures={','.join(core_degraded) or 'none'} "
+                f"optional_rpc_failures={','.join(optional_degraded) or 'none'} "
+                f"provider_health={','.join(details) or 'not recorded yet'}"
             ),
         )
-    except httpx.HTTPStatusError as exc:
-        host = exc.request.url.host or "configured provider"
-        provider = "Jupiter" if host == "api.jup.ag" else "Solana RPC"
-        return AgentConnectionState(
-            "degraded",
-            f"{provider} returned HTTP {exc.response.status_code} during read-only collection",
-        )
-    except httpx.RequestError as exc:
-        host = exc.request.url.host or "configured provider"
-        provider = "Jupiter" if host == "api.jup.ag" else "Solana RPC"
-        return AgentConnectionState(
-            "degraded",
-            f"{provider} transport failure during read-only collection: {type(exc).__name__}",
-        )
-    except (
-        RuntimeError,
-        ValueError,
-        TypeError,
-        KeyError,
-        sqlite3.Error,
-        OSError,
-    ) as exc:
+    except (RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error, OSError) as exc:
         if isinstance(exc, sqlite3.Error):
-            _log("agent_trench_collection_error", error=type(exc).__name__,
+            _log("agent_trench_health_error", error=type(exc).__name__,
                  **sqlite_error_fields(exc))
         return AgentConnectionState(
             "degraded",
-            f"{type(exc).__name__}: Trench collection failed",
+            f"{type(exc).__name__}: persisted Trench health unavailable",
         )
     finally:
-        if solana_client is not None:
-            await solana_client.close()
+        if store is not None:
+            store.conn.close()
 
 
 async def _trench_sampler_loop(
