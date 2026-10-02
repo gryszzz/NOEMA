@@ -396,6 +396,76 @@ def test_overlapping_snapshots_install_in_request_order(monkeypatch, tmp_path) -
         assert conn.execute("SELECT value FROM marker").fetchone()[0] == "newer"
 
 
+def test_failed_newer_snapshot_metadata_does_not_supersede_older_install(
+    monkeypatch, tmp_path,
+) -> None:
+    from fastapi import HTTPException
+
+    from noema import dashboard_app
+
+    destination = tmp_path / "worker.db"
+    snapshots = {}
+    for name in ("older", "newer"):
+        snapshot_path = tmp_path / f"metadata-{name}.db"
+        with sqlite3.connect(snapshot_path) as conn:
+            conn.execute("CREATE TABLE marker(value TEXT)")
+            conn.execute("INSERT INTO marker VALUES (?)", (name,))
+        snapshots[name] = snapshot_path
+    monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(destination))
+    monkeypatch.setattr(
+        dashboard_app, "_console_state_db_path", lambda: str(tmp_path / "state.db"),
+    )
+
+    older_decompression_started = asyncio.Event()
+    release_older_decompression = asyncio.Event()
+
+    async def provide_snapshot(request, _directory):
+        if request.name == "older":
+            older_decompression_started.set()
+            await release_older_decompression.wait()
+        path = snapshots[request.name]
+        return str(path), path.stat().st_size
+
+    def fail_metadata_write(*_args):
+        raise OSError("metadata persistence failed")
+
+    monkeypatch.setattr(dashboard_app, "_decompress_snapshot_to_file", provide_snapshot)
+    monkeypatch.setattr(dashboard_app, "_merge_account_history_into_console_state", lambda *_: None)
+    monkeypatch.setattr(dashboard_app, "decode_worker_metadata", lambda _encoded: {
+        "worker_commit": "a" * 40,
+        "cognition": {
+            "provider": "openai", "deployment": "gpt-5.6-luna",
+            "enabled": True, "configured": True,
+        },
+    })
+    monkeypatch.setattr(dashboard_app, "persist_worker_metadata", fail_metadata_write)
+
+    class SnapshotRequest:
+        def __init__(self, name):
+            self.name = name
+            self.headers = (
+                {"x-noema-worker-metadata": "metadata"} if name == "newer" else {}
+            )
+
+    async def install_after_metadata_failure():
+        older = asyncio.create_task(receive_worker_snapshot(SnapshotRequest("older")))
+        await asyncio.wait_for(older_decompression_started.wait(), timeout=1)
+        newer = asyncio.create_task(receive_worker_snapshot(SnapshotRequest("newer")))
+        try:
+            await newer
+        except HTTPException as exc:
+            assert exc.status_code == 500
+        else:
+            raise AssertionError("metadata failure should reject the newer snapshot")
+        release_older_decompression.set()
+        return await older
+
+    result = asyncio.run(install_after_metadata_failure())
+    assert result["status"] == "persisted"
+    with sqlite3.connect(destination) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "older"
+
+
 def test_console_auth_covers_html_static_and_api(monkeypatch) -> None:
     monkeypatch.setenv("NOEMA_CONSOLE_USERNAME", "operator")
     monkeypatch.setenv("NOEMA_CONSOLE_PASSWORD", "local-only-test-value")

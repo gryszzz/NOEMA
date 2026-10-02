@@ -740,10 +740,10 @@ async def _receive_worker_snapshot(
             failure_stage = "replace_worker_replica"
             os.chmod(temporary_path, 0o444)
             os.replace(temporary_path, destination)
-            _snapshot_installed_sequence = request_sequence
             if worker_metadata is not None:
                 failure_stage = "persist_worker_metadata"
                 persist_worker_metadata(_db_path(), worker_metadata)
+            _snapshot_installed_sequence = request_sequence
     except HTTPException:
         raise
     except Exception as exc:
