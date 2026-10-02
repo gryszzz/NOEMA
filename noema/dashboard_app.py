@@ -26,6 +26,7 @@ from .agent_dashboard import build_agent_overview
 from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview, build_provider_health
 from .config import kalshi_production_read_only_config
+from .console_disk_inventory import build_console_disk_inventory
 from .console_replication import (
     decode_worker_metadata,
     load_worker_metadata,
@@ -434,6 +435,8 @@ async def protect_console(request: Request, call_next):
 
     username = os.getenv("NOEMA_CONSOLE_USERNAME", "")
     password = os.getenv("NOEMA_CONSOLE_PASSWORD", "")
+    if path == "/api/disk-inventory" and (not username or not password):
+        return JSONResponse({"detail": "console authentication is not configured"}, status_code=503)
     if os.getenv("NOEMA_CONSOLE_AUTH_REQUIRED") == "1" and (not username or not password):
         return JSONResponse({"detail": "console authentication is not configured"}, status_code=503)
     if username or password:
@@ -671,6 +674,16 @@ def runtime_info() -> dict[str, Any]:
         "worker": load_worker_metadata(_db_path()),
         "database_bytes": stat.st_size,
     }
+
+
+@app.get("/api/disk-inventory")
+def console_disk_inventory() -> dict[str, Any]:
+    """Owner-authenticated file metadata for the console volume; file contents are never read."""
+    try:
+        return build_console_disk_inventory()
+    except OSError as exc:
+        _log.warning("Console disk inventory unavailable error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="console disk inventory unavailable") from None
 
 
 @app.post("/internal/snapshot")
