@@ -175,7 +175,7 @@ services:
     disk:
       name: noema-console-replica
       mountPath: /opt/render/project/src/console-data
-      sizeGB: 1
+      sizeGB: 10
     envVars:
       - key: NOEMA_DB_PATH
         value: /opt/render/project/src/console-data/noema.db
