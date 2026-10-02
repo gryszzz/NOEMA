@@ -1176,8 +1176,15 @@ async def _collect_trench_cycle(
         counterfactuals_recorded=counterfactuals,
         provider_failures=tuple(provider_failures),
         provider_health=tuple(
-            f"{provider}={state['state']}"
+            value
             for provider, state in sorted(store.provider_states().items())
+            for value in (
+                f"{provider}={state['state']}",
+                (f"{provider}_details=last_attempt_at:{state['last_attempt_at']};"
+                 f"last_success_at:{state['last_success_at']};"
+                 f"last_error_class:{state['last_error_class']};"
+                 f"consecutive_failures:{state['consecutive_failures']}"),
+            )
         ),
     )
 

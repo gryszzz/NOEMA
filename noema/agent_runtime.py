@@ -24,8 +24,10 @@ from .baseline_recording import record_market_baseline
 from .bill_tracker import BillTracker
 from .chain_registry import load_evm_chains
 from .cognition import maybe_run_cognition
+from .cognition_diagnostic import run_owner_diagnostic
 from .cognition_models import CognitionResult
-from .cognition_policy import CognitionPolicy
+from .cognition_policy import CognitionPolicy, assess_cognition
+from .cognition_store import CognitionStore
 from .config import kalshi_production_read_only_config
 from .console_replication import publish_console_snapshot
 from .cross_venue_experiment import mature_paper_pairs
@@ -281,15 +283,17 @@ async def _trench_state(
     config = TrenchCollectorConfig.from_env()
     if not config.enabled:
         return AgentConnectionState("disabled", "Trench collector disabled")
+    solana_client: SolanaRpcResearchClient | None = None
     try:
         config.validate()
+        solana_client = SolanaRpcResearchClient(
+            rpc_url=config.solana_rpc_url,
+            fallback_rpc_url=config.solana_rpc_fallback_url,
+        )
         summary = await collect_trench_cycle(
             db_path=db_path,
             jupiter=JupiterTrenchResearchClient(api_key=config.jupiter_api_key),
-            solana=SolanaRpcResearchClient(
-                rpc_url=config.solana_rpc_url,
-                fallback_rpc_url=config.solana_rpc_fallback_url,
-            ),
+            solana=solana_client,
             price_fallback=DexScreenerTrenchPriceClient(),
             due_limit=config.due_limit,
             enrichment_limit=(config.enrichment_limit if quotas is None
@@ -343,6 +347,9 @@ async def _trench_state(
             "degraded",
             f"{type(exc).__name__}: Trench collection failed",
         )
+    finally:
+        if solana_client is not None:
+            await solana_client.close()
 
 
 async def _trench_sampler_loop(
@@ -391,15 +398,22 @@ async def _trench_sampler_loop(
                     failed=summary.failed,
                     assessments_recorded=summary.assessments_recorded,
                     counterfactuals_recorded=summary.counterfactuals_recorded,
+                    provider_failures=list(summary.provider_failures),
+                    provider_health=list(summary.provider_health),
                 )
         except asyncio.CancelledError:
+            await solana.close()
             raise
         except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
                 KeyError, TypeError) as exc:
             _log("trench_forward_sampler_error", error=type(exc).__name__,
                  **sqlite_error_fields(exc))
         elapsed = asyncio.get_running_loop().time() - started
-        await asyncio.sleep(max(0.0, interval - elapsed))
+        try:
+            await asyncio.sleep(max(0.0, interval - elapsed))
+        except asyncio.CancelledError:
+            await solana.close()
+            raise
 
 
 async def _market_discovery_sampler_loop(
@@ -448,6 +462,42 @@ async def _market_discovery_sampler_loop(
             )
         elapsed = asyncio.get_running_loop().time() - started
         await asyncio.sleep(max(0.0, config.interval_seconds - elapsed))
+
+
+def _log_cognition_gate_audit(rows, db_path: str) -> None:
+    """Expose the real blocker distribution without modifying automatic policy."""
+    policy = CognitionPolicy.from_env(
+        provider="openai", model=OpenAIConfig.from_env().model,
+    )
+    store = CognitionStore(db_path)
+    try:
+        reason_counts: dict[str, int] = {}
+        stale: list[dict[str, object]] = []
+        fresh_by_venue: dict[str, int] = {}
+        eligible_count = 0
+        for row in rows:
+            gate = assess_cognition(row, store, policy)
+            eligible_count += int(gate.eligible)
+            for reason in gate.reasons:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            if row.freshness_seconds <= policy.max_freshness_seconds:
+                fresh_by_venue[row.venue] = fresh_by_venue.get(row.venue, 0) + 1
+            else:
+                stale.append({
+                    "venue": row.venue, "market_id": row.market_id,
+                    "age_seconds": round(row.freshness_seconds, 2),
+                    "max_age_seconds": policy.max_freshness_seconds,
+                    "captured_at": row.captured_at,
+                })
+        _log("agent_cognition_gate_audit", row_count=len(rows),
+             eligible_count=eligible_count,
+             max_freshness_seconds=policy.max_freshness_seconds,
+             freshness_failing_rows=stale[:12], fresh_rows_by_venue=fresh_by_venue,
+             gate_reason_counts=reason_counts)
+    except (sqlite3.Error, ValueError, OSError, TypeError):
+        _log("agent_cognition_gate_audit", status="unavailable")
+    finally:
+        store.conn.close()
 
 
 def _cycle_health(
@@ -561,6 +611,7 @@ async def run_cycle(
     outcome_store = OutcomeStore(config.db_path)
     evidence_store = EvidenceStore(config.db_path)
     candidates_recorded = 0
+    candidate_rejections: dict[str, int] = {}
     observed_markets = []
 
     def record_forecasts(market):
@@ -619,6 +670,10 @@ async def run_cycle(
     groups: dict[str, list] = {}
     for market in observed_markets:
         groups.setdefault(market.market_id.rsplit("-", 1)[0], []).append(market)
+    if not groups:
+        candidate_rejections["no_valid_kalshi_markets_in_cycle"] = 1
+    if groups and quotas.kalshi_event_checks <= 0:
+        candidate_rejections["event_verification_quota_zero"] = 1
     if groups and quotas.kalshi_event_checks > 0:
         try:
             verifier = KalshiVenue(kalshi_production_read_only_config())
@@ -633,10 +688,16 @@ async def run_cycle(
                 checks_used = 0
                 for event_ticker, group in rotated:
                     if len(group) not in {1, 2}:
+                        candidate_rejections["unsupported_current_event_size"] = (
+                            candidate_rejections.get("unsupported_current_event_size", 0) + 1
+                        )
                         continue
                     if all(forecast_ledger.has_model_forecast(
                         m.venue, m.market_id, MODEL_VERSION
                     ) for m in group):
+                        candidate_rejections["history_forecast_already_exists"] = (
+                            candidate_rejections.get("history_forecast_already_exists", 0) + 1
+                        )
                         continue
                     series = event_ticker.split("-", 1)[0]
                     prior_events = outcome_store.conn.execute(
@@ -647,22 +708,32 @@ async def run_cycle(
                         (group[0].venue, series + "-%"),
                     ).fetchone()[0]
                     if prior_events < 30:
+                        reason = f"fewer_than_30_prior_resolved_events:{prior_events}"
+                        candidate_rejections[reason] = candidate_rejections.get(reason, 0) + 1
                         continue
                     if checks_used >= quotas.kalshi_event_checks:
+                        candidate_rejections["event_verification_quota_consumed"] = 1
                         break
                     checks_used += 1
                     try:
                         verified = await verifier.event_market_tickers(event_ticker)
                     except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+                        key = f"event_verification_failed:{type(exc).__name__}"
+                        candidate_rejections[key] = candidate_rejections.get(key, 0) + 1
                         _log("agent_event_check_error", error=type(exc).__name__)
                         continue
                     if verified != {m.market_id for m in group}:
+                        candidate_rejections["event_membership_mismatch"] = (
+                            candidate_rejections.get("event_membership_mismatch", 0) + 1
+                        )
                         continue
                     for market in group:
+                        history_rejections: list[str] = []
                         if record_history_candidate(
                             market, outcomes=outcome_store, evidence=evidence_store,
                             ledger=forecast_ledger, current_event_size=len(verified),
                             verified_market_ids=frozenset(verified),
+                            rejections=history_rejections,
                         ):
                             candidates_recorded += 1
                             if hasattr(verifier, "paper_book") and hasattr(
@@ -677,6 +748,11 @@ async def run_cycle(
                                 except (httpx.HTTPError, RuntimeError, ValueError,
                                         TypeError, KeyError) as exc:
                                     _log("agent_paper_quote_error", error=type(exc).__name__)
+                        else:
+                            for rejection in history_rejections:
+                                candidate_rejections[rejection] = (
+                                    candidate_rejections.get(rejection, 0) + 1
+                                )
             finally:
                 await verifier.close()
     finish_stage(stage_name)
@@ -699,6 +775,10 @@ async def run_cycle(
         _trench_state(config.db_path, quotas=quotas),
     )
     radar = build_radar(config.db_path, limit=config.max_radar_rows)
+    _log_cognition_gate_audit(radar, config.db_path)
+    _log("agent_history_candidate_audit", observed_markets=len(observed_markets),
+         event_groups=len(groups), event_quota=quotas.kalshi_event_checks,
+         candidates_recorded=candidates_recorded, rejections=candidate_rejections)
     economic = build_economic_overview(config.db_path)
     economic_initialized = economic.get("snapshot") is not None
     finish_stage(stage_name)
@@ -739,6 +819,27 @@ async def run_cycle(
         market_data_healthy=market_data.status == "connected",
         ecosystem_focus=ecosystem_focus,
     )
+
+    diagnostic_result = await run_owner_diagnostic(config.db_path)
+    if diagnostic_result is not None:
+        _log(
+            "owner_cognition_diagnostic",
+            status=diagnostic_result.get("status"),
+            persisted=diagnostic_result.get("persisted", False),
+            decision_id=diagnostic_result.get("decision_id"),
+            response_id_present=diagnostic_result.get("response_id_present", False),
+            input_tokens=diagnostic_result.get("input_tokens"),
+            output_tokens=diagnostic_result.get("output_tokens"),
+            estimated_cost_usd=diagnostic_result.get("estimated_cost_usd"),
+            model_budget_remaining_usd=diagnostic_result.get("model_budget_remaining_usd"),
+            evidence_count=diagnostic_result.get("evidence_count"),
+            context_sha256=diagnostic_result.get("context_sha256"),
+            context_summary=diagnostic_result.get("context_summary"),
+            result=diagnostic_result.get("result"),
+            reason=diagnostic_result.get("reason"),
+            failure_class=diagnostic_result.get("failure_class"),
+            execution_class="diagnostic/non-executable",
+        )
 
     if market_data.status == "connected":
         cognition_result = await maybe_run_cognition(
