@@ -48,7 +48,11 @@ def build_console_disk_inventory() -> dict[str, Any]:
 
     with os.scandir(_CONSOLE_VOLUME) as entries:
         for entry in entries:
-            metadata = entry.stat(follow_symlinks=False)
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                # Snapshot request temp files are removed as soon as installation ends.
+                continue
             mode = metadata.st_mode
             if stat.S_ISDIR(mode):
                 directories_not_scanned += 1
