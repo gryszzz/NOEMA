@@ -1,5 +1,42 @@
 # NOEMA economic-world runtime audit
 
+## Current readiness checkpoint (2026-10-02 16:16 UTC)
+
+This checkpoint supersedes the runtime claims in the historical sections below
+where they conflict. It uses Render service/deploy metadata and worker logs read
+at 16:09–16:16 UTC, plus the current repository state. No hosted state was
+modified during this audit.
+
+| Capability | Verified state | Readiness |
+| --- | --- | --- |
+| Source revision | `origin/main` is `55faea7` (PR #91). The hosted worker and console are still deployed at `aede839` (PR #90), so the bounded Kalshi history-validation repair on main is not yet running in production. | **Behind main** |
+| Worker persistence | Worker `srv-daulu4fpn0mc73871fr0` has a 1 GB persistent disk at `/opt/render/project/src/data`. Latest observed startup at 16:09:22 UTC fails in `AgentStore.write_status(starting)` with `sqlite3.OperationalError: database or disk is full`. No later worker cycle was present in the inspected logs. The connected Render interface does not expose disk file inventory or a remote shell, so safe cleanup cannot be performed from this task. | **Blocked; continuous operation unverified** |
+| Console persistence | Console `srv-daultd7pn0mc7386uqg0` has a 10 GB persistent disk at `/opt/render/project/src/console-data`. Service metadata shows the service deployed at `aede839`; disk utilization and current replica freshness were not exposed by the connected interface. | **Running revision; state freshness unverified** |
+| Authenticated venues | No post-startup account collection ran after the worker failed to initialize. Older successful Kalshi/Polymarket observations remain historical evidence only and cannot establish current authentication or account freshness. | **Not currently verifiable** |
+| Luna budget | The worker logged a valid hosted OpenAI configuration and retained persisted budget state at 16:09:22 UTC. The worker then failed before a normal cycle; no natural cognition eligibility or new model call was observed in this checkpoint. | **Budget configured; cognition idle/unverified** |
+| Cognition candidate gates | PR #92 adds bounded diagnostics for intentional score suppression, forecast-model mix, missing inputs, quote/evidence coverage, per-model edge components, arithmetic consistency, and stale rows by venue. It changes no thresholds or execution path. | **Diagnostic improvement in review** |
+| Research and shadow lifecycle | The repository contains prediction-market forecasting, persisted research trials, paper quotes/settlements, cross-venue experiments, walk-forward evaluation, Trench prospective labels, specialist allocation, and deterministic promotion checks. The current hosted worker failure prevents claiming these are running continuously together. | **Implemented pieces; hosted continuity unproven** |
+| Execution authority | This work changed no authority or signing settings. The gateway defaults closed and still requires explicit gateway/live-order configuration plus owner mission authority and adapter-specific prerequisites. The current controls are several independent gates, not a verified single owner arming workflow. No order, transfer, wallet signature, or trade was submitted. | **Remains fail-closed; arming workflow is a gap** |
+
+### Readiness gates
+
+- [x] Existing evidence and failed outcomes are retained; no history was pruned.
+- [x] Cognition blocker diagnostics are added without changing eligibility thresholds.
+- [x] Local targeted tests and production browser QA pass for the diagnostic branch.
+- [ ] Merge and deploy the reviewed diagnostics and current-main repairs.
+- [ ] Restore worker writes only after inspecting disk contents and selecting an owner-approved recovery (for example, a disk-capacity change or a reviewed retention/compaction plan). Do not delete evidence blindly.
+- [ ] Observe several uninterrupted worker cycles and verify source freshness, account history, snapshots, research maturation, and model-cost attribution from persisted records.
+- [ ] Build a readiness report from prospective, after-cost shadow evidence: independent matured samples, calibration, fees/slippage, drawdown, capacity, latency, provider reliability, execution reconciliation, and unresolved risks.
+- [ ] Define and verify one explicit owner-confirmed `RESEARCH / SHADOW → LIVE ARMED` transition that records the approval, scope, caps, venue allowlist, and effective time. The current environment flags and mission authority are fail-closed controls, but they are not yet a verified single arming workflow.
+- [ ] Only after that report and owner-confirmed transition may existing gateway gates be enabled through the secure configuration path. Funding alone does not arm execution; research or shadow status never grants permission.
+
+The current blocking action is disk-state inspection/recovery, not a lower
+cognition threshold or a new trading strategy. Increasing the worker disk is a
+paid infrastructure change and was not made automatically. The next safe
+operator step is to inspect its mounted data volume in Render and approve either
+capacity expansion or a specific evidence-preserving cleanup plan. Until that
+is done, do not treat old venue snapshots as live or claim continuous autonomy.
+
 ## Current runtime and architecture correction (2026-10-02 01:08 UTC)
 
 The historical runtime and architecture table below predates the SQLite/runtime
