@@ -708,7 +708,15 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         # console-owned sidecar. Live console writers target that same file,
         # which this atomic worker replacement never touches.
         failure_stage = "merge_console_state"
-        _merge_account_history_into_console_state(temporary_path, _console_state_db_path())
+        # This merge can wait for a concurrent account sampler/private-stream
+        # SQLite writer (busy_timeout is intentionally bounded but may be long).
+        # Keep that wait off the ASGI event loop so health, SSE, and other console
+        # requests remain responsive while SQLite serializes the writers.
+        await asyncio.to_thread(
+            _merge_account_history_into_console_state,
+            temporary_path,
+            _console_state_db_path(),
+        )
         # The replica is an immutable worker-provided snapshot. Console-owned
         # state is persisted in the sidecar, never in this replaceable file.
         failure_stage = "replace_worker_replica"
@@ -841,11 +849,15 @@ async def _runtime_change_stream(request: Request):
     def versions() -> tuple[tuple[int, int, int, int] | None, ...]:
         values = []
         for watched_path in paths:
-            try:
-                stat = watched_path.stat()
-                values.append((stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size))
-            except FileNotFoundError:
-                values.append(None)
+            # SQLite WAL commits may change only the -wal file until a
+            # checkpoint. Observe it alongside the main database so an SSE
+            # client is invalidated immediately after a sidecar commit.
+            for current_path in (watched_path, Path(f"{watched_path}-wal")):
+                try:
+                    stat = current_path.stat()
+                    values.append((stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size))
+                except FileNotFoundError:
+                    values.append(None)
         return tuple(values)
 
     try:

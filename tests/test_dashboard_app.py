@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 import stat
+import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from noema.dashboard_app import (
     _capital_sample_sleep_seconds,
     _runtime_change_stream,
     app,
+    receive_worker_snapshot,
 )
 
 
@@ -254,6 +256,87 @@ def test_runtime_stream_tracks_snapshot_replacement_and_console_state(monkeypatc
         assert conn.execute(
             "SELECT external_id FROM prediction_account_records WHERE record_type='fill'"
         ).fetchone()[0] == "stream-fill"
+
+
+def test_runtime_stream_detects_wal_only_console_commit(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "stream.db"
+    state_path = tmp_path / "state.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE marker(value TEXT)")
+    with sqlite3.connect(state_path) as conn:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() == "wal"
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute("CREATE TABLE marker(value TEXT)")
+    monkeypatch.setenv("NOEMA_DB_PATH", str(path))
+    monkeypatch.setenv("NOEMA_CONSOLE_STATE_DB_PATH", str(state_path))
+
+    class ConnectedRequest:
+        async def is_disconnected(self):
+            return False
+
+    async def observe_commit():
+        stream = _runtime_change_stream(ConnectedRequest())
+        ready = await anext(stream)
+        writer = sqlite3.connect(state_path)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        main_before = state_path.stat().st_mtime_ns
+        writer.execute("INSERT INTO marker VALUES ('committed in WAL')")
+        writer.commit()
+        wal_path = Path(f"{state_path}-wal")
+        assert wal_path.is_file()
+        assert state_path.stat().st_mtime_ns == main_before
+        changed = await anext(stream)
+        await stream.aclose()
+        writer.close()
+        return ready, changed
+
+    ready, changed = asyncio.run(observe_commit())
+    assert ready == "event: ready\ndata: {}\n\n"
+    assert changed == "event: change\ndata: {}\n\n"
+
+
+def test_snapshot_sidecar_merge_wait_does_not_block_event_loop(monkeypatch, tmp_path) -> None:
+    from noema import dashboard_app
+
+    destination = tmp_path / "worker.db"
+    snapshot = tmp_path / "incoming.db"
+    sidecar = tmp_path / "console-state.db"
+    with sqlite3.connect(snapshot) as conn:
+        conn.execute("CREATE TABLE marker(value TEXT)")
+        conn.execute("INSERT INTO marker VALUES ('worker snapshot')")
+    monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(destination))
+    monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(sidecar))
+
+    async def provide_snapshot(_request, _directory):
+        return str(snapshot), snapshot.stat().st_size
+
+    merge_started = threading.Event()
+    release_merge = threading.Event()
+
+    def delayed_merge(_source, _state):
+        merge_started.set()
+        assert release_merge.wait(timeout=5)
+
+    monkeypatch.setattr(dashboard_app, "_decompress_snapshot_to_file", provide_snapshot)
+    monkeypatch.setattr(dashboard_app, "_merge_account_history_into_console_state", delayed_merge)
+
+    class SnapshotRequest:
+        def __init__(self):
+            self.headers = {}
+
+    async def verify_responsive_loop():
+        task = asyncio.create_task(receive_worker_snapshot(SnapshotRequest()))
+        assert await asyncio.to_thread(merge_started.wait, 1)
+        # This coroutine can run while the simulated SQLite lock wait is in
+        # progress; the merge therefore must be in a worker thread.
+        await asyncio.wait_for(asyncio.sleep(0), timeout=0.1)
+        release_merge.set()
+        return await task
+
+    result = asyncio.run(verify_responsive_loop())
+    assert result["status"] == "persisted"
+    with sqlite3.connect(destination) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "worker snapshot"
 
 
 def test_console_auth_covers_html_static_and_api(monkeypatch) -> None:
