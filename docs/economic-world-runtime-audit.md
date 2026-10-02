@@ -1,7 +1,33 @@
 # NOEMA economic-world runtime audit
 
-**Audit basis:** repository at `103d0854bc3b2ad8777e5b0277d95c75ff457b68`
-(current `origin/main`) and Render worker/console logs observed on 2026-10-01
+## Current runtime correction (2026-10-02 00:22 UTC)
+
+The detailed audit below is a historical snapshot from before PRs #74–#78. Do
+not use its runtime statuses as current. The repository's current `origin/main`
+is `ac81a1fd6b91f6c6ba1c3395eed03e4296ecdfd7` (#78), and both hosted services
+in the `noema` workspace are deployed at that commit.
+
+| Area | Current evidence | Assessment |
+| --- | --- | --- |
+| Runtime revision and storage | Worker and console deploys for `ac81a1f` completed at 00:11:27 and 00:11:33 UTC. The worker has one instance and a 1 GB persistent disk; the console has one instance and a 10 GB disk mounted at `/opt/render/project/src/console-data`. | #78 increased the console disk and is live. This did not resolve snapshot uploads returning HTTP 413. |
+| Console health | Public `/healthz` returned 200 in 166 ms at 00:17:17 UTC. A prior probe during the deployment/restart returned 502; subsequent health probes in Render logs returned 200. | The 502 was transient during replacement. A healthy health endpoint does not prove replica freshness. |
+| Worker cycles | Cycle 309 completed at 00:16:10 UTC (`health=healthy`, 218.2 seconds); cycle 310 completed at 00:21:25 UTC (`health=healthy`, 215.1 seconds). Start-to-start was 318.2 seconds against a 300-second target. Both cycles reported Kalshi connected (1 order, 1 fill, 0 positions), Polymarket connected, and EVM observation 7/7 chains with zero RPC failures. | Two consecutive healthy agent cycles are encouraging, but the cadence is about 18 seconds beyond target and two cycles do not establish long-duration stability. No live orders were submitted. |
+| Polymarket private account | At 00:11:57 and 00:17:50 UTC, the worker reported `authenticated_read_only`, a connected private stream, and one record persisted in each sample; credential diagnostics exposed presence booleans only. | Two authenticated read/persistence samples succeeded. Full historical counts and sustained stream continuity were not verified from the available logs. |
+| Trench / Solana | Cycle 309 reported 34 forward sampler failures, with primary/fallback Solana RPC and Jupiter price degraded. Cycle 310 still had primary/fallback Solana RPC degraded, although Jupiter price recovered to healthy; Dexscreener, Jupiter discovery, and Jupiter market stayed healthy. | Collection is active but Solana RPC remains unreliable. Sampler counts vary and are not proof that all forward labels are complete. |
+| Cognition | Cycles 309 and 310 reported cognition idle because automatic cognition was suppressed when robust edge was below its threshold. | Neither cycle demonstrated a hosted model invocation or budget-gate pass. They did demonstrate the evidence gate suppressing unnecessary inference. |
+| Stripe | Cycle 309 reported `credential_present=false` and `status=unconfigured`; canonical reconciliation was `FAILED` and did not update state. | No Stripe read-only economic evidence is currently available. |
+| Console snapshot replication | Worker snapshot POSTs received HTTP 413 at 00:14:54, 00:17:16, and 00:19:21 UTC; a private connection error was also observed during the console replacement. The receiver currently caps compressed snapshots at 128 MiB and expanded databases at 512 MiB. | The 10 GB disk increase does not change either application-level limit. The current worker log does not identify which limit rejected the payload; replicas may therefore be stale while `/healthz` is healthy. PR #80 adds size-only rejection diagnostics without relaxing either cap. |
+| Execution authority | Cycle 309 recorded zero live trades and zero paper fills. Runtime health and read-only account access do not authorize execution. | Keep execution fail-closed; no trade or wallet transaction was used for verification. |
+
+These observations narrow the next validation work: identify the snapshot size
+limit that is rejecting the worker database; verify multiple consecutive
+replica updates; collect sustained Solana RPC health; prove one cognition
+invocation only when the persisted budget and evidence gates allow it; and
+configure Stripe only if read-only access is intended. The old table below
+remains useful as repository context but its runtime column is historical.
+
+**Historical audit basis:** repository at `103d0854bc3b2ad8777e5b0277d95c75ff457b68`
+and Render worker/console logs observed on 2026-10-01
 between 13:05 and 13:26 UTC. Hosted observations below are timestamped and are
 not inferred from local configuration. This is a capability audit, not an
 execution authorization. Unresolved states are called out rather than inferred

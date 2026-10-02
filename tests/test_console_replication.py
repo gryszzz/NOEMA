@@ -86,3 +86,49 @@ def test_console_snapshot_http_rejection_reports_status_without_response_body(
     }
     assert "sensitive response body" not in repr(result)
     assert "snapshot-secret-placeholder" not in repr(result)
+
+
+def test_console_snapshot_413_reports_only_whitelisted_size_diagnostics(monkeypatch, tmp_path):
+    database = tmp_path / "worker.db"
+    with sqlite3.connect(database):
+        pass
+    monkeypatch.setenv("NOEMA_CONSOLE_INTERNAL_ADDRESS", "console.internal:10000")
+    monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-secret-placeholder")
+    monkeypatch.setattr(console_replication, "_worker_metadata_header", lambda: "safe-metadata")
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, _method, url, *, content, headers):
+            class Response:
+                async def __aenter__(self):
+                    async for _chunk in content:
+                        pass
+                    return httpx.Response(
+                        413,
+                        request=httpx.Request("POST", url),
+                        headers={
+                            "X-NOEMA-Snapshot-Rejection": "database_size_limit",
+                            "X-NOEMA-Snapshot-Rejected-Bytes": "536870913",
+                            "X-Injected-Sensitive": "never-log-this",
+                        },
+                    )
+
+                async def __aexit__(self, *_args):
+                    return None
+
+            return Response()
+
+    monkeypatch.setattr(console_replication.httpx, "AsyncClient", lambda **_kwargs: Client())
+    result = asyncio.run(console_replication.publish_console_snapshot(str(database)))
+
+    assert result["http_status"] == 413
+    assert result["snapshot_rejection"] == "database_size_limit"
+    assert result["snapshot_rejected_bytes"] == 536870913
+    assert result["snapshot_compressed_bytes"] > 0
+    assert "never-log-this" not in repr(result)
+    assert "snapshot-secret-placeholder" not in repr(result)
