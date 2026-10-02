@@ -77,15 +77,16 @@ def test_trench_health_sqlite_failure_logs_only_safe_error_metadata(monkeypatch,
     error.sqlite_errorcode = sqlite3.SQLITE_BUSY
     error.sqlite_errorname = "SQLITE_BUSY"
 
-    async def fail_collection(**_kwargs):
-        raise error
+    class FailStore:
+        def __init__(self, _path):
+            raise error
 
-    monkeypatch.setattr(agent_runtime, "collect_trench_cycle", fail_collection)
+    monkeypatch.setattr(agent_runtime, "TrenchCollectorStore", FailStore)
     state = asyncio.run(agent_runtime._trench_state("worker.sqlite3"))
 
     assert state.status == "degraded"
     output = capsys.readouterr().out
-    assert '"event": "agent_trench_collection_error"' in output
+    assert '"event": "agent_trench_health_error"' in output
     assert '"sqlite_error_name": "SQLITE_BUSY"' in output
     assert '"sqlite_error_code": 5' in output
     assert "/private/account.db" not in output
