@@ -76,6 +76,14 @@ _MAX_DATABASE_BYTES = 1024 * 1024 * 1024
 _SNAPSHOT_IO_CHUNK_BYTES = 1024 * 1024
 
 
+def _check_snapshot_sqlite_integrity(snapshot_path: str) -> str | None:
+    """Run the potentially full-database scan away from the ASGI event loop."""
+    uri = Path(snapshot_path).resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+        row = conn.execute("PRAGMA quick_check").fetchone()
+    return None if row is None else row[0]
+
+
 def _merge_account_history_into_console_state(source_path: str, state_path: str) -> None:
     """Import snapshot account evidence into the non-replaceable console database."""
     source_path = str(Path(source_path).resolve())
@@ -695,14 +703,12 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
 
     failure_stage = "write_snapshot"
     try:
-        uri = Path(temporary_path).resolve().as_uri() + "?mode=ro"
         try:
-            with sqlite3.connect(uri, uri=True, timeout=2) as conn:
-                check = conn.execute("PRAGMA quick_check").fetchone()
+            check = await asyncio.to_thread(_check_snapshot_sqlite_integrity, temporary_path)
         except sqlite3.Error as exc:
             raise HTTPException(status_code=400, detail="snapshot is not a valid SQLite database") from exc
         else:
-            if check is None or check[0] != "ok":
+            if check != "ok":
                 raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
         # Account rows included in worker snapshots are imported into the
         # console-owned sidecar. Live console writers target that same file,
