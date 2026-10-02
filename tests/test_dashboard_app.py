@@ -339,6 +339,63 @@ def test_snapshot_sidecar_merge_wait_does_not_block_event_loop(monkeypatch, tmp_
         assert conn.execute("SELECT value FROM marker").fetchone()[0] == "worker snapshot"
 
 
+def test_overlapping_snapshots_install_in_request_order(monkeypatch, tmp_path) -> None:
+    from noema import dashboard_app
+
+    destination = tmp_path / "worker.db"
+    snapshots = {}
+    for name in ("older", "newer"):
+        snapshot_path = tmp_path / f"{name}.db"
+        with sqlite3.connect(snapshot_path) as conn:
+            conn.execute("CREATE TABLE marker(value TEXT)")
+            conn.execute("INSERT INTO marker VALUES (?)", (name,))
+        snapshots[name] = snapshot_path
+    monkeypatch.setattr(dashboard_app, "_db_path", lambda: str(destination))
+    monkeypatch.setattr(dashboard_app, "_console_state_db_path", lambda: str(tmp_path / "state.db"))
+
+    newer_decompressed = asyncio.Event()
+
+    async def provide_snapshot(request, _directory):
+        if request.name == "newer":
+            newer_decompressed.set()
+        path = snapshots[request.name]
+        return str(path), path.stat().st_size
+
+    older_merge_started = threading.Event()
+    release_older_merge = threading.Event()
+    newer_merge_started = threading.Event()
+
+    def merge_snapshot(source, _state):
+        name = Path(source).stem
+        if name == "older":
+            older_merge_started.set()
+            assert release_older_merge.wait(timeout=5)
+        else:
+            newer_merge_started.set()
+
+    monkeypatch.setattr(dashboard_app, "_decompress_snapshot_to_file", provide_snapshot)
+    monkeypatch.setattr(dashboard_app, "_merge_account_history_into_console_state", merge_snapshot)
+
+    class SnapshotRequest:
+        def __init__(self, name):
+            self.name = name
+            self.headers = {}
+
+    async def install_overlapping():
+        older = asyncio.create_task(receive_worker_snapshot(SnapshotRequest("older")))
+        assert await asyncio.to_thread(older_merge_started.wait, 1)
+        newer = asyncio.create_task(receive_worker_snapshot(SnapshotRequest("newer")))
+        await asyncio.wait_for(newer_decompressed.wait(), timeout=1)
+        assert not newer_merge_started.is_set(), "snapshot installation must serialize"
+        release_older_merge.set()
+        return await asyncio.gather(older, newer)
+
+    results = asyncio.run(install_overlapping())
+    assert [result["status"] for result in results] == ["persisted", "persisted"]
+    with sqlite3.connect(destination) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "newer"
+
+
 def test_console_auth_covers_html_static_and_api(monkeypatch) -> None:
     monkeypatch.setenv("NOEMA_CONSOLE_USERNAME", "operator")
     monkeypatch.setenv("NOEMA_CONSOLE_PASSWORD", "local-only-test-value")
