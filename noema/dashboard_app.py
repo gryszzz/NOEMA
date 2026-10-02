@@ -668,7 +668,13 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
     if content_length:
         try:
             if int(content_length) > _MAX_SNAPSHOT_BYTES:
-                raise HTTPException(status_code=413, detail="snapshot is too large")
+                raise HTTPException(
+                    status_code=413, detail="snapshot is too large",
+                    headers={
+                        "X-NOEMA-Snapshot-Rejection": "compressed_size_limit",
+                        "X-NOEMA-Snapshot-Rejected-Bytes": str(int(content_length)),
+                    },
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid content length") from exc
     destination = Path(_db_path()).resolve()
@@ -750,7 +756,13 @@ async def _decompress_snapshot_to_file(request: Request, directory: Path) -> tup
             async for chunk in request.stream():
                 compressed_size += len(chunk)
                 if compressed_size > _MAX_SNAPSHOT_BYTES:
-                    raise HTTPException(status_code=413, detail="snapshot is too large")
+                    raise HTTPException(
+                        status_code=413, detail="snapshot is too large",
+                        headers={
+                            "X-NOEMA-Snapshot-Rejection": "compressed_size_limit",
+                            "X-NOEMA-Snapshot-Rejected-Bytes": str(compressed_size),
+                        },
+                    )
                 await asyncio.to_thread(compressed.write, chunk)
             await asyncio.to_thread(compressed.flush)
             await asyncio.to_thread(os.fsync, compressed.fileno())
@@ -786,7 +798,13 @@ def _inflate_snapshot_file(compressed_path: str, directory: Path) -> tuple[str, 
             while chunk := inflater.read(_SNAPSHOT_IO_CHUNK_BYTES):
                 database_size += len(chunk)
                 if database_size > _MAX_DATABASE_BYTES:
-                    raise HTTPException(status_code=413, detail="database snapshot is too large")
+                    raise HTTPException(
+                        status_code=413, detail="database snapshot is too large",
+                        headers={
+                            "X-NOEMA-Snapshot-Rejection": "database_size_limit",
+                            "X-NOEMA-Snapshot-Rejected-Bytes": str(database_size),
+                        },
+                    )
                 database.write(chunk)
             database.flush()
             os.fsync(database.fileno())

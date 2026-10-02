@@ -168,10 +168,22 @@ def load_worker_metadata(db_path: str) -> dict[str, object] | None:
 
 def _snapshot_publish_failure(stage: str, exc: Exception) -> dict[str, Any]:
     status_code = None
+    rejection = None
+    rejected_bytes = None
     if isinstance(exc, httpx.HTTPStatusError):
         candidate = exc.response.status_code
         status_code = candidate if isinstance(candidate, int) else None
         classification = "private_console_http_rejection"
+        # These headers come from our authenticated console endpoint. Still
+        # whitelist them before writing them to worker logs.
+        rejection_header = exc.response.headers.get("x-noema-snapshot-rejection")
+        if rejection_header in {"compressed_size_limit", "database_size_limit"}:
+            rejection = rejection_header
+            rejected_bytes_header = exc.response.headers.get(
+                "x-noema-snapshot-rejected-bytes", "",
+            )
+            if rejected_bytes_header.isdecimal():
+                rejected_bytes = int(rejected_bytes_header)
     elif isinstance(exc, httpx.RequestError):
         classification = "private_console_transport_failure"
     elif isinstance(exc, sqlite3.Error):
@@ -184,13 +196,17 @@ def _snapshot_publish_failure(stage: str, exc: Exception) -> dict[str, Any]:
         classification = "snapshot_publish_failure"
     # Never include the exception message, URL, headers, or request/response
     # content. Render's worker log needs a category and stage, not secret data.
-    return {
+    result = {
         "status": "unavailable",
         "failure_stage": stage,
         "failure_classification": classification,
         "error_type": type(exc).__name__,
         "http_status": status_code,
     }
+    if rejection is not None:
+        result["snapshot_rejection"] = rejection
+        result["snapshot_rejected_bytes"] = rejected_bytes
+    return result
 
 
 async def publish_console_snapshot(db_path: str) -> dict[str, Any]:
@@ -226,6 +242,11 @@ async def publish_console_snapshot(db_path: str) -> dict[str, Any]:
                 response.raise_for_status()
             return {"status": "persisted"}
         except Exception as exc:  # noqa: BLE001 - provider client errors are reduced to safe fields.
-            return _snapshot_publish_failure("private_console_post", exc)
+            failure = _snapshot_publish_failure("private_console_post", exc)
+            if failure.get("http_status") == 413:
+                # Size is operational metadata only; do not include payload,
+                # path, headers, or credentials in the diagnostic.
+                failure["snapshot_compressed_bytes"] = payload_path.stat().st_size
+            return failure
     finally:
         await asyncio.to_thread(snapshot_context.__exit__, None, None, None)

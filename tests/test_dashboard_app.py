@@ -617,6 +617,8 @@ def test_snapshot_stream_enforces_compressed_and_expanded_size_limits(monkeypatc
             await _decompress_snapshot_to_file(ChunkedRequest([b"1234", b"56789"]), tmp_path)
         except HTTPException as exc:
             assert exc.status_code == 413
+            assert exc.headers["X-NOEMA-Snapshot-Rejection"] == "compressed_size_limit"
+            assert exc.headers["X-NOEMA-Snapshot-Rejected-Bytes"] == "9"
         else:
             raise AssertionError("oversized compressed stream was accepted")
 
@@ -631,6 +633,8 @@ def test_snapshot_stream_enforces_compressed_and_expanded_size_limits(monkeypatc
         except HTTPException as exc:
             assert exc.status_code == 413
             assert exc.detail == "database snapshot is too large"
+            assert exc.headers["X-NOEMA-Snapshot-Rejection"] == "database_size_limit"
+            assert int(exc.headers["X-NOEMA-Snapshot-Rejected-Bytes"]) > 12
         else:
             raise AssertionError("oversized expanded database was accepted")
 
