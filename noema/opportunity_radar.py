@@ -29,6 +29,8 @@ class RadarRow:
     reason: str
     evidence_ids: tuple[str, ...]
     model_version: str = "unknown"
+    attention_score_suppression_reason: str | None = None
+    missing_inputs: tuple[str, ...] = ()
 
 
 _POLITICAL_TERMS = {
@@ -51,6 +53,19 @@ _POLITICAL_TERMS = {
 def _political_like(title: str) -> bool:
     lowered = title.lower()
     return any(term in lowered for term in _POLITICAL_TERMS)
+
+
+def _attention_score_suppression_reason(model_version: str, title: str) -> str | None:
+    """Explain policy suppression instead of making a missing score look accidental."""
+    if model_version in {"market-baseline-v1", "market-midpoint-v1"}:
+        return "benchmark_forecast_has_no_independent_edge"
+    if model_version == "series-frequency-v1":
+        return "research_candidate_not_promoted"
+    if _political_like(title):
+        return "political_market_policy"
+    if model_version == "unknown":
+        return "forecast_model_version_missing"
+    return None
 
 
 def _attention_score(
@@ -125,15 +140,27 @@ def build_radar(
             captured = captured.replace(tzinfo=UTC)
         freshness = max(0.0, (now - captured.astimezone(UTC)).total_seconds())
 
+        missing_inputs: list[str] = []
+        for name in ("probability_yes", "lower_bound", "upper_bound", "model_version"):
+            if name not in forecast or forecast.get(name) is None:
+                missing_inputs.append(f"forecast.{name}")
+        for name in ("raw_edge", "estimated_cost", "uncertainty_penalty", "robust_edge"):
+            if name not in opportunity or opportunity.get(name) is None:
+                missing_inputs.append(f"opportunity.{name}")
+        if ask is None:
+            missing_inputs.append("snapshot.yes_ask")
+        if bid is None:
+            missing_inputs.append("snapshot.yes_bid")
+
         lower = float(forecast.get("lower_bound", 0.0))
         upper = float(forecast.get("upper_bound", 1.0))
         robust_edge = float(opportunity.get("robust_edge", 0.0))
 
         title = str(snapshot.get("title") or market_id)
+        model_version = str(forecast.get("model_version") or "unknown")
+        suppression_reason = _attention_score_suppression_reason(model_version, title)
         score = None
-        if forecast.get("model_version") not in {
-            "market-baseline-v1", "market-midpoint-v1", "series-frequency-v1"
-        } and not _political_like(title):
+        if suppression_reason is None:
             score = _attention_score(
                 robust_edge=robust_edge,
                 spread=spread,
@@ -169,7 +196,9 @@ def build_radar(
                 decision=str(action.get("decision") or "unknown"),
                 reason=str(action.get("reason") or ""),
                 evidence_ids=tuple(forecast.get("evidence_ids") or ()),
-                model_version=str(forecast.get("model_version") or "unknown"),
+                model_version=model_version,
+                attention_score_suppression_reason=suppression_reason,
+                missing_inputs=tuple(missing_inputs),
             )
         )
 
