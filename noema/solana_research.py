@@ -268,6 +268,12 @@ class SolanaRpcResearchClient:
         self.last_attempt_provenance: dict[str, Any] | None = None
         self.last_request_elapsed_ms: int | None = None
         self.provider_cooldowns: dict[str, datetime] = {}
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def close(self) -> None:
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     def providers(self) -> tuple[tuple[str, str], ...]:
         configured = [("primary", self.rpc_url)]
@@ -290,15 +296,18 @@ class SolanaRpcResearchClient:
             }
             response: httpx.Response | None = None
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(url, json=payload)
-                    if response.is_error:
-                        error_class, retryable = _http_error_class(response.status_code)
-                        raise ProviderFailure(
-                            provider, method, error_class,
-                            http_status=response.status_code,
-                        )
-                    data = response.json()
+                if self._http_client is None or self._http_client.is_closed:
+                    self._http_client = httpx.AsyncClient(
+                        timeout=self.timeout, follow_redirects=False,
+                    )
+                response = await self._http_client.post(url, json=payload)
+                if response.is_error:
+                    error_class, retryable = _http_error_class(response.status_code)
+                    raise ProviderFailure(
+                        provider, method, error_class,
+                        http_status=response.status_code,
+                    )
+                data = response.json()
             except ProviderFailure as exc:
                 last_error = exc
                 retryable = exc.error_class in {

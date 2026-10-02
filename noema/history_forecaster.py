@@ -26,15 +26,21 @@ def record_history_candidate(
     min_events: int = 30,
     current_event_size: int = 1,
     verified_market_ids: frozenset[str] | None = None,
+    rejections: list[str] | None = None,
 ) -> bool:
     """Paper-only outcome frequency for homogeneous one- or two-market events."""
+    def reject(reason: str) -> bool:
+        if rejections is not None:
+            rejections.append(reason)
+        return False
+
     if market.venue not in {"kalshi:demo", "kalshi:production"} or market.yes_ask is None:
-        return False
+        return reject("unsupported_venue_or_missing_yes_ask")
     if market.captured_at.tzinfo is None:
-        return False
+        return reject("snapshot_timestamp_missing_timezone")
     series, sep, _ = market.market_id.partition("-")
     if not sep or not _SERIES.fullmatch(series):
-        return False
+        return reject("invalid_series_ticker")
     if (
         verified_market_ids is None
         or market.market_id not in verified_market_ids
@@ -44,9 +50,9 @@ def record_history_candidate(
             for ticker in verified_market_ids
         )
     ):
-        return False
+        return reject("event_membership_unverified_or_incomplete")
     if ledger.has_model_forecast(market.venue, market.market_id, MODEL_VERSION):
-        return False
+        return reject("history_forecast_already_exists")
 
     rows = outcomes.conn.execute(
         """
@@ -80,11 +86,11 @@ def record_history_candidate(
         latest_seen = max(latest_seen or seen_at, seen_at)
 
     if any(len(group) > 2 for group in by_event.values()):
-        return False
+        return reject("historical_events_exceed_supported_pair_size")
     if current_event_size == 1:
         # A series containing any two-market event is not a single-market family.
         if any(len(group) != 1 for group in by_event.values()):
-            return False
+            return reject("series_contains_multi_market_historical_events")
         samples = [group[0] for group in by_event.values()]
     elif current_event_size == 2:
         # Incomplete sync pages can leave a one-market event; only use complete
@@ -94,14 +100,14 @@ def record_history_candidate(
             if len(group) == 2 and sum(row[1] for row in group) == 1
         ]
         if len(pairs) < min_events or len(pairs) < 0.9 * len(by_event):
-            return False
+            return reject(f"insufficient_complete_complementary_pairs:{len(pairs)}")
         samples = [row for group in pairs for row in group]
     else:
-        return False
+        return reject("unsupported_current_event_size")
     if len(samples) < min_events * current_event_size:
-        return False
+        return reject(f"insufficient_point_in_time_resolved_history:{len(samples)}")
     if latest_seen is None:
-        return False
+        return reject("no_resolved_history_seen_before_snapshot")
     yes = sum(result for _, result, _ in samples)
     n = len(samples)
     p = (yes + 1) / (n + 2)  # Beta(1, 1) posterior mean.
@@ -133,7 +139,7 @@ def record_history_candidate(
         now=cutoff,
     )
     if not grounding.grounded:
-        return False
+        return reject("historical_evidence_failed_grounding")
 
     costs = CostModel().estimate(market)
     uncertainty = (forecast.upper_bound - forecast.lower_bound) / 2

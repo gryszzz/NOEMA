@@ -86,6 +86,20 @@ def test_history_known_only_after_capture_cannot_train_candidate(tmp_path) -> No
     )
 
 
+def test_candidate_reports_exact_insufficient_resolved_history_reason(tmp_path) -> None:
+    db = str(tmp_path / "noema.db")
+    now = datetime.now(UTC)
+    outcomes, ledger, evidence = OutcomeStore(db), ForecastLedger(db), EvidenceStore(db)
+    _history(outcomes, now, count=7)
+    rejected: list[str] = []
+
+    assert not record_history_candidate(
+        _market(now), outcomes=outcomes, ledger=ledger, evidence=evidence,
+        verified_market_ids=frozenset({_market(now).market_id}), rejections=rejected,
+    )
+    assert rejected == ["insufficient_point_in_time_resolved_history:7"]
+
+
 def test_demo_outcomes_cannot_train_a_production_forecast(tmp_path) -> None:
     db = str(tmp_path / "noema.db")
     now = datetime.now(UTC)
