@@ -29,6 +29,25 @@ class BillTracker:
         "owner_limit_usd": "NOEMA_HOSTED_BILL_BUDGET_OWNER_LIMIT_USD",
     }
 
+    @classmethod
+    def hosted_budget_env_presence(cls) -> dict[str, str]:
+        """Report required budget settings without exposing their dollar values."""
+        result: dict[str, str] = {}
+        for variable in cls.HOSTED_BOOTSTRAP_ENV.values():
+            value = os.getenv(variable)
+            if value is None:
+                result[variable] = "missing"
+            elif not value.strip():
+                result[variable] = "blank"
+            else:
+                try:
+                    _money(Decimal(value))
+                except (InvalidOperation, TypeError, ValueError):
+                    result[variable] = "invalid"
+                else:
+                    result[variable] = "valid"
+        return result
+
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +109,11 @@ class BillTracker:
         safe. Persisted operator edits always win; environment changes never
         update an existing budget row.
         """
+        # A durable owner-entered budget is authoritative even if the optional
+        # bootstrap environment is now absent. Report that accurately before
+        # evaluating bootstrap-only variables.
+        if self.conn.execute("SELECT 1 FROM bill_budget WHERE id=1").fetchone():
+            return "persisted_budget_retained"
         raw = {field: os.getenv(variable) for field, variable in self.HOSTED_BOOTSTRAP_ENV.items()}
         if any(value is None or not value.strip() for value in raw.values()):
             return "not_configured"

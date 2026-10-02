@@ -52,6 +52,10 @@ def test_hosted_budget_bootstrap_requires_complete_owner_values_and_only_initial
     assert tracker.bootstrap_hosted_budget_from_env() == "initialized"
     assert tracker.overview()["hosting_estimate_usd"] == "20.00"
 
+    for variable in names.values():
+        monkeypatch.delenv(variable, raising=False)
+    assert tracker.bootstrap_hosted_budget_from_env() == "persisted_budget_retained"
+
     tracker.configure(
         hosting_usd=Decimal("25.00"), other_usd=Decimal("8.00"),
         model_budget_usd=Decimal("2.00"), owner_limit_usd=Decimal("35.00"),
@@ -73,6 +77,18 @@ def test_hosted_budget_bootstrap_rejects_invalid_or_unbounded_configuration(tmp_
         monkeypatch.setenv(variable, values[field])
     assert tracker.bootstrap_hosted_budget_from_env() == "invalid_configuration"
     assert tracker.overview()["status"] == "estimate_missing"
+
+
+def test_hosted_budget_env_diagnostics_name_missing_and_blank_values_without_echoing_them(
+    monkeypatch,
+):
+    for variable in BillTracker.HOSTED_BOOTSTRAP_ENV.values():
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("NOEMA_HOSTED_BILL_BUDGET_MODEL_USD", "  ")
+    presence = BillTracker.hosted_budget_env_presence()
+    assert presence["NOEMA_HOSTED_BILL_BUDGET_MODEL_USD"] == "blank"
+    assert presence["NOEMA_HOSTED_BILL_BUDGET_HOSTING_USD"] == "missing"
+    assert set(presence.values()) == {"blank", "missing"}
 
 
 def test_model_reservation_respects_monthly_budget_across_days(tmp_path):

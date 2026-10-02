@@ -8,6 +8,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from time import perf_counter
 
 import httpx
@@ -24,6 +25,7 @@ from .bill_tracker import BillTracker
 from .chain_registry import load_evm_chains
 from .cognition import maybe_run_cognition
 from .cognition_models import CognitionResult
+from .cognition_policy import CognitionPolicy
 from .config import kalshi_production_read_only_config
 from .console_replication import publish_console_snapshot
 from .cross_venue_experiment import mature_paper_pairs
@@ -41,6 +43,7 @@ from .market_discovery import (
     MarketDiscoveryError,
     collect_and_persist_market_discovery,
 )
+from .openai_config import OpenAIConfig
 from .opportunity_radar import build_radar
 from .outcomes import OutcomeStore
 from .paper_research import PaperResearchStore, collect_paper_quote
@@ -922,7 +925,48 @@ async def run_agent(
     config.validate()
     bootstrap_state = bootstrap_hosted_bill_budget(config.db_path)
     if bootstrap_state is not None:
-        _log("hosted_bill_budget_bootstrap", status=bootstrap_state)
+        budget = BillTracker(config.db_path)
+        try:
+            overview = budget.overview()
+            settings_presence = BillTracker.hosted_budget_env_presence()
+            try:
+                model_fits_other = (
+                    Decimal(os.environ["NOEMA_HOSTED_BILL_BUDGET_MODEL_USD"])
+                    <= Decimal(os.environ["NOEMA_HOSTED_BILL_BUDGET_OTHER_USD"])
+                )
+            except (KeyError, InvalidOperation, TypeError, ValueError):
+                model_fits_other = None
+            _log(
+                "hosted_bill_budget_bootstrap",
+                status=bootstrap_state,
+                required_settings=settings_presence,
+                model_budget_within_other_budget=model_fits_other,
+                persisted_budget_status=overview["status"],
+                monthly_model_budget_configured=overview["model_budget_usd"] is not None,
+                owner_limit_configured=overview["owner_limit_usd"] is not None,
+            )
+        finally:
+            budget.conn.close()
+    if os.getenv("RENDER", "").lower() == "true":
+        openai = OpenAIConfig.from_env()
+        try:
+            pricing = CognitionPolicy.from_env(provider="openai", model=openai.model)
+            pricing_ready = (
+                pricing.input_usd_per_million is not None
+                and pricing.output_usd_per_million is not None
+            )
+        except (TypeError, ValueError):
+            pricing_ready = False
+        _log(
+            "hosted_openai_configuration",
+            api_key_present=bool(openai.api_key and openai.api_key.strip()),
+            enabled=openai.enabled,
+            ready=openai.ready,
+            model=openai.model,
+            pricing_model=os.getenv("NOEMA_OPENAI_PRICING_MODEL"),
+            pricing_ready=pricing_ready,
+            selected_provider=os.getenv("NOEMA_COGNITION_PROVIDER", "auto"),
+        )
     identity = identity or AgentIdentity()
     store = AgentStore(config.db_path)
     process_identity = asdict(capture_process_identity(config.db_path))
