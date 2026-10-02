@@ -74,6 +74,9 @@ _account_log.setLevel(logging.INFO)
 _MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024
 _MAX_DATABASE_BYTES = 1024 * 1024 * 1024
 _SNAPSHOT_IO_CHUNK_BYTES = 1024 * 1024
+_snapshot_install_lock = asyncio.Lock()
+_snapshot_request_sequence = 0
+_snapshot_installed_sequence = 0
 
 
 def _merge_account_history_into_console_state(source_path: str, state_path: str) -> None:
@@ -664,6 +667,17 @@ def runtime_info() -> dict[str, Any]:
 @app.post("/internal/snapshot")
 async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
     """Atomically replace the worker snapshot without replacing console-owned state."""
+    global _snapshot_request_sequence
+    _snapshot_request_sequence += 1
+    request_sequence = _snapshot_request_sequence
+    return await _receive_worker_snapshot(request, request_sequence)
+
+
+async def _receive_worker_snapshot(
+    request: Request, request_sequence: int,
+) -> dict[str, Any]:
+    """Validate a snapshot and install it without allowing stale concurrent requests to win."""
+    global _snapshot_installed_sequence
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -704,27 +718,32 @@ async def receive_worker_snapshot(request: Request) -> dict[str, Any]:
         else:
             if check is None or check[0] != "ok":
                 raise HTTPException(status_code=400, detail="snapshot failed SQLite integrity check")
-        # Account rows included in worker snapshots are imported into the
-        # console-owned sidecar. Live console writers target that same file,
-        # which this atomic worker replacement never touches.
-        failure_stage = "merge_console_state"
-        # This merge can wait for a concurrent account sampler/private-stream
-        # SQLite writer (busy_timeout is intentionally bounded but may be long).
-        # Keep that wait off the ASGI event loop so health, SSE, and other console
-        # requests remain responsive while SQLite serializes the writers.
-        await asyncio.to_thread(
-            _merge_account_history_into_console_state,
-            temporary_path,
-            _console_state_db_path(),
-        )
-        # The replica is an immutable worker-provided snapshot. Console-owned
-        # state is persisted in the sidecar, never in this replaceable file.
-        failure_stage = "replace_worker_replica"
-        os.chmod(temporary_path, 0o444)
-        os.replace(temporary_path, destination)
-        if worker_metadata is not None:
-            failure_stage = "persist_worker_metadata"
-            persist_worker_metadata(_db_path(), worker_metadata)
+        async with _snapshot_install_lock:
+            if request_sequence < _snapshot_installed_sequence:
+                return {"status": "superseded", "database_bytes": image_size,
+                        "received_at": datetime.now(UTC).isoformat()}
+            # Account rows included in worker snapshots are imported into the
+            # console-owned sidecar. Live console writers target that same file,
+            # which this atomic worker replacement never touches.
+            failure_stage = "merge_console_state"
+            # This merge can wait for a concurrent account sampler/private-stream
+            # SQLite writer (busy_timeout is intentionally bounded but may be long).
+            # Keep that wait off the ASGI event loop so health, SSE, and other console
+            # requests remain responsive while SQLite serializes the writers.
+            await asyncio.to_thread(
+                _merge_account_history_into_console_state,
+                temporary_path,
+                _console_state_db_path(),
+            )
+            # The replica is an immutable worker-provided snapshot. Console-owned
+            # state is persisted in the sidecar, never in this replaceable file.
+            failure_stage = "replace_worker_replica"
+            os.chmod(temporary_path, 0o444)
+            os.replace(temporary_path, destination)
+            _snapshot_installed_sequence = request_sequence
+            if worker_metadata is not None:
+                failure_stage = "persist_worker_metadata"
+                persist_worker_metadata(_db_path(), worker_metadata)
     except HTTPException:
         raise
     except Exception as exc:
