@@ -359,12 +359,27 @@ def test_deployed_console_fails_closed_without_owner_credentials(monkeypatch) ->
 
 
 def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tmp_path) -> None:
+    from noema import dashboard_app
+
     source = tmp_path / "worker-source.db"
     with sqlite3.connect(source) as conn:
         conn.execute("CREATE TABLE worker_observation (market_id TEXT PRIMARY KEY)")
         conn.execute("INSERT INTO worker_observation VALUES ('real-market-record')")
     monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "console-replica.db"))
     monkeypatch.setenv("NOEMA_CONSOLE_SNAPSHOT_TOKEN", "snapshot-test-token")
+    checked_off_loop: list[bool] = []
+    original_check = dashboard_app._check_snapshot_sqlite_integrity
+
+    def check_off_loop(path: str) -> str | None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            checked_off_loop.append(True)
+        else:
+            checked_off_loop.append(False)
+        return original_check(path)
+
+    monkeypatch.setattr(dashboard_app, "_check_snapshot_sqlite_integrity", check_off_loop)
     body = gzip.compress(source.read_bytes())
     client = TestClient(app)
     denied = client.post("/internal/snapshot", content=body, headers={"Authorization": "Bearer wrong"})
@@ -374,6 +389,7 @@ def test_worker_snapshot_is_authenticated_verified_and_persisted(monkeypatch, tm
         headers={"Authorization": "Bearer snapshot-test-token", "Content-Type": "application/gzip"},
     )
     assert accepted.status_code == 200
+    assert checked_off_loop == [True]
     replica = tmp_path / "console-replica.db"
     assert stat.S_IMODE(replica.stat().st_mode) == 0o444
     with sqlite3.connect(replica) as conn:

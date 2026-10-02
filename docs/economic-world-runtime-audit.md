@@ -1,30 +1,32 @@
 # NOEMA economic-world runtime audit
 
-## Current runtime correction (2026-10-02 00:22 UTC)
+## Current runtime correction (2026-10-02 00:43 UTC)
 
-The detailed audit below is a historical snapshot from before PRs #74–#78. Do
+The detailed audit below is a historical snapshot from before PRs #74–#81. Do
 not use its runtime statuses as current. The repository's current `origin/main`
-is `ac81a1fd6b91f6c6ba1c3395eed03e4296ecdfd7` (#78), and both hosted services
-in the `noema` workspace are deployed at that commit.
+is `d1f5b3a5b00f401b7208d4e92801e22295bff497` (#81). Both hosted services are
+still deployed at `f8130b3` from 00:33:51 and 00:34:08 UTC; the #81 deployment
+has not yet been verified.
 
 | Area | Current evidence | Assessment |
 | --- | --- | --- |
-| Runtime revision and storage | Worker and console deploys for `ac81a1f` completed at 00:11:27 and 00:11:33 UTC. The worker has one instance and a 1 GB persistent disk; the console has one instance and a 10 GB disk mounted at `/opt/render/project/src/console-data`. | #78 increased the console disk and is live. This did not resolve snapshot uploads returning HTTP 413. |
-| Console health | Public `/healthz` returned 200 in 166 ms at 00:17:17 UTC. A prior probe during the deployment/restart returned 502; subsequent health probes in Render logs returned 200. | The 502 was transient during replacement. A healthy health endpoint does not prove replica freshness. |
-| Worker cycles | Cycle 309 completed at 00:16:10 UTC (`health=healthy`, 218.2 seconds); cycle 310 completed at 00:21:25 UTC (`health=healthy`, 215.1 seconds). Start-to-start was 318.2 seconds against a 300-second target. Both cycles reported Kalshi connected (1 order, 1 fill, 0 positions), Polymarket connected, and EVM observation 7/7 chains with zero RPC failures. | Two consecutive healthy agent cycles are encouraging, but the cadence is about 18 seconds beyond target and two cycles do not establish long-duration stability. No live orders were submitted. |
-| Polymarket private account | At 00:11:57 and 00:17:50 UTC, the worker reported `authenticated_read_only`, a connected private stream, and one record persisted in each sample; credential diagnostics exposed presence booleans only. | Two authenticated read/persistence samples succeeded. Full historical counts and sustained stream continuity were not verified from the available logs. |
-| Trench / Solana | Cycle 309 reported 34 forward sampler failures, with primary/fallback Solana RPC and Jupiter price degraded. Cycle 310 still had primary/fallback Solana RPC degraded, although Jupiter price recovered to healthy; Dexscreener, Jupiter discovery, and Jupiter market stayed healthy. | Collection is active but Solana RPC remains unreliable. Sampler counts vary and are not proof that all forward labels are complete. |
-| Cognition | Cycles 309 and 310 reported cognition idle because automatic cognition was suppressed when robust edge was below its threshold. | Neither cycle demonstrated a hosted model invocation or budget-gate pass. They did demonstrate the evidence gate suppressing unnecessary inference. |
-| Stripe | Cycle 309 reported `credential_present=false` and `status=unconfigured`; canonical reconciliation was `FAILED` and did not update state. | No Stripe read-only economic evidence is currently available. |
-| Console snapshot replication | Worker snapshot POSTs received HTTP 413 at 00:14:54, 00:17:16, and 00:19:21 UTC; a private connection error was also observed during the console replacement. The receiver currently caps compressed snapshots at 128 MiB and expanded databases at 512 MiB. | The 10 GB disk increase does not change either application-level limit. The current worker log does not identify which limit rejected the payload; replicas may therefore be stale while `/healthz` is healthy. PR #80 adds size-only rejection diagnostics without relaxing either cap. |
-| Execution authority | Cycle 309 recorded zero live trades and zero paper fills. Runtime health and read-only account access do not authorize execution. | Keep execution fail-closed; no trade or wallet transaction was used for verification. |
+| Runtime revision and storage | Worker and console last deployed `f8130b3` at 00:33:51 and 00:34:08 UTC. Worker: one instance, 1 GB persistent disk. Console: one instance, 10 GB disk at `/opt/render/project/src/console-data`. | PR #79 raised both receiver bounds to 1 GiB; PR #80's diagnostics are deployed. PR #81 is merged but not yet observed live. |
+| Console health | Public `/healthz` returned 200 in 143 ms at 00:36:xx UTC. It returned 502 at 00:38:09 and 00:42:57 UTC during observed console instance restarts; Render's internal probes returned 200 between restarts. | The console is not yet continuously healthy. A current 200 check does not establish that its replica is fresh. |
+| Worker cycles | Cycle 312 completed at 00:37:27 UTC with `health=healthy`, duration 157.1 seconds. Its Kalshi check timed out; EVM reported 0/7 reads; Polymarket reported connected (5 scanned, 5 valid). | Healthy worker process status does not mean every provider is healthy. The post-restart Kalshi/EVM network failures remain intermittent and require more samples. |
+| Polymarket private account | At 00:30:08, 00:34:50, and 00:40:28 UTC, worker samples reported `authenticated_read_only`, a connected private stream, and one record persisted; diagnostics expose credential presence only. | Repeated authenticated read/persistence samples succeeded. Full historical totals and sustained stream continuity remain unverified. |
+| Trench / Solana | Sampler runs continued after deployment, with 13–43 failures in observed batches. Cycles 311–312 reported primary/fallback Solana RPC degraded; Jupiter price varied between healthy and degraded. | Trench is active but Solana RPC remains unreliable; sampler records do not establish complete forward-label coverage. |
+| Cognition | Cycles 310–312 report cognition idle because robust edge is below threshold. | No hosted inference invocation or budget-gate pass has been demonstrated. The persisted evidence gate is suppressing inference for these observations. |
+| Stripe | Cycle 310 reported `credential_present=false`, `status=unconfigured`, and failed reconciliation without state update. | No Stripe read-only economic evidence is currently available. |
+| Console snapshot replication | Before #79 deployed, snapshots were rejected with 413. After the bound increase, uploads instead ended with `RemoteProtocolError` or `ReadError` at 00:35:54, 00:38:03, and 00:40:28; console restarts were logged within seconds of these failures. | No successful post-deploy snapshot is confirmed yet. The timing suggests a relationship but does not prove a cause. PR #81 moves the history merge off the event loop; the integrity scan still runs synchronously there. PR #82 moves that scan to a worker thread as well. |
+| Execution authority | Observed cycles show no live trades or fills; no trade or wallet transaction was submitted during verification. | Keep execution fail-closed; account observations do not authorize execution. |
 
-These observations narrow the next validation work: identify the snapshot size
-limit that is rejecting the worker database; verify multiple consecutive
-replica updates; collect sustained Solana RPC health; prove one cognition
-invocation only when the persisted budget and evidence gates allow it; and
-configure Stripe only if read-only access is intended. The old table below
-remains useful as repository context but its runtime column is historical.
+These observations narrow the next validation work: verify a successful
+post-deploy replica update after #81/#82 and determine whether asynchronous
+database work stops the restart pattern; collect sustained Solana RPC and Kalshi availability;
+prove one cognition invocation only when persisted budget and evidence gates
+allow it; and configure Stripe only if read-only access is intended. The old
+table below remains useful as repository context but its runtime column is
+historical.
 
 **Historical audit basis:** repository at `103d0854bc3b2ad8777e5b0277d95c75ff457b68`
 and Render worker/console logs observed on 2026-10-01
