@@ -367,6 +367,10 @@ async def _trench_sampler_loop(
     fallback = DexScreenerTrenchPriceClient()
     interval = config.sample_interval_seconds
     discovery_interval = config.discovery_interval_seconds
+    enrichment_limit = _trench_forward_enrichment_limit(config)
+    _log("trench_forward_enrichment_policy", max_tokens_per_cycle=enrichment_limit,
+         configured_limit=config.enrichment_limit,
+         provider_cooldown_persisted=True)
     next_discovery = 0.0
     while True:
         started = asyncio.get_running_loop().time()
@@ -380,8 +384,8 @@ async def _trench_sampler_loop(
                 solana=solana,
                 price_fallback=fallback,
                 due_limit=config.due_limit,
-                enrichment_limit=0,
-                request_pause_seconds=0,
+                enrichment_limit=enrichment_limit,
+                request_pause_seconds=config.request_pause_seconds,
                 discover_new=discover,
             )
             if on_change is not None and any((
@@ -500,6 +504,11 @@ def _log_cognition_gate_audit(rows, db_path: str) -> None:
         store.conn.close()
 
 
+def _trench_forward_enrichment_limit(config: TrenchCollectorConfig) -> int:
+    """Keep the continuous holder-RPC probe live but strictly bounded to one token."""
+    return min(1, config.enrichment_limit)
+
+
 def _cycle_health(
     *,
     market_data: AgentConnectionState,
@@ -598,6 +607,16 @@ async def run_cycle(
             kalshi_event_limit=config.max_event_checks_per_cycle,
             trench_due_limit=trench_config.due_limit,
             trench_enrichment_limit=trench_config.enrichment_limit, cycle_id=cycle_id,
+        )
+        _log(
+            "agent_collection_quota",
+            cycle_id=cycle_id,
+            kalshi_markets=quotas.kalshi_markets,
+            kalshi_event_checks=quotas.kalshi_event_checks,
+            trench_due=quotas.trench_due,
+            trench_enrichment=quotas.trench_enrichment,
+            specialist_shares={item.specialist: item.attention_fraction
+                               for item in prior_plan.allocations},
         )
     except (sqlite3.Error, ValueError, OSError, KeyError, TypeError) as exc:
         quotas = CollectionQuotas()
