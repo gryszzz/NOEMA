@@ -1,32 +1,47 @@
 # NOEMA economic-world runtime audit
 
-## Current runtime correction (2026-10-02 00:43 UTC)
+## Current runtime and architecture correction (2026-10-02 01:08 UTC)
 
-The detailed audit below is a historical snapshot from before PRs #74–#81. Do
-not use its runtime statuses as current. The repository's current `origin/main`
-is `d1f5b3a5b00f401b7208d4e92801e22295bff497` (#81). Both hosted services are
-still deployed at `f8130b3` from 00:33:51 and 00:34:08 UTC; the #81 deployment
-has not yet been verified.
+The historical runtime and architecture table below predates the SQLite/runtime
+repair wave. Current `origin/main` is `31ec908083851b4a7522d95bee4f4847e0eecc54`
+(PR #83); the worker and console both deployed that revision at 00:58 UTC in the
+`noema` Render workspace. The user checkout remains untouched.
 
 | Area | Current evidence | Assessment |
 | --- | --- | --- |
-| Runtime revision and storage | Worker and console last deployed `f8130b3` at 00:33:51 and 00:34:08 UTC. Worker: one instance, 1 GB persistent disk. Console: one instance, 10 GB disk at `/opt/render/project/src/console-data`. | PR #79 raised both receiver bounds to 1 GiB; PR #80's diagnostics are deployed. PR #81 is merged but not yet observed live. |
-| Console health | Public `/healthz` returned 200 in 143 ms at 00:36:xx UTC. It returned 502 at 00:38:09 and 00:42:57 UTC during observed console instance restarts; Render's internal probes returned 200 between restarts. | The console is not yet continuously healthy. A current 200 check does not establish that its replica is fresh. |
-| Worker cycles | Cycle 312 completed at 00:37:27 UTC with `health=healthy`, duration 157.1 seconds. Its Kalshi check timed out; EVM reported 0/7 reads; Polymarket reported connected (5 scanned, 5 valid). | Healthy worker process status does not mean every provider is healthy. The post-restart Kalshi/EVM network failures remain intermittent and require more samples. |
-| Polymarket private account | At 00:30:08, 00:34:50, and 00:40:28 UTC, worker samples reported `authenticated_read_only`, a connected private stream, and one record persisted; diagnostics expose credential presence only. | Repeated authenticated read/persistence samples succeeded. Full historical totals and sustained stream continuity remain unverified. |
-| Trench / Solana | Sampler runs continued after deployment, with 13–43 failures in observed batches. Cycles 311–312 reported primary/fallback Solana RPC degraded; Jupiter price varied between healthy and degraded. | Trench is active but Solana RPC remains unreliable; sampler records do not establish complete forward-label coverage. |
-| Cognition | Cycles 310–312 report cognition idle because robust edge is below threshold. | No hosted inference invocation or budget-gate pass has been demonstrated. The persisted evidence gate is suppressing inference for these observations. |
-| Stripe | Cycle 310 reported `credential_present=false`, `status=unconfigured`, and failed reconciliation without state update. | No Stripe read-only economic evidence is currently available. |
-| Console snapshot replication | Before #79 deployed, snapshots were rejected with 413. After the bound increase, uploads instead ended with `RemoteProtocolError` or `ReadError` at 00:35:54, 00:38:03, and 00:40:28; console restarts were logged within seconds of these failures. | No successful post-deploy snapshot is confirmed yet. The timing suggests a relationship but does not prove a cause. PR #81 moves the history merge off the event loop; the integrity scan still runs synchronously there. PR #82 moves that scan to a worker thread as well. |
-| Execution authority | Observed cycles show no live trades or fills; no trade or wallet transaction was submitted during verification. | Keep execution fail-closed; account observations do not authorize execution. |
+| Runtime revision and storage | Worker `noema-paper-agent` (`srv-daulu4fpn0mc73871fr0`) and console `noema-operations-console` (`srv-daultd7pn0mc7386uqg0`) are live on `31ec908`. Worker has one instance and a 1 GB persistent disk; console has one instance and a 10 GB disk mounted at `/opt/render/project/src/console-data`. | #74–#83 runtime changes are now on the hosted services. The console disk has returned `ENOSPC` during snapshot writes; the next diagnostic deployment will report safe free-space and SQLite-file sizes. |
+| Console health | Public `/healthz` returned 200 in 145 ms at 01:09:28 UTC. | Health is responsive, while replica freshness remains unproven because snapshot writes fail separately. |
+| Worker cycle and sources | Cycle 315 completed at 01:02:52 UTC, `health=healthy`, duration 220.8 seconds. Kalshi: connected, 1 order / 1 fill / 0 positions. Polymarket US: connected, 5/5 markets valid. EVM wallet observation: 7/7 RPC reads, 0 failures. Trench: degraded; both Solana RPC providers degraded. | Core worker and venue reads are running, but a healthy aggregate cycle does not make the Trench source healthy. These counts are the live snapshot from that cycle, not lifetime account totals. |
+| Polymarket private account | A post-deploy sample at 00:58:43 UTC reported `authenticated_read_only`, private stream `connected`, and 1 record persisted. | Authenticated REST/stream persistence has recent evidence; sustained continuity and complete historical coverage still need separate proof. |
+| Cognition and research | Cycle 315 reports cognition idle because robust edge is below the configured threshold; research work idle because no new supported evidence fit the current budget. | This cycle did not invoke a hosted model or demonstrate a budget-gate pass. Do not describe idle as a provider failure or as active inference. |
+| Stripe | Cycle 315 reports `stripe_economy=unconfigured`. | No hosted Stripe economic feed is currently proven. |
+| Snapshot replication | After PR #83 deployed, the worker logged private POST `ReadError` at 01:00:23, then HTTP 500 at 01:01:56 and 01:04:14. The console logs identify `stage=write_snapshot`, `exception_type=OSError`, `errno=28`, `errno_name=ENOSPC` at 01:01:27 and 01:04:09. | Root cause is persistent-disk exhaustion while writing the incoming image, not merely event-loop blocking or transport. `/healthz` 200 does not mean the worker database replica is current. No worker snapshot was confirmed persisted after #83. |
+| Economic-world discovery | The deployed chain registry covers EVM networks; Trench/Jupiter already cover Solana launch research; DEX route quotes are normalized and persisted but are not scheduled as a market-wide discovery service. The first new slice in this change adds a bounded DEX Screener pair-discovery collector and a mutable candidate index plus append-only observations; it is not yet deployed. | Provider observations remain explicitly unverified, unknown provider chain slugs stay provider-scoped, and every discovered candidate remains unreviewed with execution authority disabled. |
+| Execution authority | No live financial action was submitted during this verification. The existing fail-closed policy and disabled execution state remain intact. | Research discovery is not asset approval or an execution grant. |
 
-These observations narrow the next validation work: verify a successful
-post-deploy replica update after #81/#82 and determine whether asynchronous
-database work stops the restart pattern; collect sustained Solana RPC and Kalshi availability;
-prove one cognition invocation only when persisted budget and evidence gates
-allow it; and configure Stripe only if read-only access is intended. The old
-table below remains useful as repository context but its runtime column is
-historical.
+Immediate runtime work is safe disk-capacity diagnosis and restoring snapshot
+replication without deleting persisted history. The first research vertical
+slice is bounded provider-observed pair discovery. Other gaps—persisted network
+health/freshness observations, traditional-market and official Robinhood read surfaces, universal
+observation joins, API/model cost accounting, matured DEX labels, and sustained
+hosted cognition/Stripe evidence—remain explicit follow-on work rather than
+claimed capabilities.
+
+### Current architecture audit and next safe slices
+
+| Capability | Current | Target | Existing code to reuse | Data source | Config needed | Next safe implementation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Network registry | EVM chain-ID registry already supports per-chain RPCs; this change adds family-neutral records for EVM, Solana, Bitcoin/UTXO and explicitly registered future networks. Unknown networks remain unconfigured. | Network identity and capabilities across EVM, Solana, UTXO and additional read-only families, independent of execution permission. | `chain_registry.py`, `wallet_observer.py`, `wallet_types.py`, `dex_quotes.py` | RPC chain ID and source-specific provider aliases; provider identity alone never verifies an asset. | Existing per-chain RPC settings; optional `NOEMA_ADDITIONAL_NETWORKS_JSON` contains metadata only. | Wire registry health and freshness into persisted network observations, then support provider alias configuration for new chains. |
+| Multi-chain pair discovery | New DEX Screener adapter resolves known networks through the registry, caps each run at 8 token profiles and 5 pair rows/token, and appends candidate plus observation records. Candidate state stays `unreviewed`; unknown slugs have provider-scoped identity only. | Bounded continuous discovery with independent validation, source coverage, immutable observations and maturity tracking. | `market_discovery.py`, `trench_collector.py`, `trench_store.py`, `dex_quotes.py`, research queue | Official DEX Screener profiles and token-pairs read endpoints; these are provider observations, not chain-verified facts. | Interval defaults to 900 seconds; hosted activation is held disabled until snapshot storage recovers. | After recovery, enable one sampler, verify request cadence, persistence and console replication, then compare discovery value against API/storage cost. |
+| Solana and EVM research | Solana Trench/Jupiter and generic EVM RPC/wallet observation exist; DEX quotes are normalized but not yet scheduled across discovered pairs. | Deep pool, flow, liquidity, control-risk and quote observations keyed by canonical network + address, with forward labels after maturity. | `solana_research.py`, `trench_*`, `dex_quotes.py`, `research_trials.py` | Solana RPC/Jupiter; EVM JSON-RPC plus documented DEX/pool providers. | Per-chain RPC endpoints; explicit mint/address and verified decimals before quote research. | Admit candidates through identity/quality checks, then collect low-frequency read-only snapshots before quote sampling. |
+| Public markets and Robinhood | No equities/options data adapter or Robinhood adapter found. | Licensed quote/bar/calendar/corporate-action observation and official Robinhood read scopes only. | Provider health, provenance, market qualification and venue patterns | A currently documented licensed market-data provider and official Robinhood API docs. | Account access, data entitlement and allowed-use confirmation. | Compare official coverage and entitlements first; implement one read-only feed without brokerage authority. |
+| Evidence and learning | Forecast outcomes, Trench survival labels and research trials exist; no universal observation envelope joins all domains. | Versioned observations with source-time semantics, canonical identity, freshness/completeness, raw references, and forward labels after elapsed horizons. | `provenance.py`, `research_trials.py`, `outcomes.py`, `economic_ledger.py`, `purged_walkforward.py` | Immutable provider records plus later on-chain or official resolution facts. | Versioned schemas, declared horizons and source quality rules. | Add an adapter bridge from pair observations into one predeclared forward-label cohort; never use future values as features. |
+| Operations and resource costs | Current console exposes live capital, venue, runtime and research state; API/model/data cost evidence is fragmented. Snapshot replication is failing with `ENOSPC`. | Clear source health, collection spend, experiment maturity and stable persisted state before adding panels. | `dashboard_app.py`, `console_replication.py`, `resource_control.py`, `research_allocation.py`, `bill_tracker.py` | Render/LLM/provider authoritative billing and safe request timing/rate-limit data. | Read-only billing scopes and explicit budgets. | Diagnose free space and database/sidecar sizes, restore snapshots without deleting history, then add measured cost attribution. |
+| Execution and promotion | Deterministic policy/gateway exist; the hosted agent-wallet signer remains disabled. | Evidence-earned research→paper→eligibility transitions with separate explicit human authority for live execution. | `execution_gateway.py`, `wallet_policy.py`, `wallet_signer_process.py`, `agent_wallet.py` | Independently reconciled provider receipts and realized costs. | Separate bounded agent wallet and explicit owner authority if ever considered. | Preserve fail-closed behavior; do not enable live execution in discovery work. |
+
+The hosted DEX discovery flag is explicitly disabled in the Blueprint until the
+console has enough measured free space to persist and replace snapshots safely.
+No discovered asset is promoted automatically.
 
 **Historical audit basis:** repository at `103d0854bc3b2ad8777e5b0277d95c75ff457b68`
 and Render worker/console logs observed on 2026-10-01
@@ -35,7 +50,7 @@ not inferred from local configuration. This is a capability audit, not an
 execution authorization. Unresolved states are called out rather than inferred
 from repository configuration.
 
-## Capability and gap matrix
+## Historical capability and gap matrix (runtime status superseded above)
 
 | Capability | Current | Target | Existing code to reuse | Data source | Configuration needed | Next safe implementation |
 | --- | --- | --- | --- | --- | --- | --- |

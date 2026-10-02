@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -768,13 +769,39 @@ def _log_snapshot_storage_failure(stage: str, exc: Exception) -> None:
     """Log snapshot failure class and errno only; never exception text or content."""
     error_number = exc.errno if isinstance(exc, OSError) else None
     error_name = errno.errorcode.get(error_number) if error_number is not None else None
+    disk_total = disk_free = replica_bytes = state_bytes = temp_snapshot_bytes = None
+    if error_number == errno.ENOSPC:
+        try:
+            replica = Path(_db_path()).resolve()
+            usage = shutil.disk_usage(replica.parent)
+            disk_total, disk_free = usage.total, usage.free
+            state = Path(_console_state_db_path()).resolve()
+            replica_bytes = _file_size_or_none(replica)
+            state_bytes = _file_size_or_none(state)
+            temp_snapshot_bytes = sum(
+                size for item in replica.parent.iterdir()
+                if item.name.startswith("tmp") and item.suffix in {".sqlite3", ".gz"}
+                and (size := _file_size_or_none(item)) is not None
+            )
+        except OSError:
+            # Storage diagnostics are best-effort and must not mask the original failure.
+            pass
     _log.error(
         "Worker snapshot persistence failed stage=%s exception_type=%s errno=%s errno_name=%s "
-        "sqlite_error_code=%s sqlite_error_name=%s",
+        "sqlite_error_code=%s sqlite_error_name=%s disk_total_bytes=%s disk_free_bytes=%s "
+        "replica_bytes=%s console_state_bytes=%s temp_snapshot_bytes=%s",
         stage, type(exc).__name__, error_number, error_name or "unknown",
         sqlite_error_fields(exc).get("sqlite_error_code"),
         sqlite_error_fields(exc).get("sqlite_error_name"),
+        disk_total, disk_free, replica_bytes, state_bytes, temp_snapshot_bytes,
     )
+
+
+def _file_size_or_none(path: Path) -> int | None:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
 
 
 async def _decompress_snapshot_to_file(request: Request, directory: Path) -> tuple[str, int]:

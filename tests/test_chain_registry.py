@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from noema.chain_registry import load_evm_chains
+from noema.chain_registry import load_evm_chains, load_network_registry, resolve_provider_network
 
 
 def test_registry_keeps_existing_network_defaults_and_never_exposes_rpc_urls():
@@ -65,3 +65,43 @@ def test_registry_discovers_rpc_ids_and_preserves_legacy_rpc_fallbacks():
 def test_registry_rejects_malformed_or_unsafe_metadata(metadata):
     with pytest.raises((TypeError, ValueError)):
         load_evm_chains({"NOEMA_EVM_CHAIN_REGISTRY_JSON": metadata})
+
+
+def test_network_registry_represents_evm_solana_and_bitcoin_without_authority():
+    records = {row.canonical_network_id: row for row in load_network_registry({})}
+    assert records["eip155:1"].chain_family == "evm"
+    assert records["eip155:8453"].provider_aliases == ("base",)
+    assert records["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"].provider_aliases == ("solana",)
+    assert records["bip122:000000000019d6689c085ae165831e93"].chain_family == "utxo"
+    assert records["bip122:000000000019d6689c085ae165831e93"].provider == "unconfigured"
+    assert all(row.execution_authority_state == "disabled" for row in records.values())
+
+
+def test_network_registry_resolves_source_aliases_and_explicit_future_networks():
+    configured = {
+        "NOEMA_ADDITIONAL_NETWORKS_JSON": json.dumps([{
+            "canonical_network_id": "eip155:999999",
+            "chain_family": "evm",
+            "name": "future-evm",
+            "native_symbol": "ETH",
+            "provider_aliases": ["future-chain"],
+        }]),
+    }
+    assert resolve_provider_network("bsc", {}).canonical_network_id == "eip155:56"
+    future = resolve_provider_network("future-chain", configured)
+    assert future is not None
+    assert future.canonical_network_id == "eip155:999999"
+    assert future.provider == "unconfigured"
+    assert "rpc_endpoint" not in future.public_record()
+
+
+@pytest.mark.parametrize("metadata", [
+    "not-json",
+    json.dumps([{"canonical_network_id": "eip155:9", "chain_family": "evm",
+                "name": "bad", "provider_aliases": ["base"]}]),
+    json.dumps([{"canonical_network_id": "eip155:9", "chain_family": "evm",
+                "name": "new-net", "provider_aliases": ["unsafe alias"]}]),
+])
+def test_network_registry_rejects_malformed_or_conflicting_additional_networks(metadata):
+    with pytest.raises((TypeError, ValueError)):
+        load_network_registry({"NOEMA_ADDITIONAL_NETWORKS_JSON": metadata})

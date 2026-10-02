@@ -35,6 +35,16 @@ services:
         value: 3600
       - key: NOEMA_AGENT_MAX_OUTCOMES_PER_SYNC
         value: 500
+      # Enable only after console snapshot replication has recovered from the
+      # currently observed full-disk condition. Discovery never grants authority.
+      - key: NOEMA_MARKET_DISCOVERY_ENABLED
+        value: "0"
+      - key: NOEMA_MARKET_DISCOVERY_INTERVAL_SECONDS
+        value: 900
+      - key: NOEMA_MARKET_DISCOVERY_TOKEN_LIMIT
+        value: 8
+      - key: NOEMA_MARKET_DISCOVERY_PAIR_LIMIT_PER_TOKEN
+        value: 5
       # Enable only the allowlisted offline research workers. Their per-run
       # snapshot, runtime and daily limits are explicit; model cognition, MCP
       # network research and all financial execution remain separately gated.
@@ -91,6 +101,8 @@ services:
       - key: NOEMA_EVM_RPC_URL_43114
         sync: false
       - key: NOEMA_EVM_CHAIN_REGISTRY_JSON
+        sync: false
+      - key: NOEMA_ADDITIONAL_NETWORKS_JSON
         sync: false
       - key: NOEMA_BITCOIN_EXPLORER_URL
         sync: false
@@ -228,6 +240,8 @@ services:
       - key: NOEMA_EVM_RPC_URL_43114
         sync: false
       - key: NOEMA_EVM_CHAIN_REGISTRY_JSON
+        sync: false
+      - key: NOEMA_ADDITIONAL_NETWORKS_JSON
         sync: false
       - key: NOEMA_BITCOIN_EXPLORER_URL
         sync: false
