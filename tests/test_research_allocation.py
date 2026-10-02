@@ -59,6 +59,30 @@ def test_restart_uses_persisted_cycle_phase() -> None:
     assert quotas(allocation, 7) == quotas(allocation, 7)
 
 
+def test_history_validation_probe_survives_zero_adaptive_attention() -> None:
+    allocation = plan()
+    zero_history_attention = replace(
+        allocation,
+        idle_fraction=0.85,
+        allocations=(
+            replace(allocation.allocations[0], attention_fraction=0.0),
+            allocation.allocations[1],
+        ),
+    )
+    result = quotas(zero_history_attention)
+    assert result.kalshi_markets == 0
+    assert result.kalshi_event_checks == 1
+
+
+def test_quarantined_history_specialist_receives_no_validation_probe() -> None:
+    allocation = allocate_specialist_attention([
+        profile("kalshi-history", "prediction_markets", SpecialistState.QUARANTINED),
+        profile("trench-1", "solana_new_tokens", SpecialistState.SHADOW),
+    ])
+    result = quotas(allocation)
+    assert result.kalshi_event_checks == 0
+
+
 def test_all_quarantined_specialists_have_no_discretionary_work() -> None:
     allocation = allocate_specialist_attention([
         profile("kalshi-history", "prediction_markets", SpecialistState.QUARANTINED),
