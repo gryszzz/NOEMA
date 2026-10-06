@@ -43,3 +43,21 @@ repository explicitly reserves the StarNet name, logo, station artwork, and spri
 4. **Handoffs are literal.** Specialist-to-specialist paths are rendered only from persisted handoffs.
 5. **Replay is time-honest.** Later state cannot leak into an earlier replay frame.
 6. **The habitat is replaceable.** Spatial layout is pure and separate from the runtime model.
+
+
+## Phase 2 inhabitants
+
+The second habitat layer adds presentation for entities that already exist in the canonical
+world model:
+
+- specialist agents render as small NOEMA-native inhabitants rather than anonymous points;
+- active-state indicators are derived from recorded specialist/mission state;
+- room/deck workstations are decorative fixtures only and never imply a capability grant;
+- handoff pulses animate only current persisted handoffs in an active state such as requested,
+  running, claimed, waiting, or active;
+- completed handoffs remain static and historical replay never animates them;
+- the Evidence Vault output shelf lists only recorded evidence, experiments, lessons, and
+  immutable forecasts. It deliberately does not claim that a deliverable or file exists.
+
+Reduced-motion preference disables handoff motion. All inhabitant layout and activity
+classification helpers are deterministic and separately unit tested.
