@@ -59,3 +59,16 @@ badges are evidence labels, not animation state:
 Recent persisted handoffs may render a single one-way transfer marker for 90 seconds from the
 recorded handoff timestamp. The marker never loops, does not appear for unrelated links, and is
 disabled as live motion during historical replay.
+
+
+## Runtime-backed workstations
+
+Canonical non-agent entities now receive presentation-only workstation archetypes. A provider can
+look like a cognition terminal, a market like a market console, a mission like a command table,
+a wallet like a treasury vault, the deterministic execution gateway like gateway hardware, and
+research/evidence records like benches or archives.
+
+The archetype is **not** an operational claim. Its stroke/status still comes from the canonical
+runtime state. A rendered gateway does not imply execution authority; a rendered wallet does not
+imply signing; a rendered provider does not imply reachability; a rendered market console does
+not imply executable liquidity.
