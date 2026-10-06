@@ -39,7 +39,7 @@ function scoreFor(node, stage) {
     const needle = normalized(term);
     if (needle && corpus.includes(needle)) score += needle.includes(' ') ? 5 : 3;
   }
-  if (node.stateKind === 'healthy') score += 1;
+  if (score > 0 && node.stateKind === 'healthy') score += 1;
   return score;
 }
 
