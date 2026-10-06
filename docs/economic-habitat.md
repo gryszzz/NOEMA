@@ -91,3 +91,35 @@ A deliverable/archive object is created only when a mission is `passed` or `comp
 persisted `result_json` explicitly records a non-false `deliverable_produced` value. The object
 records whether `delivery_tested=true` was also observed. It never implies a downloadable file,
 published artifact, customer delivery, revenue, or economic value unless separate evidence exists.
+
+
+## Phase 3: Autonomous Desk
+
+The Autonomous Desk turns NOEMA's existing specialist registry, mission assignments, handoffs, and
+deterministic gateway into a bounded desk-style workflow surface.
+
+The desk uses eight presentation roles:
+
+1. **Chief** — the persistent NOEMA identity; coordination is shown separately from execution.
+2. **Scout** — discovery / scan / trench-like specialists when persisted metadata supports the role.
+3. **Map / Context** — world-intelligence or context specialists when such an entity is actually registered.
+4. **Vet** — evidence critics, validators, or quality reviewers.
+5. **Odds** — forecast, quant, probability, or prediction specialists.
+6. **Size** — allocation / budget / capital-sizing specialists.
+7. **Execution** — always the deterministic execution-gateway projection, never an inferred agent.
+8. **Risk / Exit** — risk or exit specialists when registered.
+
+Specialist-to-seat mapping is presentation-only and is derived from persisted specialist
+name/family/capability metadata. A seat with no defensible match remains **VACANT / UNBOUND**.
+Binding a seat never creates a capability, changes a specialist's mission, enables a wallet,
+changes execution policy, or grants order authority. Seat mapping is intentionally conservative:
+ambiguous specialist metadata leaves the role vacant rather than guessing.
+
+The Active Work Packets view is built only from persisted active missions, exact assigned-specialist
+links, and persisted handoffs. The Shift Tape is a bounded newest-first view of the canonical event
+timeline. Historical replay therefore changes the desk using the same time-honest world model.
+
+This design is inspired by the general operating principle that a multi-agent system is easier to
+audit when each role has one bounded responsibility and work is explicitly handed to the next role.
+Reported performance claims from external examples are not treated as evidence for NOEMA's expected
+returns or strategy quality.
