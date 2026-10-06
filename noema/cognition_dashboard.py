@@ -18,22 +18,6 @@ from .openai_config import OpenAIConfig
 from .research_queue import ResearchQueueStore
 
 
-def _health(url: str) -> dict[str, Any]:
-    """Read local specialist health without returning response bodies or secrets."""
-    try:
-        response = httpx.get(url, timeout=1.5, follow_redirects=False)
-        if response.status_code != 200:
-            return {"status": "unhealthy", "http_status": response.status_code}
-        payload = response.json()
-        if not isinstance(payload, dict):
-            return {"status": "invalid_response"}
-        return {"status": "healthy", **{
-            key: str(payload[key])[:120] for key in ("model", "ok") if key in payload
-        }}
-    except (httpx.HTTPError, ValueError):
-        return {"status": "unavailable"}
-
-
 def _runtime_providers(config: Any) -> dict[str, Any]:
     local = LocalCognitionConfig.from_env()
     try:
@@ -101,14 +85,6 @@ def _runtime_providers(config: Any) -> dict[str, Any]:
         local_status = {"status": "unavailable", "endpoint": local.endpoint,
                         "selected_model": local.model, "models": []}
 
-    services = {}
-    for name, variable, default in (
-        ("chronos", "NOEMA_CHRONOS_URL", "http://127.0.0.1:8011"),
-        ("finbert", "NOEMA_FINBERT_URL", "http://127.0.0.1:8012"),
-    ):
-        base = os.getenv(variable, default).rstrip("/")
-        services[name] = {"endpoint": base, **_health(base + "/health")}
-
     openai_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
     openai = OpenAIConfig.from_env()
     groq_key = bool(os.getenv("GROQ_API_KEY", "").strip())
@@ -167,14 +143,10 @@ def _runtime_providers(config: Any) -> dict[str, Any]:
                  "credential_present": groq_key},
         "cloudflare_workers_ai": cloudflare_health,
     }
-    specialists_status = "healthy" if any(
-        item.get("status") == "healthy" for item in services.values()
-    ) else "unavailable"
     hosted_status = "configured" if any(
         item.get("credential_present") for item in hosted.values()
     ) else "credential_missing"
     return {"local_model_runner": local_status,
-            "specialists": {"status": specialists_status, **services},
             "hosted_providers": {"status": hosted_status, **hosted}}
 
 
@@ -184,7 +156,6 @@ def build_provider_health() -> dict[str, Any]:
     runtime = _runtime_providers(config)
     hosted = runtime["hosted_providers"]
     local = runtime["local_model_runner"]
-    services = runtime["specialists"]
     groq = hosted.get("groq", {"status": "not_configured", "credential_present": False})
     return {
         "configured_provider": cognition_provider_name(config),
@@ -209,8 +180,6 @@ def build_provider_health() -> dict[str, Any]:
             "selected_model_resource_reason", "model_size_ceiling_gib",
             "selected_model_capabilities",
         )},
-        "chronos": {key: services["chronos"].get(key) for key in ("status", "model", "ok")},
-        "finbert": {key: services["finbert"].get(key) for key in ("status", "model", "ok")},
     }
 
 
