@@ -201,7 +201,7 @@
     <div id="workstation-staging" hidden>
 
     <section class="world-map" aria-labelledby="world-map-title">
-      <div class="section-title-row world-map-heading"><div><p class="eyebrow">CONNECTED CAPABILITIES</p><h2 id="world-map-title">NOEMA live topology</h2><p class="world-map-intro">Explore the recorded relationships between NOEMA, its research and its resources. Click nodes and links to inspect evidence; double-click a node to explore its local network.</p></div><span id="world-map-state">Waiting for operating snapshot</span></div>
+      <div class="section-title-row world-map-heading"><div><p class="eyebrow">LIVE ECONOMIC HABITAT · RUNTIME-BACKED</p><h2 id="world-map-title">NOEMA Economic Habitat</h2><p class="world-map-intro">Watch NOEMA's canonical agents, missions, evidence, markets and capital resources occupy one living operating world. Every visible entity and route is backed by a persisted record or current read-only observation.</p></div><span id="world-map-state">Waiting for operating snapshot</span></div>
       <nav class="topology-explorer" aria-label="Topology navigation">
         <div class="topology-navigation"><button id="world-nav-back" type="button" aria-label="Back in topology history" disabled>←</button><button id="world-nav-forward" type="button" aria-label="Forward in topology history" disabled>→</button><div id="world-breadcrumbs" class="world-breadcrumbs" aria-label="Topology path"></div></div>
         <label class="topology-search"><span class="sr-only">Search topology</span><input id="world-search" type="search" placeholder="Find an agent, mission, wallet, market…" autocomplete="off" maxlength="160"><div id="world-search-results" class="world-search-results" role="listbox" hidden></div></label>
@@ -211,7 +211,7 @@
       </nav>
       <div class="world-map-frame">
         <div id="topology-tooltip" class="topology-tooltip" role="tooltip" hidden></div>
-        <canvas id="world-map-canvas" aria-label="Interactive perspective 3D field of NOEMA agents, providers, wallets, tools and persisted work, with links based on observed configuration or recorded events" tabindex="0"></canvas>
+        <canvas id="world-map-canvas" aria-label="Interactive NOEMA Economic Habitat showing runtime-backed agents, missions, markets, evidence, providers, wallets, tools and persisted handoffs" tabindex="0"></canvas>
         <div class="world-map-hud"><span>DRAG · ORBIT</span><span>SHIFT + DRAG · PAN</span><span>SCROLL / PINCH · ZOOM</span><span>CLICK · INSPECT</span><span>DOUBLE-CLICK · DRILL</span><span>SHIFT-CLICK · PIN</span><button id="world-reset" type="button">RESET VIEW</button></div>
         <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by live checks or persisted runtime records.</p><dl id="world-inspector-facts"></dl><button id="world-inspector-drill" type="button">EXPLORE LOCAL NETWORK</button></aside>
       </div>
@@ -219,7 +219,7 @@
       <div class="world-timebar"><div class="world-time-label"><span>KNOWLEDGE REPLAY · persisted event time</span><strong id="world-time-value">Latest known state</strong></div><input id="world-time-range" type="range" min="0" max="0" value="0" aria-label="Replay persisted NOEMA mission events by time"><div class="world-time-actions"><button id="world-time-live" type="button">FOLLOW LIVE</button><span id="world-time-count">No timeline events recorded</span></div></div>
       <div id="world-event-list" class="world-event-list" aria-label="Persisted event timeline"></div>
       <div id="world-entity-list" class="world-entity-list" aria-label="Accessible list of entities in the topology"></div>
-      <details class="topology-provenance"><summary>Map sources and status legend</summary><p class="truth-note">Node positions group objects for navigation. Cognition-provider links show configured routes; venue links show live data checks; wallet links show observed network state; sub-agent links show persisted registrations; tool links show recorded invocations. Mission, session, experiment and handoff links require persisted identifiers. Wallet visibility never grants authority. Historical replay hides current-only provider and wallet state.</p></details>
+      <details class="topology-provenance"><summary>Habitat sources and truth boundary</summary><p class="truth-note">Habitat zones are spatial organization only. Cognition-provider links show configured routes; venue links show live data checks; wallet links show observed network state; specialist links show persisted registrations; tool links show recorded invocations. Mission, session, experiment and handoff routes require persisted identifiers. A visible route never grants authority. Historical replay hides current-only provider, venue, wallet and gateway state.</p></details>
     </section>
 
     <section class="mission-stage" aria-label="Current operating state and mission">

@@ -600,3 +600,33 @@ button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible,[
   .account-legend { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .pnl-axis-label { display:none; }
 }
+
+
+/* Economic Habitat v1 */
+.workstation-center .world-map {
+  background:
+    radial-gradient(circle at 50% 12%, #1f536033 0, transparent 34%),
+    linear-gradient(180deg, #101c2a 0%, #0b1420 100%);
+}
+.workstation-center .world-map-frame {
+  background:
+    linear-gradient(90deg, #4b78900a 1px, transparent 1px),
+    linear-gradient(0deg, #4b78900a 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 42%, #173a4c38, transparent 62%),
+    #08121d;
+  background-size: 28px 28px, 28px 28px, auto, auto;
+}
+.workstation-center .world-map-heading .eyebrow {
+  letter-spacing: .11em;
+}
+.world-map-frame::before {
+  content: "NOEMA // ECONOMIC HABITAT";
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  z-index: 1;
+  pointer-events: none;
+  color: #6f8ba066;
+  font: 9px/1 var(--mono);
+  letter-spacing: .12em;
+}

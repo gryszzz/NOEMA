@@ -1,3 +1,5 @@
+import { HABITAT_ZONES, HABITAT_FAR_LAYOUT, habitatZoneKey, habitatSlotPosition, habitatDeckCorners } from './world-habitat.mjs';
+
 // Lightweight navigable spatial view. All vertices and edges are projected from
 // the same bounded /api/operations snapshot rendered by the workstation.
 const esc = (value) => String(value ?? 'Unknown');
@@ -427,7 +429,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       const node = nodeById(id), cluster = node ? clusterKey(node) : null;
       if (index && cluster && cluster !== priorCluster) {
         const section = document.createElement('span'); section.className = 'world-breadcrumb-category';
-        section.textContent = ({ providers: 'Providers', agents: 'Agents', missions: 'Missions', markets: 'Markets', research: 'Research', resources: 'Resources' })[cluster] ?? cluster;
+        section.textContent = HABITAT_ZONES[cluster]?.name ?? cluster;
         crumbs.append(section);
         const slash = document.createElement('span'); slash.textContent = '/'; slash.setAttribute('aria-hidden', 'true'); crumbs.append(slash);
       }
@@ -707,20 +709,9 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
   }
   const layoutSlots = new Map();
   let hoveredId = null, hoveredEdge = null;
-  const clusters = {
-    providers: { x: -390, y: 120, z: -55, name: 'DATA & MODELS', color: '#72cfe2' },
-    agents: { x: -40, y: 205, z: -10, name: 'RESEARCH TEAM', color: '#94c5ff' },
-    missions: { x: 335, y: 155, z: 15, name: 'MISSIONS', color: '#76e0c2' },
-    markets: { x: 390, y: -160, z: 30, name: 'MARKETS & FORECASTS', color: '#c5a3f0' },
-    research: { x: -25, y: -190, z: 35, name: 'EVIDENCE & LEARNING', color: '#f1bd84' },
-    resources: { x: -395, y: -160, z: -25, name: 'RESOURCES & TOOLS', color: '#9cbadb' },
-  };
-  const farClusterLayout = {
-    providers: [.28, .20], agents: [.72, .20], missions: [.28, .50],
-    markets: [.72, .50], research: [.28, .80], resources: [.72, .80],
-  };
-  const clusterKey = (node) => ({ provider: 'providers', agent: 'agents', mission: 'missions',
-    market: 'markets', forecast: 'markets', wallet: 'resources', tool: 'resources' }[node.type] ?? 'research');
+  const clusters = HABITAT_ZONES;
+  const farClusterLayout = HABITAT_FAR_LAYOUT;
+  const clusterKey = habitatZoneKey;
   function draw() {
     const rect = canvas.getBoundingClientRect(); if (!rect.width || !rect.height) return;
     const width = rect.width, height = rect.height;
@@ -750,11 +741,11 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
           let slot = 0; while (used.has(slot)) slot++;
           layoutSlots.set(node.id, slot); used.add(slot);
         }
-        const slot = layoutSlots.get(node.id), angle = slot * 2.399963;
-        const radius = 29 * Math.sqrt(slot);
-        node.x = center.x + Math.cos(angle) * radius;
-        node.y = center.y + Math.sin(angle) * radius * .8;
-        node.z = center.z + (slot % 3) * 9;
+        const slot = layoutSlots.get(node.id);
+        const point = habitatSlotPosition(key, slot);
+        node.x = point.x;
+        node.y = point.y;
+        node.z = point.z;
       }
     }
     if (core) { core.x = 0; core.y = 0; core.z = 0; }
@@ -779,7 +770,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         : project(c, width, height, controls.camera);
       const radius = Math.max(52, 29 * Math.sqrt(group.length) + 32) * center.scale;
       if (level === 'far') {
-        const compactName = ({ providers: 'DATA & MODELS', agents: 'AGENTS', missions: 'MISSIONS', markets: 'MARKETS', research: 'RESEARCH', resources: 'RESOURCES' })[key];
+        const compactName = c.shortName ?? c.name;
         const title = `${compactName} · ${group.length}`;
         ctx.font = '500 12px ui-monospace, monospace';
         const pillWidth = Math.min(width * .44, Math.max(118, ctx.measureText(title).width + 24));
@@ -790,15 +781,27 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         hitClusters.push({ key, x, y, w: pillWidth, h: pillHeight });
         continue;
       }
-      ctx.beginPath(); ctx.ellipse(center.x, center.y, radius + 15, radius * .8 + 15, 0, 0, Math.PI * 2);
-      ctx.fillStyle = `${c.color}06`; ctx.fill();
-      ctx.strokeStyle = `${c.color}25`; ctx.lineWidth = 1; ctx.setLineDash([3, 5]); ctx.stroke(); ctx.setLineDash([]);
+      const deck = habitatDeckCorners(key, group.length).map((point) => project(point, width, height, controls.camera));
+      ctx.beginPath(); ctx.moveTo(deck[0].x, deck[0].y);
+      for (const point of deck.slice(1)) ctx.lineTo(point.x, point.y);
+      ctx.closePath();
+      ctx.fillStyle = `${c.color}0b`; ctx.fill();
+      ctx.strokeStyle = `${c.color}38`; ctx.lineWidth = 1.2; ctx.setLineDash([4, 5]); ctx.stroke(); ctx.setLineDash([]);
+      const backLeft = deck[0], backRight = deck[1];
+      ctx.beginPath(); ctx.moveTo(backLeft.x, backLeft.y); ctx.lineTo(backLeft.x, backLeft.y - 8);
+      ctx.lineTo(backRight.x, backRight.y - 8); ctx.lineTo(backRight.x, backRight.y);
+      ctx.strokeStyle = `${c.color}25`; ctx.stroke();
       if (width > 500) {
         const label = `${c.name}  ${group.length}`;
-        ctx.font = '10px ui-monospace, monospace'; ctx.fillStyle = c.color;
-        const w = ctx.measureText(label).width, x = center.x - w / 2, y = center.y - radius * .8 - 24;
-        if (x >= 8 && x + w < width - 8 && y > 56 && y < height - 12) {
-          ctx.fillText(label, x, y); occupied.push({ x: x - 3, y: y - 12, w: w + 6, h: 18 });
+        const purpose = c.purpose ?? '';
+        ctx.font = '600 10px ui-monospace, monospace'; ctx.fillStyle = c.color;
+        const w = Math.max(ctx.measureText(label).width, ctx.measureText(purpose).width), x = center.x - w / 2;
+        const y = Math.min(...deck.map((point) => point.y)) - 25;
+        if (x >= 8 && x + w < width - 8 && y > 64 && y < height - 28) {
+          ctx.fillText(label, x, y);
+          ctx.font = '9px ui-monospace, monospace'; ctx.fillStyle = '#89a7bd';
+          ctx.fillText(purpose, x, y + 13);
+          occupied.push({ x: x - 4, y: y - 12, w: w + 8, h: 30 });
         }
       }
     }
