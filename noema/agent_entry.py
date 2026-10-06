@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .agent_config import AgentConfig
 from .agent_runtime import run_agent
+from .durable_mirror import sync_critical_state
 from .local_env import load_local_env
 from .storage_recovery import recover_storage
 
@@ -60,6 +61,14 @@ async def _wait_for_storage(config: AgentConfig) -> None:
     while True:
         report = await asyncio.to_thread(recover_storage, config.db_path, role="worker")
         print(json.dumps({"event": "storage_recovery", **report.safe_fields()}, sort_keys=True), flush=True)
+        try:
+            mirror = await sync_critical_state(config.db_path)
+        except Exception as exc:  # noqa: BLE001 - emergency mirror must never hide storage status.
+            mirror = {"status": "unavailable", "error_type": type(exc).__name__}
+        print(json.dumps(
+            {"event": "storage_emergency_durable_mirror", **mirror},
+            sort_keys=True,
+        ), flush=True)
         if report.safe_to_write:
             return
         await asyncio.sleep(retry_seconds)

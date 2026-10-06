@@ -32,6 +32,7 @@ from .config import kalshi_production_read_only_config
 from .console_replication import publish_console_snapshot
 from .cross_venue_experiment import mature_paper_pairs
 from .diagnostics import kalshi_runtime_credential_diagnostic
+from .durable_mirror import sync_critical_state
 from .economic_dashboard import build_economic_overview
 from .economic_investigations import advance_current_period_investigation
 from .economic_ledger import EconomicLedger
@@ -1219,6 +1220,14 @@ async def run_agent(
                     KeyError, TypeError) as exc:
                 _log("agent_cycle_error", error=type(exc).__name__, cycle_id=cycle_id,
                      **sqlite_error_fields(exc))
+            try:
+                mirror_status = await sync_critical_state(config.db_path)
+            except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError, TypeError) as exc:
+                mirror_status = {
+                    "status": "unavailable",
+                    "error_type": type(exc).__name__,
+                }
+            _log("agent_durable_mirror", cycle_id=cycle_id, **mirror_status)
             try:
                 async with snapshot_lock:
                     snapshot_status = await publish_console_snapshot(config.db_path)

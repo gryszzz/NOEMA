@@ -15,6 +15,7 @@ from .bill_tracker import BillTracker
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
 from .doctor import doctor_report
+from .durable_mirror import DurableMirrorConfig, mirror_health, sync_critical_state
 from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
 from .economic_ledger import EconomicLedger
@@ -46,6 +47,22 @@ from .trench_survival_model import audit_database as audit_trench_survival
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
+
+
+async def _durable_mirror_sync(db: str, rounds: int) -> None:
+    config = DurableMirrorConfig.from_env()
+    total = 0
+    latest: dict[str, object] = {"status": "disabled_or_unconfigured"}
+    for _ in range(max(1, min(rounds, 1000))):
+        latest = await sync_critical_state(db, config)
+        total += int(latest.get("mirrored") or 0)
+        if latest.get("status") != "persisted" or int(latest.get("lagging_streams") or 0) == 0:
+            break
+    print(json.dumps({**latest, "mirrored_total": total}, sort_keys=True, default=str))
+
+
+async def _durable_mirror_health() -> None:
+    print(json.dumps(await mirror_health(), sort_keys=True, default=str))
 
 
 async def _agent_once(db: str) -> None:
@@ -315,6 +332,11 @@ def main() -> None:
     agent_once = sub.add_parser("agent-once")
     agent_once.add_argument("--db", default="data/noema.db")
 
+    durable_sync = sub.add_parser("durable-mirror-sync")
+    durable_sync.add_argument("--db", default="data/noema.db")
+    durable_sync.add_argument("--rounds", type=int, default=100)
+    sub.add_parser("durable-mirror-health")
+
     economy_init = sub.add_parser("economy-init")
     economy_init.add_argument("--db", default="data/noema.db")
     economy_init.add_argument("--capital", type=Decimal, required=True)
@@ -428,6 +450,10 @@ def main() -> None:
         print(json.dumps(build_ladder_report(args.db), sort_keys=True))
     elif args.command == "agent-once":
         asyncio.run(_agent_once(args.db))
+    elif args.command == "durable-mirror-sync":
+        asyncio.run(_durable_mirror_sync(args.db, args.rounds))
+    elif args.command == "durable-mirror-health":
+        asyncio.run(_durable_mirror_health())
     elif args.command == "economy-init":
         _economy_init(args.db, args.capital)
     elif args.command == "economy-show":
