@@ -630,3 +630,87 @@ button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible,[
   font: 9px/1 var(--mono);
   letter-spacing: .12em;
 }
+
+
+/* Economic Habitat v2 — inhabitants and recorded output shelf */
+.habitat-output-dock {
+  border-top:1px solid var(--line-soft);
+  border-bottom:1px solid var(--line-soft);
+  background:linear-gradient(180deg,#0f1c29,#0b1621);
+}
+.habitat-output-dock>header {
+  display:flex;
+  align-items:end;
+  justify-content:space-between;
+  gap:14px;
+  padding:14px 18px 10px;
+}
+.habitat-output-dock>header span {
+  display:block;
+  color:var(--mint);
+  font:9px/1.5 var(--mono);
+  letter-spacing:.1em;
+}
+.habitat-output-dock>header h3 {
+  margin:4px 0 0;
+  color:var(--paper);
+  font:500 17px/1.35 var(--body);
+}
+.habitat-output-dock>header small {
+  color:var(--faint);
+  font:10px/1.5 var(--mono);
+}
+.habitat-output-list {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+  padding:0 18px 14px;
+}
+.habitat-output-list button {
+  display:grid;
+  min-width:0;
+  gap:5px;
+  padding:10px 11px;
+  text-align:left;
+  color:var(--paper);
+  border:1px solid var(--line-soft);
+  border-radius:5px;
+  background:#132131;
+}
+.habitat-output-list button:hover,
+.habitat-output-list button:focus-visible {
+  border-color:#7194ac;
+  background:#182a3d;
+}
+.habitat-output-list button span {
+  color:var(--mint);
+  font:9px/1.2 var(--mono);
+  letter-spacing:.06em;
+}
+.habitat-output-list button strong {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font:500 12px/1.4 var(--body);
+}
+.habitat-output-list button small {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--faint);
+  font:10px/1.35 var(--body);
+}
+.habitat-output-dock>.truth-note {
+  margin:0;
+  padding:9px 18px 12px;
+  border-top:1px solid #253a4a66;
+  font-size:11px;
+}
+@media(max-width:950px) {
+  .habitat-output-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:600px) {
+  .habitat-output-dock>header { align-items:start; }
+  .habitat-output-list { grid-template-columns:1fr; padding-inline:12px; }
+  .habitat-output-dock>header,.habitat-output-dock>.truth-note { padding-inline:12px; }
+}
