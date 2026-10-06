@@ -1,4 +1,5 @@
 import { HABITAT_ZONES, HABITAT_FAR_LAYOUT, habitatZoneKey, habitatSlotPosition, habitatDeckCorners } from './world-habitat.mjs';
+import { habitatActivityState, isActiveMissionStatus, isAnimatedHandoff, habitatWorkstations, recordedOutputNodes } from './habitat-inhabitants.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
 // the same bounded /api/operations snapshot rendered by the workstation.
@@ -712,6 +713,62 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
   const clusters = HABITAT_ZONES;
   const farClusterLayout = HABITAT_FAR_LAYOUT;
   const clusterKey = habitatZoneKey;
+  let animationFrame = null;
+  function scheduleMotion(enabled) {
+    if (!enabled) {
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+      animationFrame = null;
+      return;
+    }
+    if (animationFrame !== null) return;
+    animationFrame = requestAnimationFrame(() => {
+      animationFrame = null;
+      draw();
+    });
+  }
+  function agentHasActiveMission(node) {
+    if (!node || node.type !== 'agent') return false;
+    return edges.some((edge) => edge.from === node.id && edge.type === 'assigned specialist'
+      && isActiveMissionStatus(nodeById(edge.to)?.status));
+  }
+  function drawHabitatWorkstation(point, color, width, height) {
+    const p = project(point, width, height, controls.camera);
+    const scale = Math.max(.55, Math.min(1.15, p.scale));
+    const deskW = 18 * scale, deskH = 7 * scale;
+    ctx.fillStyle = '#102130d9';
+    ctx.fillRect(p.x - deskW / 2, p.y - deskH / 2, deskW, deskH);
+    ctx.strokeStyle = `${color}52`; ctx.lineWidth = 1;
+    ctx.strokeRect(p.x - deskW / 2, p.y - deskH / 2, deskW, deskH);
+    ctx.fillStyle = `${color}55`;
+    ctx.fillRect(p.x - 5 * scale, p.y - 9 * scale, 10 * scale, 5 * scale);
+    ctx.strokeStyle = `${color}8f`;
+    ctx.strokeRect(p.x - 5 * scale, p.y - 9 * scale, 10 * scale, 5 * scale);
+  }
+  function renderOutputDock() {
+    const host = document.getElementById('habitat-output-list');
+    const state = document.getElementById('habitat-output-state');
+    if (!host || !state) return;
+    host.replaceChildren();
+    const outputs = recordedOutputNodes(nodes);
+    state.textContent = outputs.length ? `${outputs.length} recorded` : 'No recorded outputs';
+    for (const node of outputs) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.nodeId = node.id;
+      const kind = document.createElement('span'); kind.textContent = (typeNames[node.type] ?? node.type).toUpperCase();
+      const title = document.createElement('strong'); title.textContent = node.label;
+      const status = document.createElement('small'); status.textContent = node.status ?? 'recorded';
+      button.append(kind, title, status);
+      button.onclick = () => selectNode(node);
+      host.append(button);
+    }
+    if (!outputs.length) {
+      const empty = document.createElement('p');
+      empty.className = 'quiet';
+      empty.textContent = 'Evidence, experiments, lessons and immutable forecasts appear here only after they are recorded.';
+      host.append(empty);
+    }
+  }
   function draw() {
     const rect = canvas.getBoundingClientRect(); if (!rect.width || !rect.height) return;
     const width = rect.width, height = rect.height;
@@ -791,6 +848,11 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       ctx.beginPath(); ctx.moveTo(backLeft.x, backLeft.y); ctx.lineTo(backLeft.x, backLeft.y - 8);
       ctx.lineTo(backRight.x, backRight.y - 8); ctx.lineTo(backRight.x, backRight.y);
       ctx.strokeStyle = `${c.color}25`; ctx.stroke();
+      if (level === 'close') {
+        for (const workstation of habitatWorkstations(c, group.length)) {
+          drawHabitatWorkstation(workstation, c.color, width, height);
+        }
+      }
       if (width > 500) {
         const label = `${c.name}  ${group.length}`;
         const purpose = c.purpose ?? '';
@@ -823,6 +885,14 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
           y: mt ** 3 * from.y + 3 * mt ** 2 * t * control1.y + 3 * mt * t ** 2 * control2.y + t ** 3 * to.y });
       }
       edgeSegments.push({ edge, points });
+      if (!reducedMotion.matches && replayIndex === null && isAnimatedHandoff(edge, false) && points.length) {
+        const phase = (performance.now() / 1150) % 1;
+        const pulse = points[Math.min(points.length - 1, Math.floor(phase * points.length))];
+        ctx.beginPath(); ctx.arc(pulse.x, pulse.y, 4.2, 0, Math.PI * 2);
+        ctx.fillStyle = '#e6d3ff'; ctx.fill();
+        ctx.beginPath(); ctx.arc(pulse.x, pulse.y, 8.5, 0, Math.PI * 2);
+        ctx.strokeStyle = '#c5a3f066'; ctx.lineWidth = 1; ctx.stroke();
+      }
       if ((selected || edgeHovered || active) && width > 560 && level === 'close') {
         const middle = points[Math.floor(points.length / 2)];
         ctx.font = '10px ui-monospace, monospace'; ctx.fillStyle = selected ? '#f4d58c' : '#b9d5e8';
@@ -843,12 +913,37 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         ctx.beginPath(); ctx.arc(p.x, p.y, radius + 5, 0, Math.PI * 2);
         ctx.strokeStyle = `${color}a0`; ctx.stroke();
       }
-      ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = isCore ? '#182e3c' : `${color}25`; ctx.fill();
-      ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.lineWidth = selected ? 2 : 1.3; ctx.stroke();
+      const activity = node.type === 'agent' && agentHasActiveMission(node)
+        ? 'active' : habitatActivityState(node.status, node.stateKind);
       if (isCore) {
+        ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#182e3c'; ctx.fill();
+        ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.lineWidth = selected ? 2 : 1.3; ctx.stroke();
         ctx.fillStyle = '#ecfff9'; ctx.font = '500 19px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('N', p.x, p.y + 7); ctx.textAlign = 'left';
+      } else if (node.type === 'agent') {
+        const s = Math.max(.7, Math.min(1.2, p.scale));
+        ctx.fillStyle = '#0d1824';
+        ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af';
+        ctx.lineWidth = selected ? 2 : 1.2;
+        ctx.beginPath(); ctx.roundRect(p.x - 5.5 * s, p.y - 8 * s, 11 * s, 8 * s, 2 * s); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.roundRect(p.x - 6.5 * s, p.y + 1 * s, 13 * s, 9 * s, 2 * s); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.fillRect(p.x - 2.9 * s, p.y - 5.3 * s, 1.8 * s, 1.8 * s);
+        ctx.fillRect(p.x + 1.1 * s, p.y - 5.3 * s, 1.8 * s, 1.8 * s);
+        ctx.strokeStyle = `${color}aa`;
+        ctx.beginPath(); ctx.moveTo(p.x - 8 * s, p.y + 3 * s); ctx.lineTo(p.x - 11 * s, p.y + 7 * s);
+        ctx.moveTo(p.x + 8 * s, p.y + 3 * s); ctx.lineTo(p.x + 11 * s, p.y + 7 * s); ctx.stroke();
+        if (activity === 'active') {
+          ctx.beginPath(); ctx.arc(p.x + 8 * s, p.y - 9 * s, 2.5 * s, 0, Math.PI * 2);
+          ctx.fillStyle = statePalette.healthy; ctx.fill();
+        } else if (activity === 'degraded') {
+          ctx.beginPath(); ctx.arc(p.x + 8 * s, p.y - 9 * s, 2.5 * s, 0, Math.PI * 2);
+          ctx.fillStyle = statePalette.degraded; ctx.fill();
+        }
       } else {
+        ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = `${color}25`; ctx.fill();
+        ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.lineWidth = selected ? 2 : 1.3; ctx.stroke();
         ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2, radius * .38), 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
       }
       ctx.restore();
@@ -894,6 +989,9 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       ? `${hitClusters.length} clusters · ${visible.length} entities · far detail · ${replayIndex === null ? 'current view' : 'historical replay'}`
       : `${zoomVisible.length}/${nodes.length} entities · ${renderEdges.length} links · ${level} detail · ${replayIndex === null ? 'current view' : 'historical replay'}`;
     state.title = `Records ${freshness.operations ?? 'unknown'} · providers ${freshness.providers ?? 'unknown'} · venues ${freshness.venues ?? 'unknown'} · wallets ${freshness.wallets ?? 'unknown'}`;
+    const moving = !reducedMotion.matches && replayIndex === null
+      && renderEdges.some((edge) => isAnimatedHandoff(edge, false));
+    scheduleMotion(moving);
   }
   function setTime(index) {
     replayIndex = index;
@@ -923,6 +1021,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       eventList.append(button);
     }
     renderEntityList();
+    renderOutputDock();
     const legend = document.getElementById('world-type-legend');
     legend.replaceChildren();
     const typeHeading = document.createElement('strong'); typeHeading.textContent = 'TYPE'; legend.append(typeHeading);
@@ -1080,6 +1179,10 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
   new ResizeObserver(resize).observe(canvas);
   window.addEventListener('resize', resize);
   if (reducedMotion.matches) canvas.dataset.motion = 'reduced';
+  reducedMotion.addEventListener?.('change', () => {
+    canvas.dataset.motion = reducedMotion.matches ? 'reduced' : 'full';
+    draw();
+  });
   function selectEntity(selector, notify = false) {
     const node = nodes.find((candidate) => candidate.id === selector?.id
       || (selector?.market_id && candidate.record?.market_id === selector.market_id
