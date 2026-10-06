@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" role="img" aria-labelledby="title desc">
+<title id="title">NOEMA v2 mark</title>
+<desc id="desc">A violet orbital intelligence core for the NOEMA autonomous agent ecosystem.</desc>
+<defs>
+  <radialGradient id="bg" cx="50%" cy="42%" r="72%"><stop offset="0" stop-color="#15152c"/><stop offset="1" stop-color="#050610"/></radialGradient>
+  <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#efe9ff"/><stop offset=".32" stop-color="#b788ff"/><stop offset=".68" stop-color="#743cff"/><stop offset="1" stop-color="#32d6ff"/></linearGradient>
+  <radialGradient id="core" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#ffffff"/><stop offset=".12" stop-color="#d8c2ff"/><stop offset=".45" stop-color="#6d2cff"/><stop offset="1" stop-color="#11122a"/></radialGradient>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="14" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="800" height="800" rx="72" fill="url(#bg)"/>
+<circle cx="400" cy="330" r="240" fill="none" stroke="#7d46ff" stroke-opacity=".18" stroke-width="2"/>
+<circle cx="400" cy="330" r="198" fill="none" stroke="#a86cff" stroke-opacity=".28" stroke-width="2" stroke-dasharray="8 12"/>
+<ellipse cx="400" cy="330" rx="285" ry="92" fill="none" stroke="url(#violet)" stroke-width="8" stroke-opacity=".72" transform="rotate(-18 400 330)" filter="url(#glow)"/>
+<ellipse cx="400" cy="330" rx="285" ry="92" fill="none" stroke="url(#violet)" stroke-width="5" stroke-opacity=".54" transform="rotate(22 400 330)"/>
+<path d="M400 102 L518 230 L470 312 L400 250 L330 312 L282 230 Z" fill="none" stroke="url(#violet)" stroke-width="18" stroke-linejoin="round"/>
+<path d="M282 430 L330 348 L400 410 L470 348 L518 430 L400 558 Z" fill="none" stroke="url(#violet)" stroke-width="18" stroke-linejoin="round"/>
+<circle cx="400" cy="330" r="112" fill="url(#core)" stroke="#cab1ff" stroke-width="6" filter="url(#glow)"/>
+<path d="M400 255 L414 312 L472 330 L414 348 L400 405 L386 348 L328 330 L386 312 Z" fill="#ffffff" opacity=".94" filter="url(#glow)"/>
+<g fill="#c9b4ff">
+  <circle cx="400" cy="90" r="9"/><circle cx="636" cy="330" r="9"/><circle cx="400" cy="570" r="9"/><circle cx="164" cy="330" r="9"/>
+</g>
+<g font-family="Arial, Helvetica, sans-serif" text-anchor="middle">
+  <text x="400" y="682" fill="#f4f1ff" font-size="92" font-weight="700" letter-spacing="16">NOEMA</text>
+  <text x="400" y="735" fill="#9f8fd1" font-size="18" letter-spacing="8">AUTONOMOUS AGENT ECOSYSTEM</text>
+</g>
+</svg>
