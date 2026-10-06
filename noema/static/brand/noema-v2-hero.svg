@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+<title id="title">NOEMA v2 README hero</title>
+<desc id="desc">NOEMA autonomous agent ecosystem, economic habitat, autonomous desk, and fail-closed execution architecture.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#050711"/><stop offset=".58" stop-color="#0b0b1c"/><stop offset="1" stop-color="#09051a"/></linearGradient>
+  <linearGradient id="v" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f4efff"/><stop offset=".25" stop-color="#bf98ff"/><stop offset=".68" stop-color="#793dff"/><stop offset="1" stop-color="#39d9ff"/></linearGradient>
+  <radialGradient id="core" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fff"/><stop offset=".12" stop-color="#d8c4ff"/><stop offset=".52" stop-color="#6730ff"/><stop offset="1" stop-color="#101329"/></radialGradient>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="12" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#7a52c7" stroke-opacity=".08"/></pattern>
+</defs>
+<rect width="1600" height="900" fill="url(#bg)"/>
+<rect width="1600" height="900" fill="url(#grid)"/>
+<circle cx="1330" cy="80" r="310" fill="#5421d5" opacity=".08"/>
+<circle cx="120" cy="830" r="330" fill="#17488e" opacity=".08"/>
+<g transform="translate(170 165)">
+  <circle cx="210" cy="220" r="165" fill="none" stroke="#8b5bff" stroke-opacity=".18" stroke-width="2"/>
+  <ellipse cx="210" cy="220" rx="220" ry="66" fill="none" stroke="url(#v)" stroke-width="7" stroke-opacity=".7" transform="rotate(-20 210 220)"/>
+  <ellipse cx="210" cy="220" rx="220" ry="66" fill="none" stroke="url(#v)" stroke-width="4" stroke-opacity=".52" transform="rotate(22 210 220)"/>
+  <path d="M210 70 L300 166 L264 226 L210 182 L156 226 L120 166 Z" fill="none" stroke="url(#v)" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M120 274 L156 214 L210 258 L264 214 L300 274 L210 370 Z" fill="none" stroke="url(#v)" stroke-width="14" stroke-linejoin="round"/>
+  <circle cx="210" cy="220" r="84" fill="url(#core)" stroke="#ceb9ff" stroke-width="5" filter="url(#glow)"/>
+  <path d="M210 164 L220 207 L264 220 L220 233 L210 276 L200 233 L156 220 L200 207 Z" fill="#fff" filter="url(#glow)"/>
+</g>
+<g font-family="Arial, Helvetica, sans-serif">
+  <text x="610" y="205" fill="#a989ff" font-size="21" letter-spacing="11">EXPONET LABS</text>
+  <text x="610" y="315" fill="#f5f2ff" font-size="112" font-weight="700" letter-spacing="18">NOEMA</text>
+  <text x="614" y="365" fill="#b9aee0" font-size="24" letter-spacing="9">AUTONOMOUS AGENT ECOSYSTEM</text>
+  <text x="614" y="432" fill="#d4cbea" font-size="22" letter-spacing="4">OBSERVE  →  REASON  →  VERIFY  →  ACT</text>
+  <text x="614" y="486" fill="#81759d" font-size="18">Evidence-first research, persistent specialists, bounded machine action.</text>
+</g>
+<g font-family="Arial, Helvetica, sans-serif" font-size="18">
+  <g transform="translate(110 610)">
+    <rect width="198" height="94" rx="14" fill="#0f1424" stroke="#7044ce"/><text x="18" y="34" fill="#a989ff" font-size="14" letter-spacing="3">HABITAT</text><text x="18" y="66" fill="#f2efff" font-weight="700">Economic Habitat</text>
+  </g>
+  <g transform="translate(324 610)">
+    <rect width="198" height="94" rx="14" fill="#0f1424" stroke="#7044ce"/><text x="18" y="34" fill="#a989ff" font-size="14" letter-spacing="3">DESK</text><text x="18" y="66" fill="#f2efff" font-weight="700">Autonomous Desk</text>
+  </g>
+  <g transform="translate(538 610)">
+    <rect width="198" height="94" rx="14" fill="#0f1424" stroke="#7044ce"/><text x="18" y="34" fill="#a989ff" font-size="14" letter-spacing="3">VENUES</text><text x="18" y="66" fill="#f2efff" font-weight="700">Prediction Markets</text>
+  </g>
+  <g transform="translate(752 610)">
+    <rect width="198" height="94" rx="14" fill="#0f1424" stroke="#7044ce"/><text x="18" y="34" fill="#a989ff" font-size="14" letter-spacing="3">WEB3</text><text x="18" y="66" fill="#f2efff" font-weight="700">Trench Research</text>
+  </g>
+  <g transform="translate(966 610)">
+    <rect width="198" height="94" rx="14" fill="#0f1424" stroke="#7044ce"/><text x="18" y="34" fill="#a989ff" font-size="14" letter-spacing="3">WORLD</text><text x="18" y="66" fill="#f2efff" font-weight="700">Meridian Bridge</text>
+  </g>
+  <g transform="translate(1180 610)">
+    <rect width="198" height="94" rx="14" fill="#0f1424" stroke="#7044ce"/><text x="18" y="34" fill="#a989ff" font-size="14" letter-spacing="3">GATEWAY</text><text x="18" y="66" fill="#f2efff" font-weight="700">Fail-closed</text>
+  </g>
+</g>
+<g font-family="Arial, Helvetica, sans-serif">
+  <rect x="110" y="755" width="1268" height="70" rx="14" fill="#0b101e" stroke="#2f2947"/>
+  <circle cx="146" cy="790" r="6" fill="#57e8c3"/>
+  <text x="166" y="797" fill="#cfc7df" font-size="18" letter-spacing="2">REALITY-FIRST</text>
+  <circle cx="406" cy="790" r="6" fill="#ff8f7a"/>
+  <text x="426" y="797" fill="#cfc7df" font-size="18" letter-spacing="2">FAIL-CLOSED AUTHORITY</text>
+  <circle cx="800" cy="790" r="6" fill="#a989ff"/>
+  <text x="820" y="797" fill="#cfc7df" font-size="18" letter-spacing="2">PERSISTENT AUDIT</text>
+  <circle cx="1106" cy="790" r="6" fill="#4bd7ff"/>
+  <text x="1126" y="797" fill="#cfc7df" font-size="18" letter-spacing="2">UNKNOWN STAYS UNKNOWN</text>
+</g>
+</svg>
