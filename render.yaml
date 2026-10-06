@@ -29,6 +29,12 @@ services:
         value: "1"
       - key: NOEMA_DB_PATH
         value: /opt/render/project/src/data/noema.db
+      - key: NOEMA_DURABLE_MIRROR_ENABLED
+        value: "1"
+      - key: NOEMA_DURABLE_MIRROR_URL
+        value: https://nbyjowulqhwqczyvcvcb.supabase.co/functions/v1/noema-durable-mirror
+      - key: NOEMA_DURABLE_MIRROR_TOKEN
+        sync: false
       - key: NOEMA_AGENT_CYCLE_SECONDS
         value: 300
       - key: NOEMA_AGENT_OUTCOME_SYNC_SECONDS
@@ -199,6 +205,8 @@ services:
         value: /opt/render/project/src/console-data/noema-console-state.db
       - key: NOEMA_RUNTIME_SOURCE
         value: worker-sqlite-replica
+      # The worker owns durable Supabase mirroring. The console remains read-only
+      # with respect to the durable anchor and never receives the mirror token.
       - key: NOEMA_CONSOLE_USERNAME
         value: noema-owner
       - key: NOEMA_CONSOLE_PASSWORD
