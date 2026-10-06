@@ -54,7 +54,7 @@ class DurableMirrorConfig:
     rows_per_stream: int = 200
 
     @classmethod
-    def from_env(cls) -> "DurableMirrorConfig":
+    def from_env(cls) -> DurableMirrorConfig:
         url = os.getenv("NOEMA_DURABLE_MIRROR_URL", "").strip()
         token = os.getenv("NOEMA_DURABLE_MIRROR_TOKEN", "").strip()
         enabled = os.getenv("NOEMA_DURABLE_MIRROR_ENABLED", "1").strip().lower() not in {
