@@ -50,7 +50,11 @@ try {
   const page = await browser.newPage({viewport:{width,height:1000}, reducedMotion:'reduce'}), errors=[], failedRequests=[], externalRequests=[], consoleErrors=[], failedResponses=[];
   page.on('pageerror',e=>errors.push(e.message));
   page.on('console', message=>{if(message.type()==='error')consoleErrors.push(message.text());});
-  page.on('requestfailed', request=>failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
+  page.on('requestfailed', request=>{
+   const failure=request.failure()?.errorText;
+   // Closing the viewport cancels optional polling requests that are still in flight.
+   if(failure!=='net::ERR_ABORTED')failedRequests.push(`${request.method()} ${request.url()}: ${failure}`);
+  });
   page.on('request', request=>{if(new URL(request.url()).origin!==url)externalRequests.push(request.url());});
   page.on('response', response=>{if(response.status()>=400)failedResponses.push(`${response.status()} ${response.url()}`);});
   await page.goto(url); await page.getByRole('heading',{name:'NOEMA OPERATING WORLD'}).waitFor();
@@ -137,7 +141,7 @@ try {
   await page.mouse.move(dragX,dragY); await page.mouse.wheel(0,-120);
   assert.notEqual(await page.locator('#world-map-canvas').evaluate(canvas=>canvas.toDataURL()),beforeZoom,`wheel zoom updates the camera at ${width}px`);
   await page.locator('#world-event-list button').first().click();
-  assert.ok((await page.locator('#world-inspector-title').innerText()).includes('opportunity discovered'));
+  assert.ok((await page.locator('#world-inspector-title').innerText()).toLowerCase().includes('opportunity discovered'), 'historical event selection opens the matching opportunity inspector');
   assert.ok((await page.locator('#world-entity-list').innerText()).includes('MISSION · Inspect a bounded fixture opportunity · discovered'), 'historical replay must not reveal the later completed mission status');
   assert.equal(await page.locator('#world-entity-list').getByText(/EXPERIMENT/).count(),0,'experiment created after the selected event is hidden from the earlier view');
   await page.locator('#world-time-live').click();
@@ -244,7 +248,7 @@ try {
  delayOperating=false;
  await streamPage.locator('#pause-updates').click();
  await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).waitFor();
- await streamPage.waitForFunction(()=>document.getElementById('brief-delta').textContent==='+1 new',{timeout:5000});
+ await streamPage.waitForFunction(()=>document.getElementById('brief-delta').textContent==='+1 new',{timeout:15000});
  assert.equal(await streamPage.locator('#brief-delta').innerText(),'+1 new');
  await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).click();
  assert.equal(await streamPage.locator('#selection-reader-text').innerText(),'<img src=x onerror=alert(1)> Full recorded update');

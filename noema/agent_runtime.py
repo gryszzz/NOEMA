@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import sqlite3
+import statistics
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
@@ -469,25 +471,75 @@ def _log_cognition_gate_audit(rows, db_path: str) -> None:
         reason_counts: dict[str, int] = {}
         stale: list[dict[str, object]] = []
         fresh_by_venue: dict[str, int] = {}
+        stale_by_venue: dict[str, int] = {}
+        model_counts: dict[str, int] = {}
+        score_suppression_counts: dict[str, int] = {}
+        missing_input_counts: dict[str, int] = {}
+        edge_values: dict[str, dict[str, list[float]]] = {}
+        quote_counts = {"bid_and_ask_present": 0, "ask_present": 0, "liquidity_present": 0}
+        evidence_counts = {"with_evidence": 0, "without_evidence": 0}
+        edge_arithmetic_mismatches = 0
         eligible_count = 0
         for row in rows:
             gate = assess_cognition(row, store, policy)
             eligible_count += int(gate.eligible)
+            model_counts[row.model_version] = model_counts.get(row.model_version, 0) + 1
+            if row.attention_score is None:
+                reason = row.attention_score_suppression_reason or "score_not_computed_unknown_reason"
+                score_suppression_counts[reason] = score_suppression_counts.get(reason, 0) + 1
+            for name in row.missing_inputs:
+                missing_input_counts[name] = missing_input_counts.get(name, 0) + 1
+            quote_counts["bid_and_ask_present"] += int(row.spread is not None)
+            quote_counts["ask_present"] += int(row.yes_ask is not None)
+            quote_counts["liquidity_present"] += int(row.liquidity_usd is not None)
+            evidence_key = "with_evidence" if row.evidence_ids else "without_evidence"
+            evidence_counts[evidence_key] += 1
+            components = edge_values.setdefault(row.model_version, {
+                "raw_edge": [], "estimated_cost": [], "uncertainty_penalty": [], "robust_edge": [],
+            })
+            if not row.missing_inputs and all(math.isfinite(getattr(row, name)) for name in components):
+                expected_edge = row.raw_edge - row.estimated_cost - row.uncertainty_penalty
+                edge_arithmetic_mismatches += int(abs(row.robust_edge - expected_edge) > 1e-6)
+            for name in components:
+                value = getattr(row, name)
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    components[name].append(float(value))
             for reason in gate.reasons:
                 reason_counts[reason] = reason_counts.get(reason, 0) + 1
             if row.freshness_seconds <= policy.max_freshness_seconds:
                 fresh_by_venue[row.venue] = fresh_by_venue.get(row.venue, 0) + 1
             else:
+                stale_by_venue[row.venue] = stale_by_venue.get(row.venue, 0) + 1
                 stale.append({
                     "venue": row.venue, "market_id": row.market_id,
                     "age_seconds": round(row.freshness_seconds, 2),
                     "max_age_seconds": policy.max_freshness_seconds,
                     "captured_at": row.captured_at,
                 })
+        edge_summary = {
+            model: {
+                name: {
+                    "count": len(values),
+                    "min": round(min(values), 8) if values else None,
+                    "median": round(statistics.median(values), 8) if values else None,
+                    "max": round(max(values), 8) if values else None,
+                }
+                for name, values in components.items()
+            }
+            for model, components in edge_values.items()
+        }
         _log("agent_cognition_gate_audit", row_count=len(rows),
              eligible_count=eligible_count,
              max_freshness_seconds=policy.max_freshness_seconds,
              freshness_failing_rows=stale[:12], fresh_rows_by_venue=fresh_by_venue,
+             stale_rows_by_venue=stale_by_venue,
+             forecast_model_counts=model_counts,
+             score_suppression_reason_counts=score_suppression_counts,
+             edge_components_by_model=edge_summary,
+             edge_arithmetic_mismatches=edge_arithmetic_mismatches,
+             quote_field_coverage=quote_counts,
+             evidence_coverage=evidence_counts,
+             missing_input_counts=missing_input_counts,
              gate_reason_counts=reason_counts)
     except (sqlite3.Error, ValueError, OSError, TypeError):
         _log("agent_cognition_gate_audit", status="unavailable")
