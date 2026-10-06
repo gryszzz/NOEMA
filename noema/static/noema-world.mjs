@@ -807,12 +807,12 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       const radius = Math.max(52, 29 * Math.sqrt(group.length) + 32) * center.scale;
       if (level === 'far') {
         const compactName = c.shortName ?? c.name;
-        const title = `${compactName} · ${group.length}`;
+        const title = `${compactName} · ${group.length}${activeZones.has(key) ? ' · ACTIVE' : ''}`;
         ctx.font = '500 12px ui-monospace, monospace';
         const pillWidth = Math.min(width * .44, Math.max(118, ctx.measureText(title).width + 24));
         const pillHeight = 38, x = center.x - pillWidth / 2, y = center.y - pillHeight / 2;
         ctx.beginPath(); ctx.roundRect(x, y, pillWidth, pillHeight, 8);
-        ctx.fillStyle = '#122235ed'; ctx.fill(); ctx.strokeStyle = `${c.color}a0`; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = activeZones.has(key) ? `${c.color}1f` : '#122235ed'; ctx.fill(); ctx.strokeStyle = activeZones.has(key) ? c.color : `${c.color}a0`; ctx.lineWidth = activeZones.has(key) ? 2 : 1.5; ctx.stroke();
         ctx.fillStyle = c.color; ctx.textAlign = 'center'; ctx.fillText(title, center.x, center.y + 4); ctx.textAlign = 'left';
         hitClusters.push({ key, x, y, w: pillWidth, h: pillHeight });
         continue;
