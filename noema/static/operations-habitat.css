@@ -630,3 +630,23 @@ button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible,[
   font: 9px/1 var(--mono);
   letter-spacing: .12em;
 }
+
+
+.inhabitant-activity-legend {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:7px 12px;
+  padding:10px 18px 12px;
+  border-top:1px solid var(--line-soft);
+  background:#0b1521;
+  color:var(--muted);
+  font:10px/1.5 var(--mono);
+}
+.inhabitant-activity-legend strong {
+  color:var(--paper);
+  letter-spacing:.08em;
+}
+.inhabitant-activity-legend span {
+  white-space:nowrap;
+}

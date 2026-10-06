@@ -43,3 +43,19 @@ repository explicitly reserves the StarNet name, logo, station artwork, and spri
 4. **Handoffs are literal.** Specialist-to-specialist paths are rendered only from persisted handoffs.
 5. **Replay is time-honest.** Later state cannot leak into an earlier replay frame.
 6. **The habitat is replaceable.** Spatial layout is pure and separate from the runtime model.
+
+
+## Living inhabitants
+
+Phase 2 projects NOEMA specialists as inhabitants rather than generic graph points. Their activity
+badges are evidence labels, not animation state:
+
+- **active work** requires a canonical active specialist/mission state,
+- **receiving/sending handoff** requires a recent persisted specialist handoff,
+- **degraded** follows recorded degraded/offline/quarantined state,
+- **past activity only** means a persisted event exists but no current work is proven,
+- **unknown** means NOEMA has no evidence for a current activity claim.
+
+Recent persisted handoffs may render a single one-way transfer marker for 90 seconds from the
+recorded handoff timestamp. The marker never loops, does not appear for unrelated links, and is
+disabled as live motion during historical replay.
