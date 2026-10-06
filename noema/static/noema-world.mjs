@@ -2,6 +2,7 @@ import { HABITAT_ZONES, HABITAT_FAR_LAYOUT, habitatZoneKey, habitatSlotPosition,
 import { deriveInhabitantActivity, handoffTraversal, inhabitantGlyph } from './world-inhabitants.mjs';
 import { workstationDescriptor } from './world-workstations.mjs';
 import { deriveMissionOccupancies, deriveActiveMissionLineage, recordedDeliverable } from './world-occupancy.mjs';
+import { bindAutonomousDesk, deriveShiftPackets, deriveShiftTape } from './world-desk.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
 // the same bounded /api/operations snapshot rendered by the workstation.
@@ -723,6 +724,116 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     controls.list.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.nodeId === node.id)));
     draw();
   }
+  function renderAutonomousDesk() {
+    const seatsHost = document.getElementById('autonomous-desk-seats');
+    const routeHost = document.getElementById('autonomous-desk-route');
+    const tapeHost = document.getElementById('autonomous-desk-tape');
+    const stateHost = document.getElementById('autonomous-desk-state');
+    if (!seatsHost || !routeHost || !tapeHost || !stateHost) return;
+
+    const seats = bindAutonomousDesk(nodes, edges);
+    const packets = deriveShiftPackets(nodes, edges);
+    const tape = deriveShiftTape(timeline, 10);
+    const activeSeats = seats.filter((seat) => seat.state === 'active').length;
+    const vacantSeats = seats.filter((seat) => seat.state === 'vacant').length;
+    stateHost.textContent = `${activeSeats} active · ${vacantSeats} vacant · ${packets.length} active work packet${packets.length === 1 ? '' : 's'}`;
+
+    seatsHost.replaceChildren();
+    for (const seat of seats) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'desk-seat';
+      button.dataset.state = seat.state;
+      button.disabled = !seat.nodeId;
+      button.title = `${seat.basis}. ${seat.authority}`;
+      const stage = document.createElement('div'); stage.className = 'desk-seat-stage';
+      const label = document.createElement('span'); label.textContent = seat.label;
+      const state = document.createElement('span'); state.className = 'desk-seat-state'; state.textContent = seat.state.toUpperCase();
+      stage.append(label, state);
+      const name = document.createElement('strong'); name.textContent = seat.nodeLabel;
+      const purpose = document.createElement('p'); purpose.textContent = seat.purpose;
+      const status = document.createElement('small'); status.textContent = seat.status;
+      button.append(stage, name, purpose, status);
+      if (seat.nodeId) {
+        button.onclick = () => {
+          const node = nodeById(seat.nodeId);
+          if (!node) return;
+          hiddenTypes.clear(); hiddenStatuses.clear(); setPreset('all');
+          selectNode(node);
+        };
+      }
+      seatsHost.append(button);
+    }
+
+    routeHost.replaceChildren();
+    if (!packets.length) {
+      const empty = document.createElement('p'); empty.className = 'autonomous-empty';
+      empty.textContent = 'No active persisted mission assignment is currently moving through the desk.';
+      routeHost.append(empty);
+    } else {
+      for (const packet of packets.slice(0, 5)) {
+        const article = document.createElement('article'); article.className = 'desk-packet';
+        const head = document.createElement('div'); head.className = 'desk-packet-head';
+        const mission = document.createElement('strong'); mission.textContent = packet.missionId;
+        const status = document.createElement('span'); status.textContent = packet.status;
+        head.append(mission, status);
+        const objective = document.createElement('p'); objective.textContent = packet.objective ?? 'Objective unavailable';
+        const chain = document.createElement('div'); chain.className = 'desk-route-chain';
+        if (!packet.route.length) {
+          const empty = document.createElement('span'); empty.className = 'desk-route-empty';
+          empty.textContent = 'No persisted specialist route';
+          chain.append(empty);
+        } else {
+          packet.route.forEach((step, index) => {
+            if (index) {
+              const arrow = document.createElement('span'); arrow.className = 'desk-route-arrow'; arrow.textContent = '→';
+              chain.append(arrow);
+            }
+            const button = document.createElement('button'); button.type = 'button';
+            button.textContent = `${step.label} · ${step.relation}`;
+            button.onclick = () => {
+              const node = nodeById(step.nodeId);
+              if (node) selectNode(node);
+            };
+            chain.append(button);
+          });
+        }
+        article.append(head, objective, chain);
+        article.onclick = (event) => {
+          if (event.target.closest('button')) return;
+          const node = nodeById(packet.missionNodeId);
+          if (node) selectNode(node);
+        };
+        routeHost.append(article);
+      }
+    }
+
+    tapeHost.replaceChildren();
+    if (!tape.length) {
+      const empty = document.createElement('p'); empty.className = 'autonomous-empty';
+      empty.textContent = 'No persisted shift events loaded.';
+      tapeHost.append(empty);
+    } else {
+      for (const event of tape) {
+        const row = document.createElement(event.missionId ? 'button' : 'div');
+        if (event.missionId) row.type = 'button';
+        row.className = 'desk-tape-row';
+        const time = document.createElement('time');
+        time.textContent = new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const actor = document.createElement('strong'); actor.textContent = event.actor;
+        const title = document.createElement('span'); title.textContent = `${event.title} · ${event.status}`;
+        row.append(time, actor, title);
+        if (event.missionId) {
+          row.onclick = () => {
+            const node = nodes.find((candidate) => candidate.missionId === event.missionId && candidate.type === 'mission');
+            if (node) selectNode(node);
+          };
+        }
+        tapeHost.append(row);
+      }
+    }
+  }
+
   function resize() {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
@@ -1040,6 +1151,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       eventList.append(button);
     }
     renderEntityList();
+    renderAutonomousDesk();
     const legend = document.getElementById('world-type-legend');
     legend.replaceChildren();
     const typeHeading = document.createElement('strong'); typeHeading.textContent = 'TYPE'; legend.append(typeHeading);
