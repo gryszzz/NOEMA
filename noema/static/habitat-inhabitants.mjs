@@ -1,11 +1,18 @@
 // Pure visual-state helpers for the NOEMA Economic Habitat.
 // These helpers classify already-recorded state; they never create runtime activity.
 
-const ACTIVE_WORDS = Object.freeze(['running', 'claimed', 'waiting', 'active', 'in_progress', 'in progress']);
+const ACTIVE_MISSION_STATES = Object.freeze(['running', 'claimed', 'waiting', 'active', 'in_progress']);
+const ACTIVE_HANDOFF_STATES = Object.freeze([...ACTIVE_MISSION_STATES, 'requested']);
+
+function normalizedStates(status) {
+  const raw = String(status ?? '').toLowerCase().replaceAll('in progress', 'in_progress');
+  return raw.split(/[^a-z0-9_]+/).filter(Boolean);
+}
 
 export function habitatActivityState(status, stateKind = 'unknown') {
   const raw = String(status ?? '').toLowerCase();
-  if (ACTIVE_WORDS.some((word) => raw.includes(word))) return 'active';
+  const states = normalizedStates(status);
+  if (states.some((state) => ACTIVE_MISSION_STATES.includes(state))) return 'active';
   if (stateKind === 'degraded' || stateKind === 'offline' || raw.includes('quarantined')) return 'degraded';
   if (raw.includes('historical')) return 'historical';
   if (raw.includes('idle')) return 'idle';
@@ -15,14 +22,13 @@ export function habitatActivityState(status, stateKind = 'unknown') {
 }
 
 export function isActiveMissionStatus(status) {
-  const raw = String(status ?? '').toLowerCase();
-  return ACTIVE_WORDS.some((word) => raw.includes(word));
+  return normalizedStates(status).some((state) => ACTIVE_MISSION_STATES.includes(state));
 }
 
 export function isAnimatedHandoff(edge, replaying = false) {
   if (replaying || !edge || !String(edge.type ?? '').toLowerCase().startsWith('handoff ·')) return false;
-  const state = String(edge.type).split('·').at(-1)?.trim().toLowerCase() ?? '';
-  return ACTIVE_WORDS.includes(state);
+  const state = String(edge.type).split('·').at(-1)?.trim().toLowerCase().replaceAll('in progress', 'in_progress') ?? '';
+  return ACTIVE_HANDOFF_STATES.includes(state);
 }
 
 export function habitatWorkstations(zone, entityCount = 1) {
