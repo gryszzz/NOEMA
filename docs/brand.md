@@ -68,18 +68,29 @@ Never render a research score with the same visual authority as an observed exch
 
 ## Identity assets
 
-- [Wide repository banner](../noema/static/brand/noema-banner.png) — NOEMA wordmark,
-  core line, and the observing face. Use it as a README cover or wide header.
-- [Square face mark](../noema/static/brand/noema-face.png) — avatar and profile image.
+### NOEMA v2 — current repository identity
 
-The face is a visual identity, not a claim of personhood or independent legal
-agency. Keep the language plain: **NOEMA** is a research system with clear
-owners, data sources and operating limits.
+- [NOEMA v2 README hero](../noema/static/brand/noema-v2-hero.svg) — current wide
+  repository header. It represents the Economic Habitat, Autonomous Desk and
+  fail-closed operating philosophy without asserting live execution.
+- [NOEMA v2 orbital mark](../noema/static/brand/noema-v2-mark.svg) — current square
+  repo/social mark. The orbital core represents bounded intelligence moving through
+  explicit system boundaries.
 
-Core colors: near-black navy, slate, electric blue, cyan/teal, violet for object
-types, and a restrained amber point for uncertainty. Product status must continue
-to distinguish observations, models, research and action. Do not use the face to
-imply live trading is active.
+The v2 identity deliberately moves away from a mascot-first presentation. NOEMA
+should read as a serious autonomous-system and economic-intelligence infrastructure
+project: geometric, auditable, technical and persistent.
+
+### Legacy identity
+
+The earlier `noema-banner.png` and `noema-face.png` files remain in the repository
+for historical compatibility but are no longer the primary README identity.
+
+Core colors: near-black navy, slate, electric violet, cool white and restrained
+cyan for information. Green remains reserved for verified/healthy state, amber for
+uncertainty, and red for hard failures or disabled authority. Product status must
+continue to distinguish observations, models, research and action. Branding must
+never imply live trading is active.
 
 ## Capability graph and UI transformation brief
 
