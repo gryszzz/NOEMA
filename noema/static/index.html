@@ -216,6 +216,11 @@
         <aside class="world-inspector" aria-live="polite"><span id="world-inspector-kind">SYSTEM SNAPSHOT</span><strong id="world-inspector-title">NOEMA</strong><p id="world-inspector-detail">Entities appear here only when backed by live checks or persisted runtime records.</p><dl id="world-inspector-facts"></dl><button id="world-inspector-drill" type="button">EXPLORE LOCAL NETWORK</button></aside>
       </div>
       <details id="world-type-legend-details" class="world-type-legend-details"><summary>MAP KEY</summary><div id="world-type-legend" class="world-type-legend" role="group" aria-label="Topology type and status key"></div></details>
+      <section class="habitat-output-dock" aria-labelledby="habitat-output-title">
+        <header><div><span>EVIDENCE VAULT // RECORDED OUTPUTS</span><h3 id="habitat-output-title">Output shelf</h3></div><small id="habitat-output-state">No recorded outputs</small></header>
+        <div id="habitat-output-list" class="habitat-output-list"><p class="quiet">Recorded evidence and research outputs will appear here.</p></div>
+        <p class="truth-note">This shelf is not a simulated outbox. It lists only recorded evidence, experiments, lessons and immutable forecasts already present in NOEMA state.</p>
+      </section>
       <div class="world-timebar"><div class="world-time-label"><span>KNOWLEDGE REPLAY · persisted event time</span><strong id="world-time-value">Latest known state</strong></div><input id="world-time-range" type="range" min="0" max="0" value="0" aria-label="Replay persisted NOEMA mission events by time"><div class="world-time-actions"><button id="world-time-live" type="button">FOLLOW LIVE</button><span id="world-time-count">No timeline events recorded</span></div></div>
       <div id="world-event-list" class="world-event-list" aria-label="Persisted event timeline"></div>
       <div id="world-entity-list" class="world-entity-list" aria-label="Accessible list of entities in the topology"></div>
