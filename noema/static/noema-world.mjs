@@ -912,7 +912,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         ctx.beginPath(); ctx.roundRect(p.x - body * .5, p.y - body * .05, body, body * 1.12, body * .24);
         ctx.fillStyle = `${color}28`; ctx.fill();
         ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.stroke();
-        const glyph = node.occupancy ? '◆' : inhabitantGlyph(node.activity?.mode);
+        const glyph = node.occupancy ? 'M' : inhabitantGlyph(node.activity?.mode);
         ctx.beginPath(); ctx.arc(p.x + body * .72, p.y - body * .7, 5.5, 0, Math.PI * 2);
         ctx.fillStyle = '#0d1928'; ctx.fill(); ctx.strokeStyle = color; ctx.stroke();
         ctx.fillStyle = color; ctx.font = '600 8px ui-monospace, monospace'; ctx.textAlign = 'center';
