@@ -604,8 +604,6 @@ def test_provider_health_projection_is_storeless_and_secret_free(monkeypatch):
                                 "selected_model_resource_eligible": False,
                                 "selected_model_resource_reason": "RESOURCE LIMITED",
                                 "model_size_ceiling_gib": 1.5, "models": ["private inventory"]},
-        "specialists": {"chronos": {"status": "unavailable", "endpoint": "private"},
-                        "finbert": {"status": "healthy", "endpoint": "private"}},
     })
     result = build_provider_health()
     serialized = json.dumps(result)
@@ -615,3 +613,4 @@ def test_provider_health_projection_is_storeless_and_secret_free(monkeypatch):
     assert result["groq"] == {"status": "not_configured", "credential_present": False}
     assert result["docker_model_runner"]["selected_model_resource_eligible"] is False
     assert "must never" not in serialized and "private" not in serialized
+    assert "chronos" not in result and "finbert" not in result and "specialists" not in result

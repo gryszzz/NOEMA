@@ -382,8 +382,7 @@ def test_runtime_inventory_reports_verified_models_and_never_secret_values(monke
     assert capabilities['huggingface.co/qwen/qwen3-embedding-0.6b-gguf:Q8_0'] == ['embedding']
     assert capabilities['huggingface.co/tensorblock/qwen3-reranker'] == ['reranker_model']
     assert capabilities['docker.io/ai/moondream2:latest'] == ['chat', 'vision_model']
-    assert report['specialists']['chronos']['status'] == 'healthy'
-    assert report['specialists']['finbert']['model'] == 'verified-fixture'
+    assert 'specialists' not in report
     assert report['hosted_providers']['openai']['credential_present'] is True
     encoded = json.dumps(report)
     assert all(secret not in encoded for secret in ('do-not-return-this','also-secret','cf-secret','cf-account'))
