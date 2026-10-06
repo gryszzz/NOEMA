@@ -6,9 +6,9 @@ import shutil
 import sqlite3
 import stat
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 _DEFAULT_MIN_FREE_BYTES = 32 * 1024 * 1024
 _STALE_TEMP_AGE_SECONDS = 15 * 60
