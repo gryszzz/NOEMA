@@ -12,6 +12,7 @@ test('canonical habitat entities map to presentation-only workstation kinds', ()
   assert.equal(workstationKind({ type: 'tool', id: 'tool:execution-gateway' }), 'gateway');
   assert.equal(workstationKind({ type: 'experiment' }), 'experiment');
   assert.equal(workstationKind({ type: 'evidence' }), 'archive');
+  assert.equal(workstationKind({ type: 'deliverable' }), 'archive');
   assert.equal(workstationKind({ type: 'agent' }), null);
 });
 
