@@ -54,6 +54,7 @@ from .prediction_venues import (
 )
 from .research_state import research_trial_update_is_newer
 from .sqlite_diagnostics import sqlite_error_fields
+from .storage_recovery import recover_storage
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
@@ -79,6 +80,7 @@ _SNAPSHOT_IO_CHUNK_BYTES = 1024 * 1024
 _snapshot_install_lock = asyncio.Lock()
 _snapshot_request_sequence = 0
 _snapshot_installed_sequence = 0
+_storage_recovery_state: dict[str, object] = {"safe_to_write": True, "status": "unknown"}
 
 
 def _check_snapshot_sqlite_integrity(snapshot_path: str) -> str | None:
@@ -562,12 +564,30 @@ async def _sample_capital_history() -> None:
 
 @app.on_event("startup")
 async def start_capital_sampler() -> None:
-    global _capital_sampler_task
-    # Import console-owned rows written by the previous colocated-database
-    # version before enabling the sidecar writers. SQLite uniqueness makes
-    # concurrent web-process startup migrations idempotent.
-    _enable_console_state_wal(_console_state_db_path())
-    _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
+    global _capital_sampler_task, _storage_recovery_state
+    report = await asyncio.to_thread(
+        recover_storage,
+        _console_state_db_path(),
+        role="console",
+        additional_sqlite_paths=(_db_path(),),
+    )
+    _storage_recovery_state = {"status": "ready" if report.safe_to_write else "degraded_read_only", **report.safe_fields()}
+    _account_log.info("Console storage recovery %s", json.dumps(_storage_recovery_state, sort_keys=True))
+    if not report.safe_to_write:
+        _account_log.error("Console persistent storage below safe write floor; starting read-only")
+        return
+    try:
+        _enable_console_state_wal(_console_state_db_path())
+        _merge_account_history_into_console_state(_db_path(), _console_state_db_path())
+    except (OSError, sqlite3.Error) as exc:
+        _storage_recovery_state = {
+            "status": "degraded_read_only",
+            "safe_to_write": False,
+            "error_type": type(exc).__name__,
+            **sqlite_error_fields(exc),
+        }
+        _account_log.error("Console startup storage write failed error_type=%s", type(exc).__name__)
+        return
     sampler_enabled = _capital_history_sampler_enabled()
     key_id_present, secret_present = polymarket_us_credentials_present()
     _account_log.info(
@@ -644,10 +664,23 @@ def _worker_provider_health() -> dict[str, Any]:
 def healthz() -> dict[str, Any]:
     """Render health check; it reveals no operational data or credentials."""
     path = Path(_db_path())
+    storage_writable = bool(_storage_recovery_state.get("safe_to_write", True))
+    status = (
+        "degraded_storage_read_only"
+        if not storage_writable
+        else "ready" if path.is_file() else "awaiting_worker_snapshot"
+    )
     return {
-        "status": "ready" if path.is_file() else "awaiting_worker_snapshot",
+        "status": status,
         "database_present": path.is_file(),
+        "storage_writable": storage_writable,
     }
+
+
+@app.get("/api/storage-health")
+def storage_health() -> dict[str, object]:
+    """Secret-free storage recovery telemetry for the authenticated console."""
+    return dict(_storage_recovery_state)
 
 
 @app.get("/api/runtime")

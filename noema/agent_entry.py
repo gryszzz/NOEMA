@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import json
 import os
 import signal
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 from .agent_config import AgentConfig
 from .agent_runtime import run_agent
 from .local_env import load_local_env
+from .storage_recovery import recover_storage
 
 
 @contextmanager
@@ -53,10 +55,22 @@ def _agent_pidfile(path: Path) -> Iterator[None]:
             fcntl.flock(pidfile.fileno(), fcntl.LOCK_UN)
 
 
+async def _wait_for_storage(config: AgentConfig) -> None:
+    retry_seconds = max(15.0, float(os.getenv("NOEMA_STORAGE_RETRY_SECONDS", "60")))
+    while True:
+        report = await asyncio.to_thread(recover_storage, config.db_path, role="worker")
+        print(json.dumps({"event": "storage_recovery", **report.safe_fields()}, sort_keys=True), flush=True)
+        if report.safe_to_write:
+            return
+        await asyncio.sleep(retry_seconds)
+
+
 def main() -> None:
     os.chdir(Path(__file__).resolve().parents[1])
     load_local_env()
-    pid_path = Path(os.getenv("NOEMA_AGENT_PID_PATH", "data/agent.pid"))
+    config = AgentConfig.from_env()
+    default_pid = "/tmp/noema-agent.pid" if Path(config.db_path).is_absolute() else "data/agent.pid"
+    pid_path = Path(os.getenv("NOEMA_AGENT_PID_PATH", default_pid))
     if not pid_path.is_absolute():
         pid_path = Path.cwd() / pid_path
 
@@ -65,7 +79,8 @@ def main() -> None:
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(signal.SIGTERM, task.cancel)
         try:
-            await run_agent(AgentConfig.from_env())
+            await _wait_for_storage(config)
+            await run_agent(config)
         except asyncio.CancelledError:
             pass
         finally:
