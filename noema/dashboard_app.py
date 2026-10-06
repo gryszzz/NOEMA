@@ -645,9 +645,6 @@ def _worker_provider_health() -> dict[str, Any]:
     }
     provider_rows.update({
         "groq": {"status": "not_current_worker_route", "credential_present": None},
-        "chronos": {"status": "not_probed_by_console"},
-        "finbert": {"status": "not_probed_by_console"},
-        "specialists": {"status": "not_probed_by_console"},
         "local_model_runner": {"status": "not_probed_by_console"},
     })
     return {
