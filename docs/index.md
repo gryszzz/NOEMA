@@ -18,3 +18,5 @@
 
 The running implementation and its tests establish current capability. Architecture
 and vision documents also describe unfinished work; they do not grant live execution authority.
+
+- [Durable state + disaster recovery](durable-state.md) — Supabase critical-state mirror, storage-emergency drain, checkpoints, and recovery boundaries.
