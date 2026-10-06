@@ -112,7 +112,8 @@ The desk uses eight presentation roles:
 Specialist-to-seat mapping is presentation-only and is derived from persisted specialist
 name/family/capability metadata. A seat with no defensible match remains **VACANT / UNBOUND**.
 Binding a seat never creates a capability, changes a specialist's mission, enables a wallet,
-changes execution policy, or grants order authority.
+changes execution policy, or grants order authority. Seat mapping is intentionally conservative:
+ambiguous specialist metadata leaves the role vacant rather than guessing.
 
 The Active Work Packets view is built only from persisted active missions, exact assigned-specialist
 links, and persisted handoffs. The Shift Tape is a bounded newest-first view of the canonical event
