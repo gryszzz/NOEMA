@@ -979,7 +979,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     const stationCount = visible.filter((node) => workstationDescriptor(node)).length;
     state.textContent = level === 'far'
       ? `${hitClusters.length} habitat zones · ${inhabitantCount} inhabitants · ${stationCount} stations · ${visible.length} entities · ${replayIndex === null ? 'current view' : 'historical replay'}`
-      : `${inhabitantCount} inhabitants · ${stationCount} stations · ${renderEdges.length} routes · ${level} detail · ${replayIndex === null ? 'current view' : 'historical replay'}`;
+      : `${inhabitantCount} inhabitants · ${stationCount} stations · ${zoomVisible.length}/${nodes.length} entities · ${renderEdges.length} routes · ${level} detail · ${replayIndex === null ? 'current view' : 'historical replay'}`;
     state.title = `Records ${freshness.operations ?? 'unknown'} · providers ${freshness.providers ?? 'unknown'} · venues ${freshness.venues ?? 'unknown'} · wallets ${freshness.wallets ?? 'unknown'}`;
     if (livingMotion && !reducedMotion.matches && livingTimer === null) {
       livingTimer = setTimeout(() => {
