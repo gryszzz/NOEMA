@@ -1,5 +1,6 @@
 import { HABITAT_ZONES, HABITAT_FAR_LAYOUT, habitatZoneKey, habitatSlotPosition, habitatDeckCorners } from './world-habitat.mjs';
 import { deriveInhabitantActivity, handoffTraversal, inhabitantGlyph } from './world-inhabitants.mjs';
+import { workstationDescriptor } from './world-workstations.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
 // the same bounded /api/operations snapshot rendered by the workstation.
@@ -696,6 +697,8 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       addFact('INHABITANT ACTIVITY', `${node.activity.label} · ${node.activity.detail}`);
       addFact('ACTIVITY EVIDENCE', node.activity.evidenceAt ? `${node.activity.evidenceAt} · ${relativeTime(node.activity.evidenceAt)}` : 'No current activity timestamp recorded');
     }
+    const station = workstationDescriptor(node);
+    if (station) addFact('HABITAT STATION', `${station.glyph} ${station.label} · presentation derived from canonical entity type`);
     addFact('LAST ACTIVITY', time ? `${time} · ${relativeTime(time)}` : 'No timestamp recorded');
     addFact('CURRENT MISSION', mission);
     addFact('DESCRIPTION', node.metadata);
@@ -891,13 +894,46 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         ctx.fillStyle = color; ctx.font = '600 8px ui-monospace, monospace'; ctx.textAlign = 'center';
         ctx.fillText(glyph, p.x + body * .72, p.y - body * .7 + 2.6); ctx.textAlign = 'left';
       } else {
-        ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = isCore ? '#182e3c' : `${color}25`; ctx.fill();
-        ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.lineWidth = selected ? 2 : 1.3; ctx.stroke();
-        if (isCore) {
-          ctx.fillStyle = '#ecfff9'; ctx.font = '500 19px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('N', p.x, p.y + 7); ctx.textAlign = 'left';
+        const station = workstationDescriptor(node);
+        if (station) {
+          const size = Math.max(7, radius * 1.05);
+          node.screen.radius = radius + 4;
+          ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af';
+          ctx.fillStyle = `${color}22`;
+          ctx.lineWidth = selected ? 2 : 1.2;
+          if (station.kind === 'market' || station.kind === 'cognition' || station.kind === 'session') {
+            ctx.beginPath(); ctx.roundRect(p.x - size, p.y - size * .72, size * 2, size * 1.3, 2.5); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(p.x - size * .68, p.y + size * .8); ctx.lineTo(p.x + size * .68, p.y + size * .8); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(p.x, p.y + size * .58); ctx.lineTo(p.x, p.y + size * .8); ctx.stroke();
+          } else if (station.kind === 'vault') {
+            ctx.beginPath(); ctx.roundRect(p.x - size * .82, p.y - size * .82, size * 1.64, size * 1.64, 3); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(p.x, p.y, size * .34, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(p.x, p.y - size * .34); ctx.lineTo(p.x, p.y + size * .34); ctx.stroke();
+          } else if (station.kind === 'gateway') {
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+              const angle = Math.PI / 3 * i - Math.PI / 6;
+              const x = p.x + Math.cos(angle) * size, y = p.y + Math.sin(angle) * size;
+              if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.closePath(); ctx.fill(); ctx.stroke();
+          } else if (station.kind === 'command' || station.kind === 'experiment') {
+            ctx.beginPath(); ctx.moveTo(p.x, p.y - size); ctx.lineTo(p.x + size, p.y);
+            ctx.lineTo(p.x, p.y + size); ctx.lineTo(p.x - size, p.y); ctx.closePath(); ctx.fill(); ctx.stroke();
+          } else {
+            ctx.beginPath(); ctx.roundRect(p.x - size * .82, p.y - size * .64, size * 1.64, size * 1.28, 2); ctx.fill(); ctx.stroke();
+          }
+          ctx.fillStyle = color; ctx.font = '600 8px ui-monospace, monospace'; ctx.textAlign = 'center';
+          ctx.fillText(station.glyph, p.x, p.y + 2.8); ctx.textAlign = 'left';
         } else {
-          ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2, radius * .38), 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+          ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+          ctx.fillStyle = isCore ? '#182e3c' : `${color}25`; ctx.fill();
+          ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.lineWidth = selected ? 2 : 1.3; ctx.stroke();
+          if (isCore) {
+            ctx.fillStyle = '#ecfff9'; ctx.font = '500 19px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('N', p.x, p.y + 7); ctx.textAlign = 'left';
+          } else {
+            ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2, radius * .38), 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+          }
         }
       }
       ctx.restore();
@@ -940,9 +976,10 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     const freshness = capabilitySources.freshness ?? {};
     const state = document.getElementById('world-map-state');
     const inhabitantCount = visible.filter((node) => ['core', 'agent'].includes(node.type)).length;
+    const stationCount = visible.filter((node) => workstationDescriptor(node)).length;
     state.textContent = level === 'far'
-      ? `${hitClusters.length} habitat zones · ${inhabitantCount} inhabitants · ${visible.length} entities · ${replayIndex === null ? 'current view' : 'historical replay'}`
-      : `${inhabitantCount} inhabitants · ${zoomVisible.length}/${nodes.length} entities · ${renderEdges.length} routes · ${level} detail · ${replayIndex === null ? 'current view' : 'historical replay'}`;
+      ? `${hitClusters.length} habitat zones · ${inhabitantCount} inhabitants · ${stationCount} stations · ${visible.length} entities · ${replayIndex === null ? 'current view' : 'historical replay'}`
+      : `${inhabitantCount} inhabitants · ${stationCount} stations · ${renderEdges.length} routes · ${level} detail · ${replayIndex === null ? 'current view' : 'historical replay'}`;
     state.title = `Records ${freshness.operations ?? 'unknown'} · providers ${freshness.providers ?? 'unknown'} · venues ${freshness.venues ?? 'unknown'} · wallets ${freshness.wallets ?? 'unknown'}`;
     if (livingMotion && !reducedMotion.matches && livingTimer === null) {
       livingTimer = setTimeout(() => {
