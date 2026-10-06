@@ -7,7 +7,7 @@
     "site:test": "node --test site/*.test.mjs",
     "site:qa": "node scripts/browser-qa.mjs",
     "ops:qa": "node scripts/operations-qa.mjs",
-    "ops:test": "node --test tests/workstation-feed.test.mjs tests/live-capital.test.mjs tests/world-habitat.test.mjs tests/world-inhabitants.test.mjs tests/world-workstations.test.mjs"
+    "ops:test": "node --test tests/workstation-feed.test.mjs tests/live-capital.test.mjs tests/world-habitat.test.mjs tests/world-inhabitants.test.mjs tests/world-workstations.test.mjs tests/world-occupancy.test.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

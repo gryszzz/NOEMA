@@ -1,11 +1,12 @@
 import { HABITAT_ZONES, HABITAT_FAR_LAYOUT, habitatZoneKey, habitatSlotPosition, habitatDeckCorners } from './world-habitat.mjs';
 import { deriveInhabitantActivity, handoffTraversal, inhabitantGlyph } from './world-inhabitants.mjs';
 import { workstationDescriptor } from './world-workstations.mjs';
+import { deriveMissionOccupancies, deriveActiveMissionLineage, recordedDeliverable } from './world-occupancy.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
 // the same bounded /api/operations snapshot rendered by the workstation.
 const esc = (value) => String(value ?? 'Unknown');
-const palette = { core: '#d7f8ff', mission: '#58f0ce', agent: '#70baff', provider: '#61e3ef', wallet: '#ffca73', tool: '#b2c8ff', experiment: '#cf9dff', lesson: '#b48cff', session: '#91a6bb', evidence: '#ffad76', market: '#5ce4d0', forecast: '#d1a6ff' };
+const palette = { core: '#d7f8ff', mission: '#58f0ce', agent: '#70baff', provider: '#61e3ef', wallet: '#ffca73', tool: '#b2c8ff', experiment: '#cf9dff', lesson: '#b48cff', session: '#91a6bb', evidence: '#ffad76', deliverable: '#ffd38d', market: '#5ce4d0', forecast: '#d1a6ff' };
 const statePalette = { healthy: '#58f0ce', degraded: '#ffc367', offline: '#ff637c', disabled: '#ffae62', stale: '#ff9c73', unknown: '#7588a4', observed: '#73baff' };
 
 function stamp(value) {
@@ -303,6 +304,15 @@ function buildModel(snapshot, cutoff = Infinity, capabilities = {}) {
         edges.push({ from: id, to: lid, type: 'lesson recorded', at: stamp(lesson.created_at), missionId: mission.mission_id });
       }
     }
+    const deliverable = recordedDeliverable({ id, type: 'mission', missionId: mission.mission_id, status: missionStatus, record: safeMission });
+    if (deliverable) {
+      put({ id: deliverable.id, type: 'deliverable', label: deliverable.label, status: deliverable.deliveryTested ? 'delivery tested' : 'produced · delivery test not recorded',
+        created: stamp(deliverable.createdAt), missionId: mission.mission_id,
+        capabilities: ['Recorded mission output exists'], limits: ['No file path, download, publication, or economic value is implied by this visualization'],
+        metadata: deliverable.deliveryTested ? 'Mission result records deliverable_produced and delivery_tested=true' : 'Mission result records deliverable_produced',
+        source: deliverable.source, record: deliverable });
+      edges.push({ from: id, to: deliverable.id, type: 'recorded deliverable', at: stamp(deliverable.createdAt), missionId: mission.mission_id });
+    }
   }
   for (const handoff of handoffs) {
     const mission = missions.find((m) => m.mission_id === handoff.mission_id);
@@ -380,7 +390,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
   const hiddenTypes = new Set(), hiddenStatuses = new Set(), pinnedIds = new Set();
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const announceSelection = (node) => onSelect({ ...node, selectedAt: new Date().toISOString() });
-  const typeNames = { core: 'Core', agent: 'Agent', mission: 'Mission', market: 'Market', forecast: 'Forecast', provider: 'Provider', wallet: 'Wallet', tool: 'Tool', evidence: 'Evidence', session: 'Session', experiment: 'Experiment', lesson: 'Lesson' };
+  const typeNames = { core: 'Core', agent: 'Agent', mission: 'Mission', market: 'Market', forecast: 'Forecast', provider: 'Provider', wallet: 'Wallet', tool: 'Tool', evidence: 'Evidence', deliverable: 'Deliverable', session: 'Session', experiment: 'Experiment', lesson: 'Lesson' };
   const statusNames = ['active', 'degraded', 'observed', 'healthy', 'stale', 'unknown', 'disabled'];
   const currentRoot = () => navigation[navigationIndex]?.at(-1) ?? 'agent:NOEMA';
   const nodeById = (id) => nodes.find((node) => node.id === id);
@@ -697,6 +707,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       addFact('INHABITANT ACTIVITY', `${node.activity.label} · ${node.activity.detail}`);
       addFact('ACTIVITY EVIDENCE', node.activity.evidenceAt ? `${node.activity.evidenceAt} · ${relativeTime(node.activity.evidenceAt)}` : 'No current activity timestamp recorded');
     }
+    if (node.occupancy) addFact('MISSION OCCUPANCY', `${node.occupancy.role} · ${node.occupancy.missionId} · ${node.occupancy.evidence}`);
     const station = workstationDescriptor(node);
     if (station) addFact('HABITAT STATION', `${station.glyph} ${station.label} · presentation derived from canonical entity type`);
     addFact('LAST ACTIVITY', time ? `${time} · ${relativeTime(time)}` : 'No timestamp recorded');
@@ -738,7 +749,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     for (const node of visible) if (node !== core) groups.get(clusterKey(node)).push(node);
     const level = controls.camera.zoom < .76 ? 'far' : controls.camera.zoom > 1.45 ? 'close' : 'medium';
     const zoomVisible = level === 'close' ? visible : level === 'medium'
-      ? visible.filter((node) => !['forecast', 'evidence', 'session', 'experiment', 'lesson', 'tool'].includes(node.type))
+      ? visible.filter((node) => !['forecast', 'evidence', 'deliverable', 'session', 'experiment', 'lesson', 'tool'].includes(node.type))
       : visible.filter((node) => node.type === 'core');
     const renderEdges = level === 'far' ? [] : visibleEdges(zoomVisible);
     const currentRootId = navigationIndex > 0 ? currentRoot() : null;
@@ -762,6 +773,18 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       }
     }
     if (core) { core.x = 0; core.y = 0; core.z = 0; }
+    const occupancies = deriveMissionOccupancies(nodes, edges);
+    for (const occupancy of occupancies) {
+      const agent = nodes.find((node) => node.id === occupancy.agentId);
+      const mission = nodes.find((node) => node.id === occupancy.missionNodeId);
+      if (!agent || !mission) continue;
+      agent.occupancy = occupancy;
+      agent.x = mission.x + occupancy.offset.x;
+      agent.y = mission.y + occupancy.offset.y;
+      agent.z = mission.z + occupancy.offset.z;
+    }
+    const activeLineage = deriveActiveMissionLineage(nodes, edges);
+    const activeZones = new Set([...activeLineage].map((id) => nodes.find((node) => node.id === id)).filter(Boolean).map(clusterKey));
     const positions = new Map(nodes.map((node) => [node.id, project(node, width, height, controls.camera)]));
     const sorted = [...zoomVisible].sort((a, b) => positions.get(a.id).depth - positions.get(b.id).depth);
     for (const node of sorted) node.screen = positions.get(node.id);
@@ -784,12 +807,12 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       const radius = Math.max(52, 29 * Math.sqrt(group.length) + 32) * center.scale;
       if (level === 'far') {
         const compactName = c.shortName ?? c.name;
-        const title = `${compactName} · ${group.length}`;
+        const title = `${compactName} · ${group.length}${activeZones.has(key) ? ' · ACTIVE' : ''}`;
         ctx.font = '500 12px ui-monospace, monospace';
         const pillWidth = Math.min(width * .44, Math.max(118, ctx.measureText(title).width + 24));
         const pillHeight = 38, x = center.x - pillWidth / 2, y = center.y - pillHeight / 2;
         ctx.beginPath(); ctx.roundRect(x, y, pillWidth, pillHeight, 8);
-        ctx.fillStyle = '#122235ed'; ctx.fill(); ctx.strokeStyle = `${c.color}a0`; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = activeZones.has(key) ? `${c.color}1f` : '#122235ed'; ctx.fill(); ctx.strokeStyle = activeZones.has(key) ? c.color : `${c.color}a0`; ctx.lineWidth = activeZones.has(key) ? 2 : 1.5; ctx.stroke();
         ctx.fillStyle = c.color; ctx.textAlign = 'center'; ctx.fillText(title, center.x, center.y + 4); ctx.textAlign = 'left';
         hitClusters.push({ key, x, y, w: pillWidth, h: pillHeight });
         continue;
@@ -798,14 +821,15 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       ctx.beginPath(); ctx.moveTo(deck[0].x, deck[0].y);
       for (const point of deck.slice(1)) ctx.lineTo(point.x, point.y);
       ctx.closePath();
-      ctx.fillStyle = `${c.color}0b`; ctx.fill();
-      ctx.strokeStyle = `${c.color}38`; ctx.lineWidth = 1.2; ctx.setLineDash([4, 5]); ctx.stroke(); ctx.setLineDash([]);
+      const zoneActive = activeZones.has(key);
+      ctx.fillStyle = zoneActive ? `${c.color}18` : `${c.color}0b`; ctx.fill();
+      ctx.strokeStyle = zoneActive ? `${c.color}9a` : `${c.color}38`; ctx.lineWidth = zoneActive ? 2 : 1.2; ctx.setLineDash([4, 5]); ctx.stroke(); ctx.setLineDash([]);
       const backLeft = deck[0], backRight = deck[1];
       ctx.beginPath(); ctx.moveTo(backLeft.x, backLeft.y); ctx.lineTo(backLeft.x, backLeft.y - 8);
       ctx.lineTo(backRight.x, backRight.y - 8); ctx.lineTo(backRight.x, backRight.y);
       ctx.strokeStyle = `${c.color}25`; ctx.stroke();
       if (width > 500) {
-        const label = `${c.name}  ${group.length}`;
+        const label = `${c.name}  ${group.length}${activeZones.has(key) ? '  · ACTIVE MISSION' : ''}`;
         const purpose = c.purpose ?? '';
         ctx.font = '600 10px ui-monospace, monospace'; ctx.fillStyle = c.color;
         const w = Math.max(ctx.measureText(label).width, ctx.measureText(purpose).width), x = center.x - w / 2;
@@ -888,7 +912,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         ctx.beginPath(); ctx.roundRect(p.x - body * .5, p.y - body * .05, body, body * 1.12, body * .24);
         ctx.fillStyle = `${color}28`; ctx.fill();
         ctx.strokeStyle = statePalette[node.stateKind] ?? '#8296af'; ctx.stroke();
-        const glyph = inhabitantGlyph(node.activity?.mode);
+        const glyph = node.occupancy ? 'M' : inhabitantGlyph(node.activity?.mode);
         ctx.beginPath(); ctx.arc(p.x + body * .72, p.y - body * .7, 5.5, 0, Math.PI * 2);
         ctx.fillStyle = '#0d1928'; ctx.fill(); ctx.strokeStyle = color; ctx.stroke();
         ctx.fillStyle = color; ctx.font = '600 8px ui-monospace, monospace'; ctx.textAlign = 'center';

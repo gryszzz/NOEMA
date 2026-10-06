@@ -30,7 +30,7 @@ export function workstationKind(node) {
   }
   if (node.type === 'session') return 'session';
   if (node.type === 'experiment') return 'experiment';
-  if (['evidence', 'lesson'].includes(node.type)) return 'archive';
+  if (['evidence', 'lesson', 'deliverable'].includes(node.type)) return 'archive';
   return 'tool';
 }
 

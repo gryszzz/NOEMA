@@ -72,3 +72,22 @@ The archetype is **not** an operational claim. Its stroke/status still comes fro
 runtime state. A rendered gateway does not imply execution authority; a rendered wallet does not
 imply signing; a rendered provider does not imply reachability; a rendered market console does
 not imply executable liquidity.
+
+
+## Mission occupancy and recorded outputs
+
+Active mission occupancy is derived from persisted coordination relationships, not free-running
+character animation. A specialist can relocate from the Agent Colony to an active mission table
+only when the graph contains an exact `assigned specialist` relationship for a mission whose
+state is `claimed`, `running`, or `waiting`. A handoff recipient can join that mission only
+while a persisted handoff is in `requested`, `accepted`, or `running` state.
+
+Habitat zones brighten only when they contain an entity in the persisted lineage of an active
+mission. This may include Mission Control, the Agent Colony, and any linked session, experiment,
+tool, or evidence station. A healthy provider or visible wallet alone does not make a room
+"active."
+
+A deliverable/archive object is created only when a mission is `passed` or `completed` and its
+persisted `result_json` explicitly records a non-false `deliverable_produced` value. The object
+records whether `delivery_tested=true` was also observed. It never implies a downloadable file,
+published artifact, customer delivery, revenue, or economic value unless separate evidence exists.
