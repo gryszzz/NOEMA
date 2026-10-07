@@ -173,6 +173,7 @@ try {
   const discoveryEvent = page.locator('#world-event-list button').filter({hasText:'opportunity discovered'});
   await discoveryEvent.waitFor();
   await discoveryEvent.click();
+  await page.waitForFunction(() => document.querySelector('#world-inspector-title')?.innerText.includes('opportunity discovered'));
   assert.ok((await page.locator('#world-inspector-title').innerText()).includes('opportunity discovered'));
   assert.ok((await page.locator('#world-entity-list').innerText()).includes('MISSION · Inspect a bounded fixture opportunity · discovered'), 'historical replay must not reveal the later completed mission status');
   assert.equal(await page.locator('#world-entity-list').getByText(/EXPERIMENT/).count(),0,'experiment created after the selected event is hidden from the earlier view');
