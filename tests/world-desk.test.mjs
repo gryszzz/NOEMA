@@ -8,6 +8,7 @@ import {
   deriveRuleRack,
   deriveKillBoard,
   deriveShiftReport,
+  hasKillBoardCoverage,
 } from '../noema/static/world-desk.mjs';
 
 test('autonomous desk binds only observable specialists/tools and leaves missing seats vacant', () => {
@@ -127,6 +128,12 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
   assert.ok(kills.some(item => item.reason === 'After-cost edge below threshold'));
   assert.ok(kills.some(item => item.reason === 'ambiguous rules'));
   assert.ok(kills.some(item => item.reason === 'source stale'));
+  assert.equal(hasKillBoardCoverage({ sections: {
+    decisions: { status: 'empty' }, missions: { status: 'recorded' }, research_runs: { status: 'empty' },
+  } }), true);
+  assert.equal(hasKillBoardCoverage({ sections: {
+    decisions: { status: 'empty' }, missions: { status: 'not_recorded' }, research_runs: { status: 'empty' },
+  } }), false);
 });
 
 test('Shift Report uses persisted records, flags partial coverage, and keeps economics unknown', () => {
@@ -144,6 +151,13 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.equal(report.coverage, 'partial · section cap reached');
   assert.equal(report.compute_cost_usd, null);
   assert.match(report.economic_contribution, /Unknown/);
+  const oldBlocker = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', rows: [{ mission_id: 'old', status: 'blocked', updated_at: '2026-10-01T00:00:00Z' }] },
+    research_runs: { status: 'empty', rows: [] }, decisions: { status: 'empty', rows: [] },
+    activity: { status: 'empty', rows: [] }, mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.equal(oldBlocker.counts.missions, 0);
+  assert.equal(oldBlocker.blockers[0].mission_id, 'old');
   const absent = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {} });
   assert.match(absent.coverage, /unavailable · not recorded/);
   assert.equal(absent.counts.missions, null);

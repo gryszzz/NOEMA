@@ -4,7 +4,7 @@ import { workstationDescriptor } from './world-workstations.mjs';
 import { deriveMissionOccupancies, deriveActiveMissionLineage, recordedDeliverable } from './world-occupancy.mjs';
 import {
   bindAutonomousDesk, deriveShiftPackets, deriveShiftTape, deriveRuleRack,
-  deriveKillBoard, deriveShiftReport,
+  deriveKillBoard, deriveShiftReport, hasKillBoardCoverage,
 } from './world-desk.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
@@ -854,21 +854,23 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       const kills = deriveKillBoard(source);
       if (!kills.length) {
         const empty = document.createElement('p'); empty.className = 'autonomous-empty';
-        empty.textContent = source?.database_present
+        empty.textContent = source?.database_present && hasKillBoardCoverage(source)
           ? 'No persisted PASS, critic rejection, or terminated mission is present in the loaded records.'
           : 'Decision history unavailable; no failures are inferred.';
         killsHost.append(empty);
       }
       for (const item of kills) {
-        const button = document.createElement('button'); button.type = 'button'; button.className = 'desk-kill-row';
+        const targetNode = item.decisionId != null ? nodeById(`forecast:${item.decisionId}`)
+          : item.missionId ? nodeById(`mission:${item.missionId}`) : null;
+        const button = targetNode ? document.createElement('button') : document.createElement('article');
+        if (targetNode) button.type = 'button';
+        button.className = 'desk-kill-row';
         const heading = document.createElement('strong'); heading.textContent = `${item.kind} · ${item.title}`;
         const reason = document.createElement('span'); reason.textContent = item.reason;
         const meta = document.createElement('small'); meta.textContent = `${item.at ?? 'time unknown'} · ${item.id}`;
         button.append(heading, reason, meta);
-        button.onclick = () => {
-          const node = item.decisionId != null ? nodeById(`forecast:${item.decisionId}`)
-            : item.missionId ? nodeById(`mission:${item.missionId}`) : null;
-          if (node) { selectNode(node); document.getElementById('workstation-topology')?.scrollIntoView({ block: 'nearest' }); }
+        if (targetNode) button.onclick = () => {
+          selectNode(targetNode); document.getElementById('workstation-topology')?.scrollIntoView({ block: 'nearest' });
         };
         killsHost.append(button);
       }

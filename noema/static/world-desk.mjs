@@ -266,6 +266,11 @@ export function deriveKillBoard(snapshot = {}, limit = 12) {
     || a.id.localeCompare(b.id)).slice(0, Math.max(1, Math.min(50, Number(limit) || 12)));
 }
 
+export function hasKillBoardCoverage(snapshot = {}) {
+  return ['decisions', 'missions', 'research_runs'].every(name =>
+    ['recorded', 'empty'].includes(snapshot.sections?.[name]?.status));
+}
+
 export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}) {
   const now = parseTime(snapshot.as_of) ?? Date.now();
   const windowMs = Math.max(1, Math.min(168, Number(hours) || 24)) * 60 * 60 * 1000;
@@ -290,7 +295,8 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}) {
     .filter(value => value != null && Number.isFinite(value) && value >= 0);
   const cost = costValues.length ? costValues.reduce((sum, value) => sum + value, 0) : null;
   const contributors = [...new Set(runs.map(row => row.specialist).filter(Boolean))];
-  const blocked = missionAvailable ? missions.filter(row => ['waiting', 'blocked'].includes(String(row.status).toLowerCase())) : null;
+  const blocked = missionAvailable ? asRows(snapshot, 'missions')
+    .filter(row => ['waiting', 'blocked'].includes(String(row.status).toLowerCase())) : null;
   const requiredSections = ['missions', 'research_runs', 'decisions', 'activity', 'mission_events'];
   const missing = requiredSections.filter(section => !sectionRecorded(section));
   const capped = requiredSections.some(section => snapshot.sections?.[section]?.has_more === true);
