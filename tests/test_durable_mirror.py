@@ -48,6 +48,7 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     root = Path(__file__).resolve().parents[1]
     sql = (root / "supabase/migrations/20261006220000_versioned_mutable_mirror_and_export.sql").read_text()
     edge = (root / "supabase/functions/noema-durable-mirror/index.ts").read_text()
+    config = (root / "supabase/config.toml").read_text()
     sql_block = re.search(r"if rec->>'stream'=any\(array\[(.*?)\]\) and", sql, re.DOTALL)
     edge_block = re.search(r"const mutableStreams = new Set\(\[(.*?)\]\);", edge, re.DOTALL)
     assert sql_block and edge_block
@@ -56,6 +57,7 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     assert sql_streams == edge_streams == set(MUTABLE_STREAMS)
     assert "source_rowid = split_part(record_key, ':', 2)::bigint" in sql
     assert "source_event_id = 'legacy:' || id::text" in sql
+    assert "[functions.noema-durable-mirror]\nverify_jwt = false" in config
 
 
 @pytest.mark.asyncio
@@ -159,6 +161,10 @@ def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) 
         assert _ensure_mutable_capture(conn, "missions", 100)[0]
         conn.execute("ALTER TABLE missions ADD COLUMN safety_note TEXT")
         assert _ensure_mutable_capture(conn, "missions", 100)[0]
+        baseline = json.loads(conn.execute(
+            "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' ORDER BY event_id DESC LIMIT 1",
+        ).fetchone()[0])
+        assert baseline["safety_note"] is None
         conn.execute("UPDATE missions SET safety_note='reviewed' WHERE mission_id='m1'")
         payload = conn.execute(
             "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' ORDER BY event_id DESC LIMIT 1",

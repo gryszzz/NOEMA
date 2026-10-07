@@ -296,8 +296,14 @@ def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -
             conn.execute(f"DROP TRIGGER IF EXISTS {_qident(prefix + suffix)}")
         for definition in trigger_definitions:
             conn.execute(definition)
-        conn.execute("UPDATE noema_mirror_capture_state SET schema_signature=? WHERE stream=?",
-                     (schema_signature, stream))
+        conn.execute("""UPDATE noema_mirror_capture_state
+            SET schema_signature=?,seed_rowid=CASE WHEN baseline_complete=1 THEN 0 ELSE seed_rowid END,
+                baseline_complete=CASE WHEN baseline_complete=1 THEN 0 ELSE baseline_complete END
+            WHERE stream=?""", (schema_signature, stream))
+        state = conn.execute(
+            "SELECT seed_rowid,baseline_complete,schema_signature FROM noema_mirror_capture_state WHERE stream=?",
+            (stream,),
+        ).fetchone()
     if int(state[1]):
         return True, capture_epoch
     quoted = _qident(stream)
