@@ -807,11 +807,17 @@ def build_operations(
                             if name == "research_runs" and len(encoded_result) > 4000:
                                 compact = {
                                     key: result_payload[key]
-                                    for key in ("observations", "observation_count", "valid_markets",
-                                                "critic_review", "verdict", "accepted")
-                                    if key in result_payload
+                                    for key in ("observations", "observation_count", "valid_markets")
+                                    if isinstance(result_payload.get(key), int)
+                                    and not isinstance(result_payload.get(key), bool)
                                 }
-                                review = compact.get("critic_review")
+                                for key in ("verdict",):
+                                    if isinstance(result_payload.get(key), str):
+                                        compact[key] = result_payload[key][:200]
+                                for key in ("accepted",):
+                                    if isinstance(result_payload.get(key), bool):
+                                        compact[key] = result_payload[key]
+                                review = result_payload.get("critic_review")
                                 if isinstance(review, dict):
                                     compact_review = {}
                                     for key in ("verdict", "result_accepted", "accepted", "reason",
@@ -829,7 +835,31 @@ def build_operations(
                                             compact_review[key] = value
                                     compact["critic_review"] = compact_review
                                 encoded_result = json.dumps(compact, sort_keys=True)
-                            record["result"] = encoded_result[:4000]
+                                compact_review = compact.get("critic_review", {})
+                                while len(encoded_result) > 4000:
+                                    issues = compact_review.get("issues")
+                                    if isinstance(issues, list) and issues:
+                                        issues.pop()
+                                    else:
+                                        long_text = next((key for key in ("conclusion", "reason")
+                                                          if isinstance(compact_review.get(key), str)
+                                                          and compact_review[key]), None)
+                                        if long_text:
+                                            compact_review[long_text] = compact_review[long_text][:len(compact_review[long_text]) // 2]
+                                        elif "valid_markets" in compact:
+                                            compact.pop("valid_markets")
+                                        elif len(compact_review) > 2:
+                                            optional = next((key for key in ("status", "reason", "conclusion", "accepted")
+                                                             if key in compact_review), None)
+                                            if optional is None:
+                                                compact_review.pop(next(reversed(compact_review)))
+                                            else:
+                                                compact_review.pop(optional)
+                                        else:
+                                            compact_review["verdict"] = str(compact_review.get("verdict", "REJECTED"))[:80]
+                                            compact = {"critic_review": compact_review}
+                                    encoded_result = json.dumps(compact, sort_keys=True)
+                            record["result"] = encoded_result
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
                     elif name == "experiments":

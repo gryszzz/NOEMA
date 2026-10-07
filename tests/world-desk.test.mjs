@@ -151,10 +151,13 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
   } }), false);
   const cutoffKills = deriveKillBoard({ sections: {
     decisions: { rows: [{ id: 5, decision: 'PASS', created_at: '2026-10-06T12:02:00Z' }] },
-    missions: { rows: [{ mission_id: 'late-failure', status: 'failed', created_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T12:03:00Z' }] },
+    missions: { rows: [
+      { mission_id: 'late-failure', status: 'failed', created_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T12:03:00Z' },
+      { mission_id: 'terminal', status: 'failed', created_at: '2026-10-06T11:00:00Z', completed_at: '2026-10-06T12:00:00Z', updated_at: '2026-10-06T12:03:00Z' },
+    ] },
     research_runs: { rows: [{ id: 6, created_at: '2026-10-06T12:04:00Z', result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['future rejection'] } }) }] },
   } }, 12, Date.parse('2026-10-06T12:01:00Z'));
-  assert.equal(cutoffKills.length, 0);
+  assert.deepEqual(cutoffKills.map(item => item.missionId), ['terminal']);
 });
 
 test('Shift Report uses persisted records, flags partial coverage, and keeps economics unknown', () => {
@@ -229,16 +232,16 @@ test('Shift Report sums distinct model-session and worker costs without duplicat
       { id: 2, mission_id: 'm-run', specialist: 'evidence-critic', created_at: '2026-10-06T08:00:00Z', completed_at: '2026-10-06T11:00:00Z', compute_cost_usd: 0.05 },
     ] },
     sessions: { status: 'recorded', rows: [
-      { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12 },
-      { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12 },
-      { session_id: 's-run', created_at: '2026-10-06T08:00:00Z', completed_at: '2026-10-06T11:00:00Z', estimated_model_cost_usd: 0.40 },
+      { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12, compute_cost_usd: 0.10 },
+      { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12, compute_cost_usd: 0.10 },
+      { session_id: 's-run', created_at: '2026-10-06T08:00:00Z', completed_at: '2026-10-06T11:00:00Z', estimated_model_cost_usd: 0.40, compute_cost_usd: 0.30 },
     ] },
     decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
     mission_events: { status: 'empty', rows: [] },
   } });
-  assert.ok(Math.abs(report.compute_cost_usd - 0.57) < 1e-10);
-  assert.equal(report.compute_cost_records, 3);
-  assert.equal(report.compute_cost_unknown, true);
+  assert.ok(Math.abs(report.compute_cost_usd - 0.67) < 1e-10);
+  assert.equal(report.compute_cost_records, 4);
+  assert.equal(report.compute_cost_unknown, false);
   assert.equal(report.counts.investigations, 2);
 });
 

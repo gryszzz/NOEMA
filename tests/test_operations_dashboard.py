@@ -124,8 +124,8 @@ def test_large_rejected_run_keeps_bounded_critic_details_in_operations_projectio
         "critic_review": {
             "verdict": "REJECT",
             "result_accepted": False,
-            "issues": ["Critical evidence mismatch", "Second issue"],
-            "conclusion": "The evidence does not support the research result.",
+            "issues": ["Critical evidence mismatch", *(["oversized detail " + ("x" * 500)] * 9)],
+            "conclusion": "The evidence does not support the research result." + ("y" * 500),
         },
         "large_payload": "x" * 5000,
     }
@@ -141,8 +141,8 @@ def test_large_rejected_run_keeps_bounded_critic_details_in_operations_projectio
     run = build_operations(str(path), now=NOW)["sections"]["research_runs"]["rows"][0]
     projected = json.loads(run["result"])
     assert len(run["result"]) <= 4000
-    assert projected["critic_review"]["issues"] == ["Critical evidence mismatch", "Second issue"]
-    assert projected["critic_review"]["conclusion"] == "The evidence does not support the research result."
+    assert projected["critic_review"]["issues"][0] == "Critical evidence mismatch"
+    assert projected["critic_review"]["conclusion"].startswith("The evidence does not support the research result.")
     assert projected["critic_review"]["result_accepted"] is False
 
 
