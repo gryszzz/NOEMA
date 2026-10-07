@@ -23,7 +23,7 @@ const views = {
   outcomes: ['Recorded outcomes', ['market_id', 'outcome_yes', 'resolved_at', 'first_seen_at']],
 };
 let snapshot, economicsSnapshot, trenchSnapshot, providerHealth, providerHealthAt = 0;
-let walletSnapshot, gatewaySnapshot, billSnapshot;
+let walletSnapshot, gatewaySnapshot, billSnapshot, billFreshness = 'unknown';
 let radarSnapshot = null, radarFreshness = 'unknown';
 const capabilityFreshness = { providers: 'unknown', wallets: 'unknown', gateway: 'unknown',
   venues: 'unknown', operations: 'unknown', providersAt: null, walletsAt: null,
@@ -1627,7 +1627,7 @@ function renderWorld() {
   economicCategories.update({ snapshot, venues: predictionVenuesSnapshot, wallets: walletSnapshot,
     economics: economicsSnapshot, accounts: liveCapital.accounts, canonical: liveCapital.canonical, history: liveCapital.history, stripe: stripeEconomySnapshot, gateway: gatewaySnapshot, freshness: capabilityFreshness });
   noemaWorld.update(snapshot, { providers: providerHealth, venues: predictionVenuesSnapshot, wallets: walletSnapshot, radar: radarSnapshot,
-    gateway: gatewaySnapshot, bill: billSnapshot, qualification: marketQualificationSnapshot,
+    gateway: gatewaySnapshot, bill: billSnapshot, billFreshness, qualification: marketQualificationSnapshot,
     freshness: capabilityFreshness });
   const runtime = snapshot.runtime ?? {};
   const cycle = runtime.cycle ?? {};
@@ -2053,7 +2053,12 @@ async function refresh(force = false) {
   } else {
     marketQualificationSnapshot = { status: 'unavailable' };
   }
-  if (bill.status === 'fulfilled') billSnapshot = bill.value;
+  if (bill.status === 'fulfilled') {
+    billSnapshot = bill.value;
+    billFreshness = 'current';
+  } else {
+    billFreshness = billSnapshot ? 'stale' : 'unavailable';
+  }
   renderMarketQualification();
   if (checkProviders) {
     if (providers.status === 'fulfilled') {

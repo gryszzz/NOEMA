@@ -181,21 +181,40 @@ const parseTime = value => {
   return Number.isFinite(stamp) ? stamp : null;
 };
 
+function parseResult(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export function deriveRuleRack(snapshot = {}, sources = {}) {
   const resources = snapshot.resources ?? {};
   const gateway = sources.gateway;
   const control = sources.wallets?.control_plane;
   const qualification = sources.qualification;
   const bill = sources.bill;
+  const billFreshness = sources.billFreshness ?? 'unknown';
   const observed = (value, fallback = 'Unknown') => value == null || value === '' ? fallback : String(value);
   const controlValue = value => typeof value === 'boolean' ? String(value) : 'UNKNOWN';
+  const budgetValue = observed(bill?.model_budget_usd, 'Unavailable');
   return [
     { name: 'Research runtime', value: observed(snapshot.runtime?.state), source: 'Persisted worker heartbeat / cycle state' },
     { name: 'Heavy workload slots', value: resources.limits
       ? `${Object.entries(resources.limits).map(([key, value]) => `${key.replaceAll('_', ' ')} ${value}`).join(' · ')} · ${observed(resources.state)}`
       : 'Unavailable', source: `Deterministic resource admission · memory floor ${observed(resources.minimum_available_memory_percent, 'Unknown')}%` },
-    { name: 'Model budget', value: observed(bill?.model_budget_usd, 'Unavailable'), source: bill?.status === 'estimate_missing'
-      ? 'No persisted budget; model spend limit unknown' : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
+    { name: 'Model budget', value: billFreshness === 'stale' && budgetValue !== 'Unavailable'
+      ? `STALE · ${budgetValue}` : budgetValue, source: billFreshness === 'stale'
+      ? 'Latest /api/bill request failed; retained budget is the last successful snapshot'
+      : billFreshness === 'unavailable'
+        ? 'Latest /api/bill request failed; model spend limit unknown'
+        : bill?.status === 'estimate_missing'
+          ? 'No persisted budget; model spend limit unknown'
+          : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
     { name: 'Research evidence', value: observed(qualification?.stage, 'Unavailable'), source: qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
     { name: 'Prediction execution', value: `enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`,
       source: gateway?.status ?? 'Gateway policy unavailable; execution state unknown' },
@@ -223,7 +242,7 @@ export function deriveKillBoard(snapshot = {}, limit = 12) {
       missionId: row.mission_id, decisionId: null });
   }
   for (const row of asRows(snapshot, 'research_runs')) {
-    const review = row.result?.critic_review;
+    const review = parseResult(row.result).critic_review;
     if (!review || review.result_accepted !== false) continue;
     items.push({ id: `critic:${row.id}`, at: row.completed_at ?? row.created_at,
       kind: 'EVIDENCE CRITIC', title: `${row.specialist ?? 'Specialist unknown'} · ${row.kind ?? 'research'}`,

@@ -90,6 +90,10 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
   assert.match(partial.find(rule => rule.name === 'Prediction execution').value, /live=UNKNOWN/);
   assert.match(partial.find(rule => rule.name === 'Treasury authority').value, /mission authority=UNKNOWN/);
   assert.match(partial.find(rule => rule.name === 'Treasury authority').value, /halted=UNKNOWN/);
+  const staleBill = deriveRuleRack({}, { bill: { model_budget_usd: '0.50', basis: 'operator-reported' }, billFreshness: 'stale' })
+    .find(rule => rule.name === 'Model budget');
+  assert.equal(staleBill.value, 'STALE · 0.50');
+  assert.match(staleBill.source, /request failed/);
 });
 
 test('Kill Board links only persisted passes, explicit critic rejects, and terminated missions', () => {
@@ -99,7 +103,10 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
       { id: 2, market_id: 'M2', decision: 'BUY_YES' },
     ] },
     missions: { rows: [{ mission_id: 'x', status: 'failed', objective: 'Bad thesis', result: { failure_reason: 'ambiguous rules' } }] },
-    research_runs: { rows: [{ id: 3, specialist: 'critic', kind: 'review', result: { critic_review: { result_accepted: false, reason: 'source stale' } } }] },
+    research_runs: { rows: [
+      { id: 3, specialist: 'critic', kind: 'review', result: JSON.stringify({ critic_review: { result_accepted: false, reason: 'source stale' } }) },
+      { id: 4, specialist: 'critic', kind: 'review', result: '{malformed' },
+    ] },
   } });
   assert.equal(kills.length, 3);
   assert.ok(kills.some(item => item.reason === 'After-cost edge below threshold'));

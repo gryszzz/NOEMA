@@ -37,6 +37,8 @@ ledger.record_event(EconomicEvent(
 ))
 ledger.conn.close()
 with sqlite3.connect(sys.argv[1]) as c:
+ c.execute('CREATE TABLE bill_budget(id INTEGER PRIMARY KEY,hosting_usd TEXT NOT NULL,other_usd TEXT NOT NULL,model_budget_usd TEXT NOT NULL,owner_limit_usd TEXT NOT NULL,updated_at TEXT NOT NULL)')
+ c.execute('INSERT INTO bill_budget VALUES(1,?,?,?,?,?)', ('5','20','12.50','50','2026-10-01T00:00:00+00:00'))
  c.execute('CREATE TABLE forecast_ledger(id INTEGER PRIMARY KEY,created_at TEXT,venue TEXT,market_id TEXT,snapshot_json TEXT,forecast_json TEXT,opportunity_json TEXT,action_json TEXT)')
  c.execute('INSERT INTO forecast_ledger VALUES(?,?,?,?,?,?,?,?)', (1,'2026-09-27T00:00:02+00:00','fixture-venue','BTC-15M','{"title":"BTC fixture 15m","captured_at":"2026-09-27T00:00:02+00:00","yes_bid":0.48,"yes_ask":0.50,"liquidity_usd":5000}','{"probability_yes":0.58,"lower_bound":0.52,"upper_bound":0.64,"model_version":"fixture-model-v1","evidence_ids":["evidence-btc-1"]}','{"market_probability":0.49,"raw_edge":0.09,"estimated_cost":0.02,"uncertainty_penalty":0.01,"robust_edge":0.06}','{"decision":"PASS","reason":"Fixture evidence requires review"}'))
 `, db]);
@@ -48,15 +50,43 @@ try {
  for(let i=0;i<100;i++){try{if((await fetch(url)).ok)break;}catch{} await new Promise(r=>setTimeout(r,100));}
  for(const width of [390,768,1024,1440]){
   const page = await browser.newPage({viewport:{width,height:1000}, reducedMotion:'reduce'}), errors=[], failedRequests=[], externalRequests=[], consoleErrors=[], failedResponses=[];
+  let failNextBill = false, expectedBillFailure = false, expectedBillFailureConsole = false;
+  await page.route('**/api/bill', route => {
+    if (failNextBill) {
+      failNextBill = false;
+      expectedBillFailure = true;
+      expectedBillFailureConsole = true;
+      return route.fulfill({status:503,contentType:'application/json',body:'{"error":"fixture failure"}'});
+    }
+    return route.continue();
+  });
   page.on('pageerror',e=>errors.push(e.message));
-  page.on('console', message=>{if(message.type()==='error')consoleErrors.push(message.text());});
+  page.on('console', message=>{
+    if(message.type()!=='error')return;
+    if(expectedBillFailureConsole && message.text().includes('503 (Service Unavailable)')) {
+      expectedBillFailureConsole=false;
+      return;
+    }
+    consoleErrors.push(message.text());
+  });
   page.on('requestfailed', request=>failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
   page.on('request', request=>{if(new URL(request.url()).origin!==url)externalRequests.push(request.url());});
-  page.on('response', response=>{if(response.status()>=400)failedResponses.push(`${response.status()} ${response.url()}`);});
+  page.on('response', response=>{
+    if(response.status()<400)return;
+    const expected=expectedBillFailure && response.url().endsWith('/api/bill');
+    if(expected)expectedBillFailure=false;
+    else failedResponses.push(`${response.status()} ${response.url()}`);
+  });
   await page.goto(url); await page.getByRole('heading',{name:'NOEMA OPERATING WORLD'}).waitFor();
   await page.evaluate(() => document.fonts.ready);
   await page.waitForFunction(() => document.querySelector('#autonomous-rule-rack')?.innerText.includes('Prediction execution'));
   assert.ok((await page.locator('#autonomous-rule-rack').innerText()).includes('Prediction execution'));
+  const budgetRule = page.locator('#autonomous-rule-rack .desk-rule-row').filter({hasText:'Model budget'});
+  await page.waitForFunction(() => document.querySelector('#autonomous-rule-rack')?.innerText.includes('12.50'));
+  failNextBill = true;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#autonomous-rule-rack')?.innerText.includes('STALE · 12.50'));
+  assert.ok((await budgetRule.innerText()).includes('Latest /api/bill request failed'));
   assert.ok((await page.locator('#autonomous-kill-board').innerText()).includes('BTC-15M'));
   assert.ok((await page.locator('#autonomous-shift-report').innerText()).includes('Unknown'));
   await page.locator('#tab-economics').click();
