@@ -188,6 +188,7 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
   const qualification = sources.qualification;
   const bill = sources.bill;
   const observed = (value, fallback = 'Unknown') => value == null || value === '' ? fallback : String(value);
+  const controlValue = value => typeof value === 'boolean' ? String(value) : 'UNKNOWN';
   return [
     { name: 'Research runtime', value: observed(snapshot.runtime?.state), source: 'Persisted worker heartbeat / cycle state' },
     { name: 'Heavy workload slots', value: resources.limits
@@ -196,12 +197,10 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
     { name: 'Model budget', value: observed(bill?.model_budget_usd, 'Unavailable'), source: bill?.status === 'estimate_missing'
       ? 'No persisted budget; model spend limit unknown' : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
     { name: 'Research evidence', value: observed(qualification?.stage, 'Unavailable'), source: qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
-    { name: 'Prediction execution', value: gateway
-      ? `enabled=${gateway.enabled === true} · halt=${gateway.master_halt === true} · live=${gateway.prediction_execution_enabled === true}`
-      : 'Unavailable', source: gateway?.status ?? 'Gateway policy unavailable; execution state unknown' },
-    { name: 'Treasury authority', value: control
-      ? `live=${control.live_execution_enabled === true} · mission authority=${control.mission_authority_present === true} · halted=${control.halted === true}`
-      : 'Unavailable', source: control?.status ?? 'Wallet control-plane state unavailable' },
+    { name: 'Prediction execution', value: `enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`,
+      source: gateway?.status ?? 'Gateway policy unavailable; execution state unknown' },
+    { name: 'Treasury authority', value: `live=${controlValue(control?.live_execution_enabled)} · mission authority=${controlValue(control?.mission_authority_present)} · halted=${controlValue(control?.halted)}`,
+      source: control?.status ?? 'Wallet control-plane state unavailable' },
   ];
 }
 

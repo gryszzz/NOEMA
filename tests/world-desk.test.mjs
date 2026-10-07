@@ -79,7 +79,17 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
   assert.match(rules.find(rule => rule.name === 'Model budget').value, /0\.50/);
   assert.match(rules.find(rule => rule.name === 'Prediction execution').value, /live=false/);
   assert.match(rules.find(rule => rule.name === 'Research evidence').source, /Insufficient/);
-  assert.equal(deriveRuleRack({}, {})[2].value, 'Unavailable');
+  const unavailable = deriveRuleRack({}, {});
+  assert.equal(unavailable[2].value, 'Unavailable');
+  assert.match(unavailable.find(rule => rule.name === 'Prediction execution').value, /UNKNOWN/);
+  assert.match(unavailable.find(rule => rule.name === 'Treasury authority').value, /UNKNOWN/);
+  const partial = deriveRuleRack({}, {
+    gateway: { enabled: false, master_halt: true },
+    wallets: { control_plane: { live_execution_enabled: false } },
+  });
+  assert.match(partial.find(rule => rule.name === 'Prediction execution').value, /live=UNKNOWN/);
+  assert.match(partial.find(rule => rule.name === 'Treasury authority').value, /mission authority=UNKNOWN/);
+  assert.match(partial.find(rule => rule.name === 'Treasury authority').value, /halted=UNKNOWN/);
 });
 
 test('Kill Board links only persisted passes, explicit critic rejects, and terminated missions', () => {
