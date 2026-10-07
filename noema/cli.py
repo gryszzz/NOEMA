@@ -15,7 +15,13 @@ from .bill_tracker import BillTracker
 from .config import KalshiConfig
 from .diagnostics import diagnostic_dict
 from .doctor import doctor_report
-from .durable_mirror import DurableMirrorConfig, mirror_health, sync_critical_state
+from .durable_mirror import (
+    DurableMirrorConfig,
+    export_critical_state,
+    mirror_health,
+    restore_critical_state,
+    sync_critical_state,
+)
 from .economic_bootstrap import bootstrap_economy
 from .economic_dashboard import build_economic_overview
 from .economic_ledger import EconomicLedger
@@ -63,6 +69,10 @@ async def _durable_mirror_sync(db: str, rounds: int) -> None:
 
 async def _durable_mirror_health() -> None:
     print(json.dumps(await mirror_health(), sort_keys=True, default=str))
+
+
+async def _durable_mirror_export(output: str) -> None:
+    print(json.dumps(await export_critical_state(output), sort_keys=True, default=str))
 
 
 async def _agent_once(db: str) -> None:
@@ -337,6 +347,13 @@ def main() -> None:
     durable_sync.add_argument("--rounds", type=int, default=100)
     sub.add_parser("durable-mirror-health")
 
+    durable_export = sub.add_parser("durable-mirror-export")
+    durable_export.add_argument("--output", required=True)
+
+    durable_restore = sub.add_parser("durable-mirror-restore")
+    durable_restore.add_argument("--bundle", required=True)
+    durable_restore.add_argument("--db", required=True)
+
     economy_init = sub.add_parser("economy-init")
     economy_init.add_argument("--db", default="data/noema.db")
     economy_init.add_argument("--capital", type=Decimal, required=True)
@@ -454,6 +471,10 @@ def main() -> None:
         asyncio.run(_durable_mirror_sync(args.db, args.rounds))
     elif args.command == "durable-mirror-health":
         asyncio.run(_durable_mirror_health())
+    elif args.command == "durable-mirror-export":
+        asyncio.run(_durable_mirror_export(args.output))
+    elif args.command == "durable-mirror-restore":
+        print(json.dumps(restore_critical_state(args.bundle, args.db), sort_keys=True))
     elif args.command == "economy-init":
         _economy_init(args.db, args.capital)
     elif args.command == "economy-show":
