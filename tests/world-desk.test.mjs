@@ -103,13 +103,18 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
   assert.match(staleControls.find(rule => rule.name === 'Prediction execution').value, /^STALE ·/);
   assert.match(staleControls.find(rule => rule.name === 'Treasury authority').source, /last successful snapshot/);
   const staleOperations = deriveRuleRack({ runtime: { state: 'running' }, resources: { state: 'ready', limits: { experiments: 1 } } }, {
-    qualification: { stage: 'sufficient_for_validation', market_data: { freshness: 'stale' } },
+    qualification: { stage: 'sufficient_for_validation' }, qualificationRequestFreshness: 'stale',
     freshness: { operations: 'stale' },
   });
   assert.match(staleOperations.find(rule => rule.name === 'Research runtime').value, /^STALE ·/);
   assert.match(staleOperations.find(rule => rule.name === 'Heavy workload slots').source, /last successful snapshot/);
   assert.equal(staleOperations.find(rule => rule.name === 'Research evidence').value, 'STALE · sufficient_for_validation');
   assert.match(staleOperations.find(rule => rule.name === 'Research evidence').source, /request failed/);
+  const staleMarketEvidence = deriveRuleRack({}, {
+    qualification: { stage: 'sufficient_for_validation', market_data: { freshness: 'stale' } },
+  }).find(rule => rule.name === 'Research evidence');
+  assert.equal(staleMarketEvidence.value, 'STALE · sufficient_for_validation');
+  assert.match(staleMarketEvidence.source, /market evidence is stale/);
   const missingQualification = deriveRuleRack({}, { qualification: { status: 'unavailable', stage: 'insufficient' } })
     .find(rule => rule.name === 'Research evidence');
   assert.equal(missingQualification.value, 'Unavailable');
@@ -178,6 +183,17 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.equal(empty.counts.missions, 0);
   assert.equal(empty.counts.investigations, 0);
   assert.equal(empty.coverage, 'loaded records only');
+  const historical = deriveShiftReport({ as_of: '2026-10-06T12:10:00Z', sections: {
+    missions: { status: 'recorded', rows: [{ mission_id: 'm1', status: 'completed', created_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T12:05:00Z' }] },
+    research_runs: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z', compute_cost_usd: 1 }] },
+    decisions: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z' }] },
+    activity: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z' }] },
+    mission_events: { status: 'recorded', rows: [{ mission_id: 'm1', status: 'queued', created_at: '2026-10-06T11:30:00Z' }, { mission_id: 'm1', status: 'completed', created_at: '2026-10-06T12:05:00Z' }] },
+  } }, 24, {}, Date.parse('2026-10-06T12:00:00Z'));
+  assert.equal(historical.counts.missions, 1);
+  assert.equal(historical.counts.completed, 0);
+  assert.equal(historical.counts.investigations, 0);
+  assert.equal(historical.blockers[0].status, 'queued');
   const staleSnapshot = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
     missions: { status: 'recorded', rows: [] }, research_runs: { status: 'recorded', rows: [] },
     decisions: { status: 'recorded', rows: [] }, activity: { status: 'recorded', rows: [] },

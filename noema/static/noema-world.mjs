@@ -877,7 +877,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     }
     if (reportHost) {
       reportHost.replaceChildren();
-      const report = deriveShiftReport(source, 24, capabilitySources.freshness);
+      const report = deriveShiftReport(source, 24, capabilitySources.freshness, replayCutoff);
       const stats = [
         ['MISSIONS', report.counts.missions], ['INVESTIGATIONS', report.counts.investigations],
         ['FORECASTS', report.counts.forecasts], ['COMPLETED', report.counts.completed],

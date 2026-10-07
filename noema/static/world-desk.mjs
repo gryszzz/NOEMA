@@ -206,6 +206,7 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
   const operationsState = value => controlState(value, freshness.operations);
   const qualificationFreshness = qualification?.market_data?.freshness;
   const qualificationUnavailable = qualification?.status === 'unavailable';
+  const qualificationRequestFreshness = sources.qualificationRequestFreshness ?? 'unknown';
   const budgetValue = observed(bill?.model_budget_usd, 'Unavailable');
   return [
     { name: 'Research runtime', value: operationsState(observed(snapshot.runtime?.state)), source: freshness.operations === 'stale'
@@ -224,10 +225,12 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
         : bill?.status === 'estimate_missing'
           ? 'No persisted budget; model spend limit unknown'
           : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
-    { name: 'Research evidence', value: qualificationUnavailable ? 'Unavailable' : qualificationFreshness === 'stale'
+    { name: 'Research evidence', value: qualificationUnavailable ? 'Unavailable'
+      : qualificationRequestFreshness === 'stale' || qualificationFreshness === 'stale'
       ? `STALE · ${observed(qualification?.stage, 'Unavailable')}` : observed(qualification?.stage, 'Unavailable'),
       source: qualificationUnavailable ? 'Market-data qualification unavailable; no stage inferred'
-        : qualificationFreshness === 'stale' ? 'Latest qualification request failed; retained evidence is the last successful snapshot'
+        : qualificationRequestFreshness === 'stale' ? 'Latest qualification request failed; retained evidence is the last successful snapshot'
+          : qualificationFreshness === 'stale' ? 'Latest qualifying market evidence is stale; stage is based on old observations'
         : qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
     { name: 'Prediction execution', value: controlState(`enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`, freshness.gateway),
       source: freshness.gateway === 'stale' ? 'Latest gateway request failed; retained policy is the last successful snapshot'
@@ -282,7 +285,31 @@ export function hasKillBoardCoverage(snapshot = {}) {
     ['recorded', 'empty'].includes(snapshot.sections?.[name]?.status));
 }
 
-export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}) {
+export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cutoff = Infinity) {
+  if (Number.isFinite(cutoff)) {
+    const sections = snapshot.sections ?? {};
+    const beforeCutoff = value => {
+      const time = parseTime(value);
+      return time != null && time <= cutoff;
+    };
+    const missionEvents = asRows(snapshot, 'mission_events').filter(event => beforeCutoff(event.created_at));
+    const missions = asRows(snapshot, 'missions').filter(mission => beforeCutoff(mission.created_at)).map(mission => {
+      if (beforeCutoff(mission.updated_at ?? mission.created_at)) return mission;
+      const lastEvent = missionEvents.filter(event => event.mission_id === mission.mission_id && event.status)
+        .sort((a, b) => (parseTime(a.created_at) ?? 0) - (parseTime(b.created_at) ?? 0)).at(-1);
+      return { ...mission, status: lastEvent?.status ?? 'unknown', updated_at: lastEvent?.created_at ?? mission.created_at };
+    });
+    const filteredSections = Object.fromEntries(Object.entries(sections).map(([name, section]) => {
+      const timeField = name === 'missions' ? 'created_at'
+        : name === 'research_runs' ? null : 'created_at';
+      const rows = name === 'missions' ? missions : (section.rows ?? []).filter(row => {
+        if (timeField === null) return beforeCutoff(row.completed_at ?? row.created_at);
+        return beforeCutoff(row[timeField]);
+      });
+      return [name, { ...section, rows }];
+    }));
+    snapshot = { ...snapshot, as_of: new Date(cutoff).toISOString(), sections: filteredSections };
+  }
   const now = parseTime(snapshot.as_of) ?? Date.now();
   const windowMs = Math.max(1, Math.min(168, Number(hours) || 24)) * 60 * 60 * 1000;
   const since = now - windowMs;
@@ -307,7 +334,7 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}) {
   const cost = costValues.length ? costValues.reduce((sum, value) => sum + value, 0) : null;
   const contributors = [...new Set(runs.map(row => row.specialist).filter(Boolean))];
   const blocked = missionAvailable ? asRows(snapshot, 'missions')
-    .filter(row => ['waiting', 'blocked'].includes(String(row.status).toLowerCase())) : null;
+    .filter(row => ['queued', 'waiting', 'blocked'].includes(String(row.status).toLowerCase())) : null;
   const requiredSections = ['missions', 'research_runs', 'decisions', 'activity', 'mission_events'];
   const missing = requiredSections.filter(section => !sectionRecorded(section));
   const capped = requiredSections.some(section => snapshot.sections?.[section]?.has_more === true);

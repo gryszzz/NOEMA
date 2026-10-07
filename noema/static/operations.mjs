@@ -23,7 +23,7 @@ const views = {
   outcomes: ['Recorded outcomes', ['market_id', 'outcome_yes', 'resolved_at', 'first_seen_at']],
 };
 let snapshot, economicsSnapshot, trenchSnapshot, providerHealth, providerHealthAt = 0;
-let walletSnapshot, gatewaySnapshot, billSnapshot, billFreshness = 'unknown';
+let walletSnapshot, gatewaySnapshot, billSnapshot, billFreshness = 'unknown', qualificationRequestFreshness = 'unknown';
 let radarSnapshot = null, radarFreshness = 'unknown';
 const capabilityFreshness = { providers: 'unknown', wallets: 'unknown', gateway: 'unknown',
   venues: 'unknown', operations: 'unknown', providersAt: null, walletsAt: null,
@@ -1628,7 +1628,7 @@ function renderWorld() {
     economics: economicsSnapshot, accounts: liveCapital.accounts, canonical: liveCapital.canonical, history: liveCapital.history, stripe: stripeEconomySnapshot, gateway: gatewaySnapshot, freshness: capabilityFreshness });
   noemaWorld.update(snapshot, { providers: providerHealth, venues: predictionVenuesSnapshot, wallets: walletSnapshot, radar: radarSnapshot,
     gateway: gatewaySnapshot, bill: billSnapshot, billFreshness, qualification: marketQualificationSnapshot,
-    freshness: capabilityFreshness });
+    qualificationRequestFreshness, freshness: capabilityFreshness });
   const runtime = snapshot.runtime ?? {};
   const cycle = runtime.cycle ?? {};
   const resources = snapshot.resources ?? {};
@@ -2046,11 +2046,14 @@ async function refresh(force = false) {
   }
   if (qualification.status === 'fulfilled') {
     marketQualificationSnapshot = qualification.value;
+    qualificationRequestFreshness = 'current';
   } else if (marketQualificationSnapshot) {
+    qualificationRequestFreshness = 'stale';
     marketQualificationSnapshot = { ...marketQualificationSnapshot, market_data: {
       ...marketQualificationSnapshot.market_data, freshness: 'stale',
     } };
   } else {
+    qualificationRequestFreshness = 'unavailable';
     marketQualificationSnapshot = { status: 'unavailable' };
   }
   if (bill.status === 'fulfilled') {
