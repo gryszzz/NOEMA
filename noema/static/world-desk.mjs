@@ -302,16 +302,19 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
 }
 
 export function hasKillBoardCoverage(snapshot = {}, cutoff = Infinity) {
+  const sections = snapshot.sections ?? {};
   return ['decisions', 'missions', 'research_runs'].every(name =>
-    ['recorded', 'empty'].includes(snapshot.sections?.[name]?.status)
-      && snapshot.sections?.[name]?.has_more !== true)
+    ['recorded', 'empty'].includes(sections[name]?.status)
+      && sections[name]?.has_more !== true
+      && !asRows(snapshot, name).some(row => row.record_status === 'invalid'))
     && (!Number.isFinite(cutoff) || hasCriticReplayCoverage(snapshot));
 }
 
 function hasCriticReplayCoverage(snapshot = {}) {
   const sections = snapshot.sections ?? {};
   if (!['mission_events', 'handoffs'].every(name =>
-    ['recorded', 'empty'].includes(sections[name]?.status) && sections[name]?.has_more !== true)) return false;
+    ['recorded', 'empty'].includes(sections[name]?.status) && sections[name]?.has_more !== true
+      && !asRows(snapshot, name).some(row => row.record_status === 'invalid'))) return false;
   const events = asRows(snapshot, 'mission_events');
   const handoffs = asRows(snapshot, 'handoffs');
   return asRows(snapshot, 'research_runs').every(row => {

@@ -150,6 +150,10 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
   assert.equal(hasKillBoardCoverage({ sections: {
     decisions: { status: 'empty' }, missions: { status: 'not_recorded' }, research_runs: { status: 'empty' },
   } }), false);
+  assert.equal(hasKillBoardCoverage({ sections: {
+    decisions: { status: 'recorded', rows: [{ record_status: 'invalid' }] },
+    missions: { status: 'empty' }, research_runs: { status: 'empty' },
+  } }), false);
   const cutoffKills = deriveKillBoard({ sections: {
     decisions: { rows: [{ id: 5, decision: 'PASS', created_at: '2026-10-06T12:02:00Z' }] },
     missions: { rows: [
@@ -182,6 +186,10 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
   assert.equal(hasKillBoardCoverage(replaySnapshot, Date.parse('2026-10-06T12:06:00Z')), false);
   assert.equal(killBoardEmptyMessage(replaySnapshot, Date.parse('2026-10-06T12:06:00Z')),
     'Decision history unavailable; no failures are inferred.');
+  assert.equal(hasKillBoardCoverage({ sections: {
+    decisions: { status: 'empty' }, missions: { status: 'empty' },
+    research_runs: { status: 'recorded', rows: [{ record_status: 'invalid' }] },
+  } }), false);
   assert.match(killBoardEmptyMessage({ database_present: true }, Infinity, { operations: 'stale' }), /retained records may be stale/);
 });
 
