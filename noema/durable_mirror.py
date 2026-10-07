@@ -453,6 +453,17 @@ async def export_critical_state(
                     source_rowid = row.get("source_rowid")
                     source_event_id = row.get("source_event_id")
                     source_schema_version = row.get("source_schema_version")
+                    payload = row.get("payload")
+                    # The Edge Function's JSON parse/stringify hop can collapse
+                    # legacy JSONB numerics such as 0.0 to 0. Pull the original
+                    # JSONB text alongside the object so legacy hashes retain
+                    # the exact numeric representation stored by PostgreSQL.
+                    payload_json = row.get("payload_json")
+                    if isinstance(payload_json, str):
+                        try:
+                            payload = json.loads(payload_json)
+                        except json.JSONDecodeError as exc:
+                            raise RuntimeError(f"durable mirror returned invalid payload JSON for {stream}") from exc
                     legacy_identity = False
                     if source_rowid is None and isinstance(record_key, str):
                         prefix = f"{stream}:"
@@ -468,7 +479,7 @@ async def export_critical_state(
                         "version_sha256": row.get("version_sha256"), "occurred_at": row.get("occurred_at"),
                         "operation": row.get("operation") or "upsert", "source_rowid": source_rowid,
                         "source_event_id": source_event_id,
-                        "payload": row.get("payload"), "source_commit": row.get("source_commit"),
+                        "payload": payload, "source_commit": row.get("source_commit"),
                         "source_host": row.get("source_host"),
                         "source_schema_version": source_schema_version,
                     })
@@ -631,7 +642,8 @@ async def sync_critical_state(
                     },
                 )
                 mirrored += int(result.get("accepted") or 0)
-                if len(rows) >= config.rows_per_stream or not baseline_complete:
+                if (len(rows) >= config.rows_per_stream or not baseline_complete
+                        or last_cursor < local_high_water):
                     lagging += 1
 
             return {

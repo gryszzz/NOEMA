@@ -22,6 +22,7 @@ from noema.durable_mirror import (
     _initialize_restore_schema,
     _json_safe,
     _legacy_canonical_hash,
+    _load_restore_bundle,
     export_critical_state,
     restore_critical_state,
     sync_critical_state,
@@ -58,6 +59,7 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     assert sql_streams == edge_streams == set(MUTABLE_STREAMS)
     assert "source_rowid = split_part(record_key, ':', 2)::bigint" in sql
     assert "source_event_id = 'legacy:' || id::text" in sql
+    assert "payload::text as payload_json" in sql
     assert "[functions.noema-durable-mirror]\nverify_jwt = false" in config
 
 
@@ -153,6 +155,44 @@ async def test_sync_resumes_legacy_append_only_rowid_checkpoint(tmp_path: Path) 
     assert [record["source_rowid"] for record in ingested] == [2]
     # Row 1 was already represented by the legacy checkpoint; only later rows
     # should be transmitted after the upgrade.
+
+
+@pytest.mark.asyncio
+async def test_sync_marks_append_only_write_after_page_fetch_as_lagging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "noema.db"
+    _db(db)
+    original_stream_rows = durable_mirror._stream_rows
+    inserted = False
+
+    def race_after_page(conn: sqlite3.Connection, stream: str, *, after_rowid: int, limit: int):
+        nonlocal inserted
+        rows = original_stream_rows(conn, stream, after_rowid=after_rowid, limit=limit)
+        if not inserted:
+            with sqlite3.connect(db) as writer:
+                writer.execute(
+                    "INSERT INTO economic_events(id,provider,amount,created_at) VALUES (2,'openai','2.50','2026-10-06T16:02:00+00:00')",
+                )
+            inserted = True
+        return rows
+
+    monkeypatch.setattr(durable_mirror, "_stream_rows", race_after_page)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": {}})
+        checkpoint = body["checkpoint"]
+        assert checkpoint["last_cursor"] == "1"
+        assert checkpoint["metadata"]["local_high_water"] == 2
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    result = await sync_critical_state(
+        str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+        streams=("economic_events",), transport=httpx.MockTransport(handler),
+    )
+    assert result["lagging_streams"] == 1
 
 
 def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) -> None:
@@ -337,6 +377,49 @@ async def test_export_recovers_legacy_mirror_rows_with_original_sqlite_rowid(tmp
         history = conn.execute("SELECT source_rowid,source_event_id,source_schema_version FROM noema_mirror_history WHERE stream='missions'").fetchone()
     assert row == (7, "mission-preserved", "completed")
     assert history == (7, "legacy:19", "legacy-unversioned")
+
+
+@pytest.mark.asyncio
+async def test_export_preserves_legacy_numeric_json_for_hash_validation(tmp_path: Path) -> None:
+    original = tmp_path / "original.json"
+    _restore_bundle(original)
+    bundle = json.loads(original.read_text())
+    legacy_payload = next(item for item in bundle["streams"] if item["name"] == "missions")["records"][0]["payload"]
+    legacy_payload["legacy_real"] = 0.0
+    digest = _legacy_canonical_hash(legacy_payload)
+    target = tmp_path / "legacy-numeric-export.json"
+    manifest_streams = [{
+        "name": name,
+        "record_count": 1 if name == "missions" else 0,
+        "restore_floor_id": 0,
+        "checkpoint": {"last_cursor": "9", "metadata": {
+            "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+            "local_high_water": 9, "baseline_complete": True,
+            "restore_floor_id": 0, "capture_epoch": "legacy-upgrade" if name in MUTABLE_STREAMS else None,
+        }},
+    } for name in DEFAULT_STREAMS]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "export_manifest":
+            return httpx.Response(200, json={"complete": True, "through_cursor": 19,
+                "streams": manifest_streams, "checkpoint_metadata": {}})
+        if body["action"] == "pull":
+            rows = [{"id": 19, "stream": "missions", "record_key": "missions:7",
+                "version_sha256": digest, "occurred_at": legacy_payload["created_at"],
+                # Model JSON.parse/JSON.stringify collapsing the object number.
+                "payload": {**legacy_payload, "legacy_real": 0},
+                "payload_json": json.dumps(legacy_payload, separators=(",", ":")),
+                "operation": "upsert", "source_rowid": 7, "source_event_id": "legacy:19",
+                "source_schema_version": "legacy-unversioned"}] if body["streams"] == ["missions"] else []
+            return httpx.Response(200, json={"records": rows, "has_more": False, "next_id": 19 if rows else 0})
+        raise AssertionError(body)
+
+    await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+        transport=httpx.MockTransport(handler))
+    exported = _load_restore_bundle(target)
+    record = next(item for item in exported["streams"] if item["name"] == "missions")["records"][0]
+    assert record["payload"]["legacy_real"] == 0.0
 
 
 @pytest.mark.asyncio

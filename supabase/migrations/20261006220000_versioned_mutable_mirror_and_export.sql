@@ -87,7 +87,7 @@ create or replace function noema.noema_mirror_pull(p_streams text[],p_since_id b
   p_limit integer default 500,p_through_id bigint default null)
 returns jsonb language sql security definer set search_path = noema, pg_temp as $$
   with page as (
-    select id,stream,record_key,version_sha256,occurred_at,payload,source_commit,source_host,
+    select id,stream,record_key,version_sha256,occurred_at,payload,payload::text as payload_json,source_commit,source_host,
       mirrored_at,operation,source_rowid,source_schema_version,source_event_id
     from noema.mirror_records where stream=any(p_streams) and id>p_since_id
       and (p_through_id is null or id<=p_through_id)
