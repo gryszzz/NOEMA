@@ -250,15 +250,18 @@ def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -
     ts_old = "coalesce(" + ",".join("OLD." + _qident(c) for c in _TIMESTAMP_FIELDS if c in columns) + ("," if any(c in columns for c in _TIMESTAMP_FIELDS) else "") + "NULL)"
     prefix = "noema_mirror_" + stream
     conn.executescript(f"""
-      CREATE TRIGGER IF NOT EXISTS {_qident(prefix + '_ai')} AFTER INSERT ON {_qident(stream)} BEGIN
+      DROP TRIGGER IF EXISTS {_qident(prefix + '_ai')};
+      DROP TRIGGER IF EXISTS {_qident(prefix + '_ad')};
+      DROP TRIGGER IF EXISTS {_qident(prefix + '_au')};
+      CREATE TRIGGER {_qident(prefix + '_ai')} AFTER INSERT ON {_qident(stream)} BEGIN
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
         VALUES ({_sql_string(stream)},{new_record},NEW.rowid,'upsert',{payload_new},{ts_new});
       END;
-      CREATE TRIGGER IF NOT EXISTS {_qident(prefix + '_ad')} AFTER DELETE ON {_qident(stream)} BEGIN
+      CREATE TRIGGER {_qident(prefix + '_ad')} AFTER DELETE ON {_qident(stream)} BEGIN
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
         VALUES ({_sql_string(stream)},{old_record},OLD.rowid,'tombstone',json_object('__noema_tombstone__',1,'identity',{identity_old}),{ts_old});
       END;
-      CREATE TRIGGER IF NOT EXISTS {_qident(prefix + '_au')} AFTER UPDATE ON {_qident(stream)} BEGIN
+      CREATE TRIGGER {_qident(prefix + '_au')} AFTER UPDATE ON {_qident(stream)} BEGIN
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
         SELECT {_sql_string(stream)},{old_record},OLD.rowid,'tombstone',json_object('__noema_tombstone__',1,'identity',{identity_old}),{ts_old}
           WHERE {old_record} <> {new_record};
@@ -457,6 +460,11 @@ async def export_critical_state(
             "checkpoint_metadata": manifest.get("checkpoint_metadata", {}),
             "streams": result_streams,
         }
+        serialized_bundle = json.dumps(
+            bundle, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")
+        if len(serialized_bundle) > MAX_RESTORE_BUNDLE_BYTES:
+            raise RuntimeError("durable mirror export exceeds the local bundle byte limit")
     target = Path(output_path).expanduser().absolute()
     if target.exists():
         raise FileExistsError("export target already exists; choose a new recovery bundle path")
@@ -465,7 +473,7 @@ async def export_critical_state(
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(bundle, handle, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            handle.write(serialized_bundle.decode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
         os.link(temp_name, target)
@@ -525,6 +533,15 @@ async def sync_critical_state(
                 remote_meta = raw_checkpoint.get("metadata", {}) if isinstance(raw_checkpoint, dict) else {}
                 if (isinstance(raw_checkpoint, dict) and remote_meta.get("cursor_kind") == expected_kind
                         and (not mutable or remote_meta.get("capture_epoch") == capture_epoch)):
+                    try:
+                        cursor = max(0, int(raw_checkpoint.get("last_cursor") or 0))
+                    except (TypeError, ValueError):
+                        cursor = 0
+                elif (not mutable and isinstance(raw_checkpoint, dict)
+                      and "cursor_kind" not in remote_meta):
+                    # The parent worker stored append-only checkpoints as SQLite
+                    # rowids without cursor metadata. Preserve that cursor during
+                    # upgrade; mutable streams must still reseed under CDC.
                     try:
                         cursor = max(0, int(raw_checkpoint.get("last_cursor") or 0))
                     except (TypeError, ValueError):

@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from noema import durable_mirror
 from noema.durable_mirror import (
     DEFAULT_STREAMS,
     MUTABLE_STREAMS,
@@ -16,6 +17,7 @@ from noema.durable_mirror import (
     RESTORE_BUNDLE_VERSION,
     DurableMirrorConfig,
     _canonical_hash,
+    _ensure_mutable_capture,
     _initialize_restore_schema,
     export_critical_state,
     restore_critical_state,
@@ -117,6 +119,49 @@ async def test_sync_ignores_legacy_mutable_rowid_checkpoint(tmp_path: Path) -> N
     assert len(ingested) == 1
     assert ingested[0]["operation"] == "upsert"
     assert ingested[0]["source_rowid"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_resumes_legacy_append_only_rowid_checkpoint(tmp_path: Path) -> None:
+    db = tmp_path / "noema.db"
+    _db(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO economic_events(id,provider,amount,created_at) VALUES (2,'openai','2.50','2026-10-06T16:02:00+00:00')",
+        )
+    ingested: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={
+                "checkpoints": {"economic_events": {"last_cursor": "1"}},
+            })
+        ingested.extend(body["records"])
+        return httpx.Response(200, json={"status": "persisted", "accepted": len(body["records"])})
+
+    result = await sync_critical_state(
+        str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+        streams=("economic_events",), transport=httpx.MockTransport(handler),
+    )
+    assert result["mirrored"] == 1
+    assert [record["source_rowid"] for record in ingested] == [2]
+    # Row 1 was already represented by the legacy checkpoint; only later rows
+    # should be transmitted after the upgrade.
+
+
+def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) -> None:
+    db = tmp_path / "noema.db"
+    _db(db)
+    with sqlite3.connect(db) as conn:
+        assert _ensure_mutable_capture(conn, "missions", 100)[0]
+        conn.execute("ALTER TABLE missions ADD COLUMN safety_note TEXT")
+        assert _ensure_mutable_capture(conn, "missions", 100)[0]
+        conn.execute("UPDATE missions SET safety_note='reviewed' WHERE mission_id='m1'")
+        payload = conn.execute(
+            "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' ORDER BY event_id DESC LIMIT 1",
+        ).fetchone()[0]
+    assert json.loads(payload)["safety_note"] == "reviewed"
 
 
 @pytest.mark.asyncio
@@ -268,6 +313,40 @@ async def test_export_refuses_aggregate_record_count_above_restore_limit(tmp_pat
             "streams": manifest_streams, "checkpoint_metadata": {}})
 
     with pytest.raises(RuntimeError, match="aggregate record limit"):
+        await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            transport=httpx.MockTransport(handler))
+    assert not target.exists()
+
+
+@pytest.mark.asyncio
+async def test_export_refuses_bundle_above_restore_byte_limit(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "too-large.json"
+    monkeypatch.setattr(durable_mirror, "MAX_RESTORE_BUNDLE_BYTES", 1000)
+    manifest_streams = [{
+        "name": name, "record_count": int(name == "economic_events"), "restore_floor_id": 0,
+        "checkpoint": {"last_cursor": "0", "metadata": {
+            "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+            "local_high_water": 0, "baseline_complete": True,
+            "restore_floor_id": 0, "capture_epoch": "epoch" if name in MUTABLE_STREAMS else None,
+        }},
+    } for name in DEFAULT_STREAMS]
+    payload = {"detail": "x" * 1500}
+    record = {"id": 1, "stream": "economic_events", "record_key": "economic_events:1",
+        "version_sha256": _canonical_hash(payload), "occurred_at": None, "operation": "upsert",
+        "source_rowid": 1, "source_event_id": None, "source_schema_version": None,
+        "source_commit": "fixture", "source_host": "fixture", "payload": payload}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "export_manifest":
+            return httpx.Response(200, json={"complete": True, "through_cursor": 1,
+                "streams": manifest_streams, "checkpoint_metadata": {}})
+        if body["action"] == "pull":
+            rows = [record] if body["streams"] == ["economic_events"] else []
+            return httpx.Response(200, json={"records": rows, "has_more": False})
+        raise AssertionError(body)
+
+    with pytest.raises(RuntimeError, match="bundle byte limit"):
         await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
             transport=httpx.MockTransport(handler))
     assert not target.exists()
