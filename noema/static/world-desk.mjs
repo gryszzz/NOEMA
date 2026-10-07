@@ -301,9 +301,38 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
     || a.id.localeCompare(b.id)).slice(0, Math.max(1, Math.min(50, Number(limit) || 12)));
 }
 
-export function hasKillBoardCoverage(snapshot = {}) {
+export function hasKillBoardCoverage(snapshot = {}, cutoff = Infinity) {
   return ['decisions', 'missions', 'research_runs'].every(name =>
-    ['recorded', 'empty'].includes(snapshot.sections?.[name]?.status));
+    ['recorded', 'empty'].includes(snapshot.sections?.[name]?.status)
+      && snapshot.sections?.[name]?.has_more !== true)
+    && (!Number.isFinite(cutoff) || hasCriticReplayCoverage(snapshot));
+}
+
+function hasCriticReplayCoverage(snapshot = {}) {
+  const sections = snapshot.sections ?? {};
+  if (!['mission_events', 'handoffs'].every(name =>
+    ['recorded', 'empty'].includes(sections[name]?.status) && sections[name]?.has_more !== true)) return false;
+  const events = asRows(snapshot, 'mission_events');
+  const handoffs = asRows(snapshot, 'handoffs');
+  return asRows(snapshot, 'research_runs').every(row => {
+    const review = parseResult(row.result).critic_review;
+    if (!review || review.result_accepted !== false) return true;
+    return events.some(event => event.mission_id === row.mission_id
+      && String(event.event_type ?? '').toLowerCase() === 'critic_evaluation'
+      && parseTime(event.created_at) != null)
+      || handoffs.some(handoff => handoff.mission_id === row.mission_id
+        && String(handoff.status ?? '').toLowerCase() === 'completed'
+        && parseTime(handoff.updated_at ?? handoff.created_at) != null);
+  });
+}
+
+export function killBoardEmptyMessage(snapshot = {}, cutoff = Infinity, freshness = {}) {
+  if (!Number.isFinite(cutoff) && freshness.operations === 'stale') {
+    return 'Latest operations refresh failed; retained records may be stale. No current absence can be confirmed.';
+  }
+  return snapshot?.database_present && hasKillBoardCoverage(snapshot, cutoff)
+    ? 'No persisted PASS, critic rejection, or terminated mission is present in the loaded records.'
+    : 'Decision history unavailable; no failures are inferred.';
 }
 
 export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cutoff = Infinity) {

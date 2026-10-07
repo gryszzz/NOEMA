@@ -4,7 +4,7 @@ import { workstationDescriptor } from './world-workstations.mjs';
 import { deriveMissionOccupancies, deriveActiveMissionLineage, recordedDeliverable } from './world-occupancy.mjs';
 import {
   bindAutonomousDesk, deriveShiftPackets, deriveShiftTape, deriveRuleRack,
-  deriveKillBoard, deriveShiftReport, hasKillBoardCoverage,
+  deriveKillBoard, deriveShiftReport, killBoardEmptyMessage,
 } from './world-desk.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
@@ -854,9 +854,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       const kills = deriveKillBoard(source, 12, replayCutoff);
       if (!kills.length) {
         const empty = document.createElement('p'); empty.className = 'autonomous-empty';
-        empty.textContent = source?.database_present && hasKillBoardCoverage(source)
-          ? 'No persisted PASS, critic rejection, or terminated mission is present in the loaded records.'
-          : 'Decision history unavailable; no failures are inferred.';
+        empty.textContent = killBoardEmptyMessage(source, replayCutoff, capabilitySources.freshness);
         killsHost.append(empty);
       }
       for (const item of kills) {

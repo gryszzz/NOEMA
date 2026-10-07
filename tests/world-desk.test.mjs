@@ -9,6 +9,7 @@ import {
   deriveKillBoard,
   deriveShiftReport,
   hasKillBoardCoverage,
+  killBoardEmptyMessage,
 } from '../noema/static/world-desk.mjs';
 
 test('autonomous desk binds only observable specialists/tools and leaves missing seats vacant', () => {
@@ -172,6 +173,16 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
     mission_events: { rows: [] },
   } }, 12, Date.parse('2026-10-06T12:06:00Z'));
   assert.deepEqual(unTimestampedReplay, []);
+  const replaySnapshot = { sections: {
+    decisions: { status: 'empty', rows: [] }, missions: { status: 'empty', rows: [] },
+    research_runs: { status: 'recorded', rows: [{ mission_id: 'no-event',
+      result: JSON.stringify({ critic_review: { result_accepted: false } }) }] },
+    mission_events: { status: 'unavailable', rows: [] }, handoffs: { status: 'empty', rows: [] },
+  } };
+  assert.equal(hasKillBoardCoverage(replaySnapshot, Date.parse('2026-10-06T12:06:00Z')), false);
+  assert.equal(killBoardEmptyMessage(replaySnapshot, Date.parse('2026-10-06T12:06:00Z')),
+    'Decision history unavailable; no failures are inferred.');
+  assert.match(killBoardEmptyMessage({ database_present: true }, Infinity, { operations: 'stale' }), /retained records may be stale/);
 });
 
 test('Shift Report uses persisted records, flags partial coverage, and keeps economics unknown', () => {
