@@ -99,7 +99,7 @@ returns jsonb language sql security definer set search_path = noema, pg_temp as 
 $$;
 
 create or replace function noema.noema_mirror_export_manifest(p_streams text[])
-returns jsonb language plpgsql security definer set search_path = noema, pg_temp as $$
+returns jsonb language plpgsql stable security definer set search_path = noema, pg_temp as $$
 declare watermark bigint; requested_count integer; stream_name text; cp noema.mirror_checkpoints%rowtype;
   result jsonb := '[]'::jsonb; complete_all boolean := true; floor_id bigint; n bigint; meta jsonb;
 begin

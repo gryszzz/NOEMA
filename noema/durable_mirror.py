@@ -918,7 +918,8 @@ def restore_critical_state(
                     conn.execute(f"INSERT INTO {quoted} ({quoted_columns}) VALUES ({placeholders})", values)
                     rowid = cursor if cursor is not None else conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     restored_row = conn.execute(f"SELECT * FROM {quoted} WHERE rowid=?", (rowid,)).fetchone()
-                    restored_payload = dict(restored_row) if restored_row is not None else None
+                    restored_payload = ({key: restored_row[key] for key in payload_columns}
+                                        if restored_row is not None else None)
                     restored_hash = (
                         _legacy_canonical_hash(restored_payload)
                         if restored_payload is not None and record.get("source_schema_version") == "legacy-unversioned"

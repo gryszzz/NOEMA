@@ -60,6 +60,7 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     assert "source_rowid = split_part(record_key, ':', 2)::bigint" in sql
     assert "source_event_id = 'legacy:' || id::text" in sql
     assert "payload::text as payload_json" in sql
+    assert "noema_mirror_export_manifest(p_streams text[])\nreturns jsonb language plpgsql stable" in sql
     assert "[functions.noema-durable-mirror]\nverify_jwt = false" in config
 
 
@@ -693,6 +694,54 @@ def test_restore_complete_bundle_preserves_rowid_and_verifies_database(tmp_path:
             "SELECT rowid,mission_id,status FROM missions"
         ).fetchone()
     assert row == (7, "mission-preserved", "completed")
+
+
+def test_restore_verifies_append_only_payload_after_additive_schema_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_path = tmp_path / "schema-evolved-export.json"
+    target = tmp_path / "schema-evolved-restore.db"
+    _restore_bundle(bundle_path)
+    bundle = json.loads(bundle_path.read_text())
+    stream = next(item for item in bundle["streams"] if item["name"] == "economic_events")
+    payload = {
+        "id": 4,
+        "created_at": "2026-10-06T16:00:00+00:00",
+        "event_type": "research_evidence",
+        "amount_usd": None,
+        "payload_json": "{}",
+    }
+    stream["records"] = [{
+        "mirror_id": 7,
+        "stream": "economic_events",
+        "record_key": "economic_events:4",
+        "version_sha256": _canonical_hash(payload),
+        "occurred_at": payload["created_at"],
+        "operation": "upsert",
+        "source_rowid": 4,
+        "source_event_id": None,
+        "source_schema_version": None,
+        "payload": payload,
+    }]
+    stream["record_count"] = 1
+    bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    initialize = durable_mirror._initialize_restore_schema
+
+    def initialize_with_new_optional_column(path: Path) -> None:
+        initialize(path)
+        with sqlite3.connect(path) as conn:
+            conn.execute("ALTER TABLE economic_events ADD COLUMN future_metadata TEXT DEFAULT 'introduced-later'")
+
+    monkeypatch.setattr(durable_mirror, "_initialize_restore_schema", initialize_with_new_optional_column)
+    report = restore_critical_state(bundle_path, target)
+
+    assert report["status"] == "restored_and_verified"
+    with sqlite3.connect(target) as conn:
+        row = conn.execute(
+            "SELECT id,event_type,future_metadata FROM economic_events WHERE id=4",
+        ).fetchone()
+    assert row == (4, "research_evidence", "introduced-later")
 
 
 def test_restore_refuses_partial_bundle_and_does_not_create_target(tmp_path: Path) -> None:
