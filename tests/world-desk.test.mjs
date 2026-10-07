@@ -158,6 +158,20 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
     research_runs: { rows: [{ id: 6, created_at: '2026-10-06T12:04:00Z', result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['future rejection'] } }) }] },
   } }, 12, Date.parse('2026-10-06T12:01:00Z'));
   assert.deepEqual(cutoffKills.map(item => item.missionId), ['terminal']);
+  const criticReplay = cutoff => deriveKillBoard({ sections: {
+    research_runs: { rows: [{ id: 7, mission_id: 'critic-mission', completed_at: '2026-10-06T12:00:00Z',
+      result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['rejected'] } }) }] },
+    mission_events: { rows: [{ mission_id: 'critic-mission', event_type: 'critic_evaluation',
+      created_at: '2026-10-06T12:05:00Z' }] },
+  } }, 12, Date.parse(cutoff));
+  assert.deepEqual(criticReplay('2026-10-06T12:03:00Z'), []);
+  assert.equal(criticReplay('2026-10-06T12:06:00Z')[0].at, '2026-10-06T12:05:00Z');
+  const unTimestampedReplay = deriveKillBoard({ sections: {
+    research_runs: { rows: [{ id: 8, mission_id: 'no-event', completed_at: '2026-10-06T12:00:00Z',
+      result: JSON.stringify({ critic_review: { result_accepted: false } }) }] },
+    mission_events: { rows: [] },
+  } }, 12, Date.parse('2026-10-06T12:06:00Z'));
+  assert.deepEqual(unTimestampedReplay, []);
 });
 
 test('Shift Report uses persisted records, flags partial coverage, and keeps economics unknown', () => {

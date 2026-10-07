@@ -173,6 +173,33 @@ def test_sidecar_terminal_run_wins_over_incomplete_worker_copy(tmp_path):
     assert runs[0]["observations"] == 7
 
 
+def test_large_sidecar_critic_result_remains_valid_and_preserves_rejection(tmp_path):
+    worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute("""CREATE TABLE autonomous_research_runs(
+            id INTEGER PRIMARY KEY,trial_id TEXT,specialist TEXT,kind TEXT,evidence_hash TEXT,
+            worker_version TEXT,status TEXT,created_at TEXT,completed_at TEXT,elapsed_seconds REAL,
+            compute_cost_usd TEXT,result_json TEXT,evidence_path TEXT,mission_id TEXT)""")
+        result = {
+            "critic_review": {
+                "verdict": "REJECT", "result_accepted": False,
+                "issues": ["Critical evidence mismatch", *("oversized detail " + "x" * 500 for _ in range(10))],
+                "conclusion": "Evidence does not support the result." + "y" * 500,
+            },
+            "large_payload": "z" * 5000,
+        }
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "sidecar-trial", "evidence-critic", "validation", "hash", "v1", "completed",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, json.dumps(result), None, "mission-sidecar",
+        ))
+
+    run = build_operations(str(worker), now=NOW, additional_paths=(str(sidecar),))["sections"]["research_runs"]["rows"][0]
+    projected = json.loads(run["result"])
+    assert len(run["result"]) <= 4000
+    assert projected["critic_review"]["result_accepted"] is False
+    assert projected["critic_review"]["issues"][0] == "Critical evidence mismatch"
+
+
 def test_sidecar_experiments_keep_metadata_and_relationship_projection(tmp_path):
     worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
     with sqlite3.connect(worker) as conn:

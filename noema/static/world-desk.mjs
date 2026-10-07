@@ -272,10 +272,26 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
       missionId: row.mission_id, decisionId: null });
   }
   for (const row of asRows(snapshot, 'research_runs')) {
-    if (!beforeCutoff(row.completed_at ?? row.created_at)) continue;
     const review = parseResult(row.result).critic_review;
     if (!review || review.result_accepted !== false) continue;
-    items.push({ id: `critic:${row.id}`, at: row.completed_at ?? row.created_at,
+    let at = row.completed_at ?? row.created_at;
+    if (Number.isFinite(cutoff)) {
+      const events = asRows(snapshot, 'mission_events');
+      const criticEvent = events
+        .filter(event => event.mission_id === row.mission_id
+          && String(event.event_type ?? '').toLowerCase() === 'critic_evaluation')
+        .sort((a, b) => (parseTime(a.created_at) ?? 0) - (parseTime(b.created_at) ?? 0))
+        .at(-1);
+      const completedHandoff = asRows(snapshot, 'handoffs')
+        .filter(handoff => handoff.mission_id === row.mission_id
+          && String(handoff.status ?? '').toLowerCase() === 'completed')
+        .sort((a, b) => (parseTime(a.updated_at ?? a.created_at) ?? 0)
+          - (parseTime(b.updated_at ?? b.created_at) ?? 0))
+        .at(-1);
+      at = criticEvent?.created_at ?? completedHandoff?.updated_at ?? completedHandoff?.created_at;
+      if (!beforeCutoff(at)) continue;
+    } else if (!beforeCutoff(at)) continue;
+    items.push({ id: `critic:${row.id}`, at,
       kind: 'EVIDENCE CRITIC', title: `${row.specialist ?? 'Specialist unknown'} · ${row.kind ?? 'research'}`,
       reason: review.reason ?? (Array.isArray(review.issues) ? review.issues.join(' · ') : null)
         ?? review.conclusion ?? review.verdict ?? 'Evidence critic rejected the result',
