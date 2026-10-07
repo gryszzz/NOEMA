@@ -3,6 +3,27 @@ alter table noema.mirror_records add column if not exists operation text not nul
 alter table noema.mirror_records add column if not exists source_rowid bigint;
 alter table noema.mirror_records add column if not exists source_schema_version text;
 alter table noema.mirror_records add column if not exists source_event_id text;
+
+-- The previous worker encoded SQLite rowids in record_key but did not populate
+-- the later provenance columns. Preserve those original identities in place;
+-- the synthetic event identity is explicitly namespaced as legacy metadata.
+update noema.mirror_records
+set source_rowid = split_part(record_key, ':', 2)::bigint,
+    source_schema_version = coalesce(source_schema_version, 'legacy-unversioned')
+where source_rowid is null
+  and split_part(record_key, ':', 1) = stream
+  and split_part(record_key, ':', 2) ~ '^[1-9][0-9]{0,18}$'
+  and split_part(record_key, ':', 3) = ''
+  and split_part(record_key, ':', 2)::numeric <= 9223372036854775807;
+
+update noema.mirror_records
+set source_event_id = 'legacy:' || id::text,
+    source_schema_version = coalesce(source_schema_version, 'legacy-unversioned')
+where stream = any(array['agent_runtime','agent_cycle_timings','missions','mission_handoffs',
+  'ecosystem_specialists','research_trials','autonomous_research_runs','bill_budget',
+  'prediction_account_records','prediction_account_sync_state'])
+  and source_event_id is null;
+
 alter table noema.mirror_records drop constraint if exists mirror_records_stream_record_key_version_sha256_key;
 create unique index if not exists mirror_records_legacy_content_dedupe
   on noema.mirror_records(stream,record_key,version_sha256) where source_event_id is null;

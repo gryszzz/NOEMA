@@ -360,13 +360,23 @@ async def export_critical_state(
         declared = {item.get("name"): item for item in manifest["streams"] if isinstance(item, dict)}
         if set(declared) != set(DEFAULT_STREAMS):
             raise RuntimeError("durable mirror export manifest omitted critical streams")
+        expected_counts: dict[str, int] = {}
+        aggregate_expected = 0
+        for stream in DEFAULT_STREAMS:
+            try:
+                count = int(declared[stream]["record_count"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(f"durable mirror manifest has no count for {stream}") from exc
+            if count < 0:
+                raise RuntimeError(f"durable mirror manifest has an invalid count for {stream}")
+            aggregate_expected += count
+            if aggregate_expected > MAX_RESTORE_RECORDS:
+                raise RuntimeError("durable mirror export exceeds the local aggregate record limit")
+            expected_counts[stream] = count
         result_streams = []
         for stream in DEFAULT_STREAMS:
             meta = declared[stream]
-            try:
-                expected_count = int(meta["record_count"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise RuntimeError(f"durable mirror manifest has no count for {stream}") from exc
+            expected_count = expected_counts[stream]
             records: list[dict[str, Any]] = []
             since_id = 0
             while True:
@@ -384,17 +394,29 @@ async def export_critical_state(
                     if mirror_id <= since_id or mirror_id > watermark:
                         raise RuntimeError(f"durable mirror returned unordered/out-of-watermark records for {stream}")
                     since_id = mirror_id
+                    record_key = row.get("record_key")
+                    source_rowid = row.get("source_rowid")
+                    source_event_id = row.get("source_event_id")
+                    source_schema_version = row.get("source_schema_version")
+                    legacy_identity = False
+                    if source_rowid is None and isinstance(record_key, str):
+                        prefix = f"{stream}:"
+                        suffix = record_key[len(prefix):] if record_key.startswith(prefix) else ""
+                        if suffix.isascii() and suffix.isdecimal() and int(suffix) > 0:
+                            source_rowid = int(suffix)
+                            legacy_identity = True
+                    if stream in MUTABLE_STREAMS and source_event_id is None and legacy_identity:
+                        source_event_id = f"legacy:{mirror_id}"
+                        source_schema_version = source_schema_version or "legacy-unversioned"
                     records.append({
-                        "mirror_id": mirror_id, "stream": stream, "record_key": row.get("record_key"),
+                        "mirror_id": mirror_id, "stream": stream, "record_key": record_key,
                         "version_sha256": row.get("version_sha256"), "occurred_at": row.get("occurred_at"),
-                        "operation": row.get("operation") or "upsert", "source_rowid": row.get("source_rowid"),
-                        "source_event_id": row.get("source_event_id"),
+                        "operation": row.get("operation") or "upsert", "source_rowid": source_rowid,
+                        "source_event_id": source_event_id,
                         "payload": row.get("payload"), "source_commit": row.get("source_commit"),
                         "source_host": row.get("source_host"),
-                        "source_schema_version": row.get("source_schema_version"),
+                        "source_schema_version": source_schema_version,
                     })
-                    if len(records) > MAX_RESTORE_RECORDS:
-                        raise RuntimeError("durable mirror export exceeds the local record limit")
                 if page.get("has_more") is not True:
                     break
                 if not rows:

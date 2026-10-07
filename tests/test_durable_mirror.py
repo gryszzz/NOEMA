@@ -50,6 +50,8 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     sql_streams = set(re.findall(r"'([^']+)'", sql_block.group(1)))
     edge_streams = set(re.findall(r'"([^\"]+)"', edge_block.group(1)))
     assert sql_streams == edge_streams == set(MUTABLE_STREAMS)
+    assert "source_rowid = split_part(record_key, ':', 2)::bigint" in sql
+    assert "source_event_id = 'legacy:' || id::text" in sql
 
 
 @pytest.mark.asyncio
@@ -201,6 +203,74 @@ async def test_export_writes_explicit_empty_streams_and_fails_closed(tmp_path: P
             transport=httpx.MockTransport(incomplete),
         )
     assert not (tmp_path / "should-not-exist.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_export_recovers_legacy_mirror_rows_with_original_sqlite_rowid(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture.json"
+    _restore_bundle(fixture)
+    payload = next(item for item in json.loads(fixture.read_text())["streams"]
+                   if item["name"] == "missions")["records"][0]["payload"]
+    target = tmp_path / "legacy-export.json"
+    manifest_streams = [{
+        "name": name,
+        "record_count": 1 if name == "missions" else 0,
+        "restore_floor_id": 0,
+        "checkpoint": {"last_cursor": "9", "metadata": {
+            "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+            "local_high_water": 9, "baseline_complete": True,
+            "restore_floor_id": 0, "capture_epoch": "new-epoch" if name in MUTABLE_STREAMS else None,
+        }},
+    } for name in DEFAULT_STREAMS]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "export_manifest":
+            return httpx.Response(200, json={"complete": True, "through_cursor": 19,
+                "streams": manifest_streams, "checkpoint_metadata": {}})
+        if body["action"] == "pull":
+            rows = [{"id": 19, "stream": "missions", "record_key": "missions:7",
+                "version_sha256": _canonical_hash(payload), "occurred_at": payload["created_at"],
+                "payload": payload, "operation": "upsert", "source_rowid": None,
+                "source_event_id": None, "source_schema_version": None}] if body["streams"] == ["missions"] else []
+            return httpx.Response(200, json={"records": rows, "has_more": False, "next_id": 19 if rows else 0})
+        raise AssertionError(body)
+
+    await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+        transport=httpx.MockTransport(handler))
+    exported = json.loads(target.read_text())
+    record = next(item for item in exported["streams"] if item["name"] == "missions")["records"][0]
+    assert record["source_rowid"] == 7
+    assert record["source_event_id"] == "legacy:19"
+    assert record["source_schema_version"] == "legacy-unversioned"
+
+    restored = tmp_path / "restored-legacy.db"
+    restore_critical_state(target, restored)
+    with sqlite3.connect(restored) as conn:
+        row = conn.execute("SELECT rowid,mission_id,status FROM missions").fetchone()
+        history = conn.execute("SELECT source_rowid,source_event_id,source_schema_version FROM noema_mirror_history WHERE stream='missions'").fetchone()
+    assert row == (7, "mission-preserved", "completed")
+    assert history == (7, "legacy:19", "legacy-unversioned")
+
+
+@pytest.mark.asyncio
+async def test_export_refuses_aggregate_record_count_above_restore_limit(tmp_path: Path) -> None:
+    target = tmp_path / "too-large.json"
+    manifest_streams = [{
+        "name": name,
+        "record_count": 125_001 if name == "missions" else 125_000 if name == "economic_events" else 0,
+        "checkpoint": {},
+    } for name in DEFAULT_STREAMS]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["action"] == "export_manifest"
+        return httpx.Response(200, json={"complete": True, "through_cursor": 1,
+            "streams": manifest_streams, "checkpoint_metadata": {}})
+
+    with pytest.raises(RuntimeError, match="aggregate record limit"):
+        await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            transport=httpx.MockTransport(handler))
+    assert not target.exists()
 
 
 @pytest.mark.asyncio
