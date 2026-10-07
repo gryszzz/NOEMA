@@ -130,6 +130,36 @@ async def test_sync_ignores_legacy_mutable_rowid_checkpoint(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_sync_rejects_mutable_checkpoint_ahead_of_local_journal(tmp_path: Path) -> None:
+    db = tmp_path / "rolled-back-noema.db"
+    _db(db)
+    with sqlite3.connect(db) as conn:
+        _, epoch = _ensure_mutable_capture(conn, "missions", 50)
+        local_high_water = conn.execute(
+            "SELECT coalesce(max(event_id),0) FROM noema_mirror_change_events WHERE stream='missions'",
+        ).fetchone()[0]
+        conn.commit()
+    ingested: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": {"missions": {
+                "last_cursor": str(local_high_water + 20),
+                "metadata": {"cursor_kind": "change_event_id", "capture_epoch": epoch},
+            }}})
+        ingested.extend(body["records"])
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    with pytest.raises(ValueError, match="ahead of the local change journal"):
+        await sync_critical_state(
+            str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            streams=("missions",), transport=httpx.MockTransport(handler),
+        )
+    assert ingested == []
+
+
+@pytest.mark.asyncio
 async def test_sync_resumes_legacy_append_only_rowid_checkpoint(tmp_path: Path) -> None:
     db = tmp_path / "noema.db"
     _db(db)
