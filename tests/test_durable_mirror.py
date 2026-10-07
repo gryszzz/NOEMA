@@ -17,8 +17,10 @@ from noema.durable_mirror import (
     RESTORE_BUNDLE_VERSION,
     DurableMirrorConfig,
     _canonical_hash,
+    _decode_json_safe,
     _ensure_mutable_capture,
     _initialize_restore_schema,
+    _json_safe,
     export_critical_state,
     restore_critical_state,
     sync_critical_state,
@@ -162,6 +164,30 @@ def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) 
             "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' ORDER BY event_id DESC LIMIT 1",
         ).fetchone()[0]
     assert json.loads(payload)["safety_note"] == "reviewed"
+
+
+def test_mutable_capture_supports_tables_without_timestamp_columns(tmp_path: Path) -> None:
+    db = tmp_path / "noema.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE prediction_account_sync_state(venue TEXT, stream TEXT, cursor TEXT, PRIMARY KEY(venue,stream))")
+        conn.execute("INSERT INTO prediction_account_sync_state VALUES('kalshi','fills','1')")
+        _ensure_mutable_capture(conn, "prediction_account_sync_state", 100)
+        conn.execute("UPDATE prediction_account_sync_state SET cursor='2' WHERE venue='kalshi'")
+        row = conn.execute(
+            "SELECT operation,occurred_at FROM noema_mirror_change_events ORDER BY event_id DESC LIMIT 1",
+        ).fetchone()
+    assert row == ("upsert", None)
+
+
+def test_mirror_hash_normalizes_js_number_roundtrip_without_losing_large_values() -> None:
+    from noema.durable_mirror import _canonical_hash
+
+    assert _canonical_hash({"reliability": 0.0}) == _canonical_hash({"reliability": 0})
+    value = {"reliability": 0.25, "exact_integer": 2**60}
+    encoded = _json_safe(value)
+    assert encoded["reliability"] == {"__noema_float_hex__": (0.25).hex()}
+    assert encoded["exact_integer"] == {"__noema_integer__": str(2**60)}
+    assert _decode_json_safe(encoded) == value
 
 
 @pytest.mark.asyncio

@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import platform
+import re
 import sqlite3
 import tempfile
 import uuid
@@ -106,6 +108,14 @@ class DurableMirrorConfig:
 def _json_safe(value: Any) -> Any:
     if isinstance(value, bytes):
         return {"__noema_bytes_b64__": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and abs(value) > (2**53 - 1):
+        return {"__noema_integer__": str(value)}
+    if isinstance(value, float):
+        if value.is_integer() and abs(value) <= (2**53 - 1):
+            return int(value)
+        return {"__noema_float_hex__": value.hex()}
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -117,7 +127,7 @@ def _json_safe(value: Any) -> Any:
 
 def _canonical_hash(payload: dict[str, Any]) -> str:
     encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str, allow_nan=False,
+        _json_safe(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str, allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -215,6 +225,8 @@ def _sql_string(value: str) -> str:
 
 def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -> tuple[bool, str]:
     """Install local CDC triggers and incrementally seed the durable baseline."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     keys = MUTABLE_STREAMS[stream]
     columns = [str(row[1]) for row in conn.execute(f"PRAGMA table_info({_qident(stream)})")]
     missing = set(keys) - set(columns)
@@ -227,10 +239,15 @@ def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS noema_mirror_capture_state (
         stream TEXT PRIMARY KEY, seed_rowid INTEGER NOT NULL DEFAULT 0,
-        baseline_complete INTEGER NOT NULL DEFAULT 0, capture_epoch TEXT NOT NULL
+        baseline_complete INTEGER NOT NULL DEFAULT 0, capture_epoch TEXT NOT NULL,
+        schema_signature TEXT
     )""")
     try:
         conn.execute("ALTER TABLE noema_mirror_capture_state ADD COLUMN capture_epoch TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE noema_mirror_capture_state ADD COLUMN schema_signature TEXT")
     except sqlite3.OperationalError:
         pass
     conn.execute(
@@ -249,29 +266,38 @@ def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -
     ts_new = "coalesce(" + ",".join("NEW." + _qident(c) for c in _TIMESTAMP_FIELDS if c in columns) + ("," if any(c in columns for c in _TIMESTAMP_FIELDS) else "") + "NULL)"
     ts_old = "coalesce(" + ",".join("OLD." + _qident(c) for c in _TIMESTAMP_FIELDS if c in columns) + ("," if any(c in columns for c in _TIMESTAMP_FIELDS) else "") + "NULL)"
     prefix = "noema_mirror_" + stream
-    conn.executescript(f"""
-      DROP TRIGGER IF EXISTS {_qident(prefix + '_ai')};
-      DROP TRIGGER IF EXISTS {_qident(prefix + '_ad')};
-      DROP TRIGGER IF EXISTS {_qident(prefix + '_au')};
-      CREATE TRIGGER {_qident(prefix + '_ai')} AFTER INSERT ON {_qident(stream)} BEGIN
+    schema_signature = _canonical_hash({"columns": [tuple(row) for row in conn.execute(
+        f"PRAGMA table_info({_qident(stream)})",
+    )]})
+    timestamp_new = ts_new if any(c in columns for c in _TIMESTAMP_FIELDS) else "NULL"
+    timestamp_old = ts_old if any(c in columns for c in _TIMESTAMP_FIELDS) else "NULL"
+    trigger_definitions = (
+      f"""CREATE TRIGGER {_qident(prefix + '_ai')} AFTER INSERT ON {_qident(stream)} BEGIN
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
-        VALUES ({_sql_string(stream)},{new_record},NEW.rowid,'upsert',{payload_new},{ts_new});
-      END;
-      CREATE TRIGGER {_qident(prefix + '_ad')} AFTER DELETE ON {_qident(stream)} BEGIN
+        VALUES ({_sql_string(stream)},{new_record},NEW.rowid,'upsert',{payload_new},{timestamp_new});
+      END""",
+      f"""CREATE TRIGGER {_qident(prefix + '_ad')} AFTER DELETE ON {_qident(stream)} BEGIN
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
-        VALUES ({_sql_string(stream)},{old_record},OLD.rowid,'tombstone',json_object('__noema_tombstone__',1,'identity',{identity_old}),{ts_old});
-      END;
-      CREATE TRIGGER {_qident(prefix + '_au')} AFTER UPDATE ON {_qident(stream)} BEGIN
+        VALUES ({_sql_string(stream)},{old_record},OLD.rowid,'tombstone',json_object('__noema_tombstone__',1,'identity',{identity_old}),{timestamp_old});
+      END""",
+      f"""CREATE TRIGGER {_qident(prefix + '_au')} AFTER UPDATE ON {_qident(stream)} BEGIN
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
-        SELECT {_sql_string(stream)},{old_record},OLD.rowid,'tombstone',json_object('__noema_tombstone__',1,'identity',{identity_old}),{ts_old}
+        SELECT {_sql_string(stream)},{old_record},OLD.rowid,'tombstone',json_object('__noema_tombstone__',1,'identity',{identity_old}),{timestamp_old}
           WHERE {old_record} <> {new_record};
         INSERT INTO noema_mirror_change_events(stream,record_key,source_rowid,operation,payload_json,occurred_at)
-        VALUES ({_sql_string(stream)},{new_record},NEW.rowid,'upsert',{payload_new},{ts_new});
-      END;
-    """)
+        VALUES ({_sql_string(stream)},{new_record},NEW.rowid,'upsert',{payload_new},{timestamp_new});
+      END""",
+    )
 
-    state = conn.execute("SELECT seed_rowid,baseline_complete FROM noema_mirror_capture_state WHERE stream=?", (stream,)).fetchone()
+    state = conn.execute("SELECT seed_rowid,baseline_complete,schema_signature FROM noema_mirror_capture_state WHERE stream=?", (stream,)).fetchone()
     capture_epoch = str(conn.execute("SELECT capture_epoch FROM noema_mirror_capture_state WHERE stream=?", (stream,)).fetchone()[0])
+    if state[2] != schema_signature:
+        for suffix in ("_ai", "_ad", "_au"):
+            conn.execute(f"DROP TRIGGER IF EXISTS {_qident(prefix + suffix)}")
+        for definition in trigger_definitions:
+            conn.execute(definition)
+        conn.execute("UPDATE noema_mirror_capture_state SET schema_signature=? WHERE stream=?",
+                     (schema_signature, stream))
     if int(state[1]):
         return True, capture_epoch
     quoted = _qident(stream)
@@ -306,7 +332,7 @@ def _mutable_events(
     ).fetchall()
     return [{
         "stream": stream, "record_key": str(event[1]), "version_sha256": _canonical_hash(json.loads(event[4])),
-        "occurred_at": event[5], "payload": json.loads(event[4]), "operation": event[3],
+        "occurred_at": event[5], "payload": _json_safe(json.loads(event[4])), "operation": event[3],
         "source_rowid": int(event[2]) if event[2] is not None else None,
         "source_event_id": f"{capture_epoch}:{int(event[0])}",
         "source_commit": _source_commit(), "source_host": _source_host(), "_cursor": int(event[0]),
@@ -638,6 +664,22 @@ def _decode_json_safe(value: Any) -> Any:
                 return base64.b64decode(encoded, validate=True)
             except (ValueError, base64.binascii.Error) as exc:
                 raise ValueError("invalid encoded byte value") from exc
+        if set(value) == {"__noema_integer__"}:
+            encoded = value["__noema_integer__"]
+            if not isinstance(encoded, str) or not re.fullmatch(r"-?(0|[1-9][0-9]*)", encoded):
+                raise ValueError("invalid encoded integer value")
+            return int(encoded)
+        if set(value) == {"__noema_float_hex__"}:
+            encoded = value["__noema_float_hex__"]
+            if not isinstance(encoded, str):
+                raise ValueError("invalid encoded float value")
+            try:
+                decoded = float.fromhex(encoded)
+            except ValueError as exc:
+                raise ValueError("invalid encoded float value") from exc
+            if not math.isfinite(decoded):
+                raise ValueError("invalid encoded float value")
+            return decoded
         return {str(key): _decode_json_safe(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_decode_json_safe(item) for item in value]
