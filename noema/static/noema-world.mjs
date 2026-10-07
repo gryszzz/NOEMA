@@ -841,7 +841,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
 
     if (rulesHost) {
       rulesHost.replaceChildren();
-      for (const rule of deriveRuleRack(source, capabilitySources)) {
+      for (const rule of deriveRuleRack(source, { ...capabilitySources, historicalReplay: Number.isFinite(replayCutoff) })) {
         const row = document.createElement('article'); row.className = 'desk-rule-row';
         const name = document.createElement('strong'); name.textContent = rule.name;
         const value = document.createElement('span'); value.textContent = rule.value;

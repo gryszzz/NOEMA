@@ -193,6 +193,10 @@ function parseResult(value) {
 }
 
 export function deriveRuleRack(snapshot = {}, sources = {}) {
+  if (sources.historicalReplay) {
+    return ['Research runtime', 'Heavy workload slots', 'Model budget', 'Research evidence', 'Prediction execution', 'Treasury authority']
+      .map(name => ({ name, value: 'Unavailable · historical replay', source: 'Current state is outside the selected event cutoff' }));
+  }
   const resources = snapshot.resources ?? {};
   const gateway = sources.gateway;
   const control = sources.wallets?.control_plane;
@@ -260,7 +264,7 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
   for (const row of asRows(snapshot, 'missions')) {
     if (!beforeCutoff(row.updated_at ?? row.completed_at ?? row.created_at)) continue;
     const status = String(row.status ?? '').toLowerCase();
-    if (!['failed', 'rejected', 'terminated', 'cancelled', 'canceled'].includes(status)) continue;
+    if (!['failed', 'rejected', 'terminated', 'quarantined', 'cancelled', 'canceled'].includes(status)) continue;
     items.push({ id: `mission:${row.mission_id}`, at: row.updated_at ?? row.completed_at ?? row.created_at,
       kind: 'MISSION TERMINATION', title: row.objective ?? row.mission_id,
       reason: row.result?.reason ?? row.result?.failure_reason ?? row.status,
@@ -327,7 +331,7 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
   const counts = { missions: missionAvailable ? missions.length : null,
     investigations: runsAvailable ? runs.length : null, forecasts: decisionsAvailable ? forecasts.length : null,
     completed: missionAvailable ? missions.filter(row => ['completed', 'passed'].includes(String(row.status).toLowerCase())).length : null,
-    failures: missionAvailable ? missions.filter(row => ['failed', 'rejected', 'terminated', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length : null,
+    failures: missionAvailable ? missions.filter(row => ['failed', 'rejected', 'terminated', 'quarantined', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length : null,
     events: eventsAvailable ? events.length : null };
   const costValues = runs.map(row => row.compute_cost_usd == null ? null : Number(row.compute_cost_usd))
     .filter(value => value != null && Number.isFinite(value) && value >= 0);

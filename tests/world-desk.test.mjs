@@ -110,6 +110,8 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
   assert.match(staleOperations.find(rule => rule.name === 'Heavy workload slots').source, /last successful snapshot/);
   assert.equal(staleOperations.find(rule => rule.name === 'Research evidence').value, 'STALE · sufficient_for_validation');
   assert.match(staleOperations.find(rule => rule.name === 'Research evidence').source, /request failed/);
+  const historicalRules = deriveRuleRack({ runtime: { state: 'running' } }, { historicalReplay: true });
+  assert.ok(historicalRules.every(rule => rule.value === 'Unavailable · historical replay'));
   const staleMarketEvidence = deriveRuleRack({}, {
     qualification: { stage: 'sufficient_for_validation', market_data: { freshness: 'stale' } },
   }).find(rule => rule.name === 'Research evidence');
@@ -127,16 +129,20 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
       { id: 1, market_id: 'M1', decision: 'PASS', reason: 'After-cost edge below threshold' },
       { id: 2, market_id: 'M2', decision: 'BUY_YES' },
     ] },
-    missions: { rows: [{ mission_id: 'x', status: 'failed', objective: 'Bad thesis', result: { failure_reason: 'ambiguous rules' } }] },
+    missions: { rows: [
+      { mission_id: 'x', status: 'failed', objective: 'Bad thesis', result: { failure_reason: 'ambiguous rules' } },
+      { mission_id: 'q', status: 'quarantined', objective: 'Rejected evidence' },
+    ] },
     research_runs: { rows: [
       { id: 3, specialist: 'critic', kind: 'review', result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['source stale'] } }) },
       { id: 4, specialist: 'critic', kind: 'review', result: '{malformed' },
     ] },
   } });
-  assert.equal(kills.length, 3);
+  assert.equal(kills.length, 4);
   assert.ok(kills.some(item => item.reason === 'After-cost edge below threshold'));
   assert.ok(kills.some(item => item.reason === 'ambiguous rules'));
   assert.ok(kills.some(item => item.reason === 'source stale'));
+  assert.ok(kills.some(item => item.missionId === 'q'));
   assert.equal(hasKillBoardCoverage({ sections: {
     decisions: { status: 'empty' }, missions: { status: 'recorded' }, research_runs: { status: 'empty' },
   } }), true);
@@ -162,6 +168,7 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
     },
   });
   assert.equal(report.counts.completed, 1);
+  assert.equal(report.counts.failures, 0);
   assert.equal(report.counts.investigations, 1);
   assert.equal(report.coverage, 'partial · section cap reached');
   assert.equal(report.compute_cost_usd, null);
@@ -173,6 +180,12 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   } });
   assert.equal(oldBlocker.counts.missions, 0);
   assert.equal(oldBlocker.blockers[0].mission_id, 'old');
+  const quarantinedFailure = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', rows: [{ mission_id: 'q', status: 'quarantined', updated_at: '2026-10-06T11:00:00Z' }] },
+    research_runs: { status: 'empty', rows: [] }, decisions: { status: 'empty', rows: [] },
+    activity: { status: 'empty', rows: [] }, mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.equal(quarantinedFailure.counts.failures, 1);
   const absent = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {} });
   assert.match(absent.coverage, /unavailable · not recorded/);
   assert.equal(absent.counts.missions, null);
