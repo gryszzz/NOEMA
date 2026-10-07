@@ -199,8 +199,10 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
   const qualification = sources.qualification;
   const bill = sources.bill;
   const billFreshness = sources.billFreshness ?? 'unknown';
+  const freshness = sources.freshness ?? {};
   const observed = (value, fallback = 'Unknown') => value == null || value === '' ? fallback : String(value);
   const controlValue = value => typeof value === 'boolean' ? String(value) : 'UNKNOWN';
+  const controlState = (value, state) => state === 'stale' ? `STALE · ${value}` : value;
   const budgetValue = observed(bill?.model_budget_usd, 'Unavailable');
   return [
     { name: 'Research runtime', value: observed(snapshot.runtime?.state), source: 'Persisted worker heartbeat / cycle state' },
@@ -216,10 +218,12 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
           ? 'No persisted budget; model spend limit unknown'
           : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
     { name: 'Research evidence', value: observed(qualification?.stage, 'Unavailable'), source: qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
-    { name: 'Prediction execution', value: `enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`,
-      source: gateway?.status ?? 'Gateway policy unavailable; execution state unknown' },
-    { name: 'Treasury authority', value: `live=${controlValue(control?.live_execution_enabled)} · mission authority=${controlValue(control?.mission_authority_present)} · halted=${controlValue(control?.halted)}`,
-      source: control?.status ?? 'Wallet control-plane state unavailable' },
+    { name: 'Prediction execution', value: controlState(`enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`, freshness.gateway),
+      source: freshness.gateway === 'stale' ? 'Latest gateway request failed; retained policy is the last successful snapshot'
+        : gateway?.status ?? 'Gateway policy unavailable; execution state unknown' },
+    { name: 'Treasury authority', value: controlState(`live=${controlValue(control?.live_execution_enabled)} · mission authority=${controlValue(control?.mission_authority_present)} · halted=${controlValue(control?.halted)}`, freshness.wallets),
+      source: freshness.wallets === 'stale' ? 'Latest wallet request failed; retained controls are the last successful snapshot'
+        : control?.status ?? 'Wallet control-plane state unavailable' },
   ];
 }
 
@@ -253,7 +257,7 @@ export function deriveKillBoard(snapshot = {}, limit = 12) {
     || a.id.localeCompare(b.id)).slice(0, Math.max(1, Math.min(50, Number(limit) || 12)));
 }
 
-export function deriveShiftReport(snapshot = {}, hours = 24) {
+export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}) {
   const now = parseTime(snapshot.as_of) ?? Date.now();
   const windowMs = Math.max(1, Math.min(168, Number(hours) || 24)) * 60 * 60 * 1000;
   const since = now - windowMs;
@@ -263,27 +267,36 @@ export function deriveShiftReport(snapshot = {}, hours = 24) {
   const runs = within('research_runs');
   const forecasts = within('decisions');
   const events = [...within('activity'), ...within('mission_events')];
-  const counts = { missions: missions.length, investigations: runs.length, forecasts: forecasts.length,
-    completed: missions.filter(row => ['completed', 'passed'].includes(String(row.status).toLowerCase())).length,
-    failures: missions.filter(row => ['failed', 'rejected', 'terminated', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length,
-    events: events.length };
+  const sectionRecorded = name => snapshot.sections?.[name]?.status === 'recorded';
+  const missionAvailable = sectionRecorded('missions');
+  const runsAvailable = sectionRecorded('research_runs');
+  const decisionsAvailable = sectionRecorded('decisions');
+  const eventsAvailable = sectionRecorded('activity') && sectionRecorded('mission_events');
+  const counts = { missions: missionAvailable ? missions.length : null,
+    investigations: runsAvailable ? runs.length : null, forecasts: decisionsAvailable ? forecasts.length : null,
+    completed: missionAvailable ? missions.filter(row => ['completed', 'passed'].includes(String(row.status).toLowerCase())).length : null,
+    failures: missionAvailable ? missions.filter(row => ['failed', 'rejected', 'terminated', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length : null,
+    events: eventsAvailable ? events.length : null };
   const costValues = runs.map(row => row.compute_cost_usd == null ? null : Number(row.compute_cost_usd))
     .filter(value => value != null && Number.isFinite(value) && value >= 0);
   const cost = costValues.length ? costValues.reduce((sum, value) => sum + value, 0) : null;
   const contributors = [...new Set(runs.map(row => row.specialist).filter(Boolean))];
-  const blocked = missions.filter(row => ['waiting', 'blocked'].includes(String(row.status).toLowerCase()));
-  const incomplete = ['missions', 'research_runs', 'decisions', 'activity', 'mission_events']
-    .some(section => snapshot.sections?.[section]?.has_more === true);
+  const blocked = missionAvailable ? missions.filter(row => ['waiting', 'blocked'].includes(String(row.status).toLowerCase())) : null;
+  const requiredSections = ['missions', 'research_runs', 'decisions', 'activity', 'mission_events'];
+  const missing = requiredSections.filter(section => !sectionRecorded(section));
+  const capped = requiredSections.some(section => snapshot.sections?.[section]?.has_more === true);
   return {
     window_hours: Math.round(windowMs / 3600000),
     as_of: snapshot.as_of ?? null,
-    coverage: incomplete ? 'partial · section cap reached' : 'loaded records only',
+    coverage: missing.length ? `unavailable · not recorded: ${missing.join(', ')}`
+      : ['stale', 'unavailable'].includes(freshness.operations) ? `partial · operations snapshot ${freshness.operations}`
+        : capped ? 'partial · section cap reached' : 'loaded records only',
     counts,
     compute_cost_usd: cost,
     compute_cost_records: costValues.length,
     compute_cost_unknown: runs.length > costValues.length,
     contributors,
-    blockers: blocked.map(row => ({ mission_id: row.mission_id, objective: row.objective ?? row.mission_id, status: row.status })),
+    blockers: blocked?.map(row => ({ mission_id: row.mission_id, objective: row.objective ?? row.mission_id, status: row.status })) ?? null,
     economic_contribution: 'Unknown · realized net value is not inferred from activity or paper results',
   };
 }

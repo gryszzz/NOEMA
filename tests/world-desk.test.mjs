@@ -94,6 +94,13 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
     .find(rule => rule.name === 'Model budget');
   assert.equal(staleBill.value, 'STALE · 0.50');
   assert.match(staleBill.source, /request failed/);
+  const staleControls = deriveRuleRack({}, {
+    gateway: { enabled: false, master_halt: true, prediction_execution_enabled: false },
+    wallets: { control_plane: { live_execution_enabled: false, mission_authority_present: false, halted: true } },
+    freshness: { gateway: 'stale', wallets: 'stale' },
+  });
+  assert.match(staleControls.find(rule => rule.name === 'Prediction execution').value, /^STALE ·/);
+  assert.match(staleControls.find(rule => rule.name === 'Treasury authority').source, /last successful snapshot/);
 });
 
 test('Kill Board links only persisted passes, explicit critic rejects, and terminated missions', () => {
@@ -118,10 +125,10 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   const report = deriveShiftReport({
     as_of: '2026-10-06T12:00:00Z',
     sections: {
-      missions: { has_more: false, rows: [{ mission_id: 'm1', status: 'completed', updated_at: '2026-10-06T11:00:00Z' }] },
-      research_runs: { has_more: true, rows: [{ id: 1, specialist: 'kalshi-research', created_at: '2026-10-06T10:00:00Z', compute_cost_usd: null }] },
-      decisions: { has_more: false, rows: [{ id: 2, created_at: '2026-10-06T09:00:00Z' }] },
-      activity: { rows: [] }, mission_events: { rows: [] },
+      missions: { status: 'recorded', has_more: false, rows: [{ mission_id: 'm1', status: 'completed', updated_at: '2026-10-06T11:00:00Z' }] },
+      research_runs: { status: 'recorded', has_more: true, rows: [{ id: 1, specialist: 'kalshi-research', created_at: '2026-10-06T10:00:00Z', compute_cost_usd: null }] },
+      decisions: { status: 'recorded', has_more: false, rows: [{ id: 2, created_at: '2026-10-06T09:00:00Z' }] },
+      activity: { status: 'recorded', rows: [] }, mission_events: { status: 'recorded', rows: [] },
     },
   });
   assert.equal(report.counts.completed, 1);
@@ -129,4 +136,14 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.equal(report.coverage, 'partial · section cap reached');
   assert.equal(report.compute_cost_usd, null);
   assert.match(report.economic_contribution, /Unknown/);
+  const absent = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {} });
+  assert.match(absent.coverage, /unavailable · not recorded/);
+  assert.equal(absent.counts.missions, null);
+  assert.equal(absent.blockers, null);
+  const staleSnapshot = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', rows: [] }, research_runs: { status: 'recorded', rows: [] },
+    decisions: { status: 'recorded', rows: [] }, activity: { status: 'recorded', rows: [] },
+    mission_events: { status: 'recorded', rows: [] },
+  } }, 24, { operations: 'stale' });
+  assert.match(staleSnapshot.coverage, /partial · operations snapshot stale/);
 });

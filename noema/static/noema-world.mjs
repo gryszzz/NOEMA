@@ -875,7 +875,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     }
     if (reportHost) {
       reportHost.replaceChildren();
-      const report = deriveShiftReport(source);
+      const report = deriveShiftReport(source, 24, capabilitySources.freshness);
       const stats = [
         ['MISSIONS', report.counts.missions], ['INVESTIGATIONS', report.counts.investigations],
         ['FORECASTS', report.counts.forecasts], ['COMPLETED', report.counts.completed],
@@ -884,7 +884,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       const grid = document.createElement('div'); grid.className = 'desk-report-stats';
       for (const [label, value] of stats) {
         const cell = document.createElement('div'); const title = document.createElement('small'); title.textContent = label;
-        const number = document.createElement('strong'); number.textContent = String(value);
+        const number = document.createElement('strong'); number.textContent = value == null ? 'Unavailable' : String(value);
         cell.append(title, number); grid.append(cell);
       }
       reportHost.append(grid);
@@ -892,7 +892,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
       reportHost.append(summary);
       const people = document.createElement('p'); people.textContent = `Recorded contributors: ${report.contributors.join(' · ') || 'Unknown'}; this counts linked investigations, not independent-agent performance.`;
       reportHost.append(people);
-      const blockers = document.createElement('p'); blockers.textContent = `Outstanding blockers: ${report.blockers.map(item => `${item.mission_id} · ${item.status} · ${item.objective}`).join(' | ') || 'None in loaded mission rows'}.`;
+      const blockers = document.createElement('p'); blockers.textContent = `Outstanding blockers: ${report.blockers == null ? 'Unavailable · mission records not recorded' : report.blockers.map(item => `${item.mission_id} · ${item.status} · ${item.objective}`).join(' | ') || 'None in loaded mission rows'}.`;
       reportHost.append(blockers);
       const economics = document.createElement('p'); economics.className = 'desk-report-economics'; economics.textContent = report.economic_contribution;
       reportHost.append(economics);
