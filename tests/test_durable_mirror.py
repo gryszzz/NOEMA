@@ -640,7 +640,10 @@ def _restore_bundle(path: Path) -> None:
             "record_count": len(records),
             "restore_floor_id": 0,
             "checkpoint": {"last_cursor": str(through), "metadata": {
-                "cursor_kind": "change_event_id", "baseline_complete": True, "local_high_water": through,
+                "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+                "baseline_complete": True, "local_high_water": through,
+                **({"restore_floor_id": 0, "capture_epoch": "fixture-epoch"}
+                   if name in MUTABLE_STREAMS else {}),
             }},
             "records": records,
         })
@@ -652,6 +655,26 @@ def _restore_bundle(path: Path) -> None:
         "checkpoint_metadata": {},
         "streams": streams,
     }), encoding="utf-8")
+
+
+@pytest.mark.parametrize("tamper", ["above_watermark", "negative", "checkpoint_mismatch"])
+def test_restore_rejects_invalid_mutable_restore_floor(tmp_path: Path, tamper: str) -> None:
+    bundle_path = tmp_path / "recovery.json"
+    _restore_bundle(bundle_path)
+    bundle = json.loads(bundle_path.read_text())
+    stream = next(item for item in bundle["streams"] if item["name"] == "missions")
+    if tamper == "above_watermark":
+        stream["restore_floor_id"] = bundle["through_cursor"] + 1
+        stream["checkpoint"]["metadata"]["restore_floor_id"] = stream["restore_floor_id"]
+    elif tamper == "negative":
+        stream["restore_floor_id"] = -1
+        stream["checkpoint"]["metadata"]["restore_floor_id"] = -1
+    else:
+        stream["restore_floor_id"] = 3
+        stream["checkpoint"]["metadata"]["restore_floor_id"] = 4
+    bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+    with pytest.raises(ValueError, match="restore floor"):
+        _load_restore_bundle(bundle_path)
 
 
 def test_restore_complete_bundle_preserves_rowid_and_verifies_database(tmp_path: Path) -> None:

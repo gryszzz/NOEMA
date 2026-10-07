@@ -765,6 +765,35 @@ def _load_restore_bundle(bundle_path: str | Path) -> dict[str, Any]:
             raise ValueError(f"restore stream {name} has an invalid checkpoint") from exc
         if through != watermark:
             raise ValueError(f"restore stream {name} does not share the bundle watermark")
+        try:
+            floor = int(item.get("restore_floor_id", 0))
+            checkpoint = item["checkpoint"]
+            checkpoint_metadata = checkpoint.get("metadata")
+            if not isinstance(checkpoint_metadata, dict):
+                raise TypeError("missing checkpoint metadata")
+            checkpoint_cursor = int(checkpoint["last_cursor"])
+            local_high_water = int(checkpoint_metadata["local_high_water"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"restore stream {name} has an invalid restore floor or checkpoint") from exc
+        if floor < 0 or floor > watermark:
+            raise ValueError(f"restore stream {name} has an out-of-range restore floor")
+        if checkpoint_cursor < 0 or checkpoint_cursor != local_high_water:
+            raise ValueError(f"restore stream {name} checkpoint cursor is inconsistent")
+        expected_cursor_kind = "change_event_id" if name in MUTABLE_STREAMS else "rowid"
+        if checkpoint_metadata.get("cursor_kind") != expected_cursor_kind:
+            raise ValueError(f"restore stream {name} checkpoint cursor type is invalid")
+        if checkpoint_metadata.get("baseline_complete") is not True:
+            raise ValueError(f"restore stream {name} checkpoint is incomplete")
+        if name in MUTABLE_STREAMS:
+            try:
+                checkpoint_floor = int(checkpoint_metadata["restore_floor_id"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"mutable stream {name} has no valid checkpoint restore floor") from exc
+            if (checkpoint_floor != floor or checkpoint_floor < 0 or checkpoint_floor > watermark
+                    or not checkpoint_metadata.get("capture_epoch")):
+                raise ValueError(f"mutable stream {name} restore floor is inconsistent")
+        elif floor != 0:
+            raise ValueError(f"append-only stream {name} cannot declare a mutable restore floor")
         records = item.get("records")
         if not isinstance(records, list):
             raise TypeError(f"restore stream {name} records must be an array")
@@ -852,7 +881,7 @@ def restore_critical_state(
                 columns_info = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
                 columns = {str(row["name"]) for row in columns_info}
                 restored = 0
-                floor = int(stream.get("restore_floor_id") or 0)
+                floor = int(stream["restore_floor_id"])
                 latest: dict[str, dict[str, Any]] = {}
                 for record in stream["records"]:
                     payload = record["payload"]
