@@ -61,6 +61,7 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     assert "source_event_id = 'legacy:' || id::text" in sql
     assert "payload::text as payload_json" in sql
     assert "noema_mirror_export_manifest(p_streams text[])\nreturns jsonb language plpgsql stable" in sql
+    assert "mutable checkpoint is missing for an existing capture epoch" in sql
     assert "[functions.noema-durable-mirror]\nverify_jwt = false" in config
 
 
@@ -282,6 +283,36 @@ async def test_sync_marks_append_only_write_after_page_fetch_as_lagging(
         streams=("economic_events",), transport=httpx.MockTransport(handler),
     )
     assert result["lagging_streams"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_splits_large_ingest_batches_before_edge_body_limit(tmp_path: Path) -> None:
+    db = tmp_path / "large-ingest.db"
+    _db(db)
+    with sqlite3.connect(db) as conn:
+        conn.executemany(
+            "INSERT INTO economic_events(provider,amount,created_at) VALUES(?,?,?)",
+            [("fixture", "x" * 21_000, "2026-10-06T16:02:00+00:00") for _ in range(200)],
+        )
+    ingest_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": {}})
+        assert len(request.content) <= 4 * 1024 * 1024
+        ingest_calls.append(body)
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    result = await sync_critical_state(
+        str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40, rows_per_stream=500),
+        streams=("economic_events",), transport=httpx.MockTransport(handler),
+    )
+    assert len(ingest_calls) > 1
+    assert sum(len(call["records"]) for call in ingest_calls) == 201
+    assert all("checkpoint" not in call for call in ingest_calls[:-1])
+    assert ingest_calls[-1]["checkpoint"]["last_cursor"] == "201"
+    assert result["mirrored"] == 201
 
 
 def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) -> None:
@@ -877,5 +908,25 @@ def test_restore_rejects_projection_metadata_tampering(tmp_path: Path, field: st
     bundle.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
+        restore_critical_state(bundle, target)
+    assert not target.exists()
+
+
+def test_restore_rejects_paired_tampering_of_legacy_row_identity(tmp_path: Path) -> None:
+    bundle, target = tmp_path / "legacy-identity.json", tmp_path / "legacy-identity.db"
+    _restore_bundle(bundle)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    record = next(item for item in data["streams"] if item["name"] == "missions")["records"][0]
+    record.update({
+        "record_key": "missions:7", "source_rowid": 7,
+        "source_event_id": "legacy:7", "source_schema_version": "legacy-unversioned",
+    })
+    record["version_sha256"] = _legacy_canonical_hash(record["payload"])
+    record["projection_sha256"] = durable_mirror._restore_projection_hash(record)
+    record["record_key"] = "missions:8"
+    record["source_rowid"] = 8
+    bundle.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="projection metadata hash mismatch"):
         restore_critical_state(bundle, target)
     assert not target.exists()

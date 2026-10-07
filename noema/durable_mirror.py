@@ -52,6 +52,7 @@ RESTORE_BUNDLE_FORMAT = "noema-durable-mirror-export"
 RESTORE_BUNDLE_VERSION = 2
 MAX_RESTORE_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_RESTORE_RECORDS = 250_000
+MAX_MIRROR_INGEST_BATCH_BYTES = 4_000_000
 
 # Tables whose existing rows can change in place. Their durable identity is the
 # declared primary key; rowid is retained separately only for SQLite recovery.
@@ -130,6 +131,14 @@ def _canonical_hash(payload: dict[str, Any]) -> str:
         _json_safe(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str, allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _restore_projection_hash(record: dict[str, Any]) -> str:
+    """Bind mirror identity and projection metadata to the verified payload digest."""
+    return _canonical_hash({key: record.get(key) for key in (
+        "mirror_id", "stream", "record_key", "version_sha256", "operation",
+        "source_rowid", "source_event_id", "source_schema_version",
+    )})
 
 
 def _legacy_json_safe(value: Any) -> Any:
@@ -562,7 +571,7 @@ async def export_critical_state(
                     if stream in MUTABLE_STREAMS and source_event_id is None and legacy_identity:
                         source_event_id = f"legacy:{mirror_id}"
                         source_schema_version = source_schema_version or "legacy-unversioned"
-                    records.append({
+                    record = {
                         "mirror_id": mirror_id, "stream": stream, "record_key": record_key,
                         "version_sha256": row.get("version_sha256"), "occurred_at": row.get("occurred_at"),
                         "operation": row.get("operation") or "upsert", "source_rowid": source_rowid,
@@ -570,7 +579,9 @@ async def export_critical_state(
                         "payload": payload, "source_commit": row.get("source_commit"),
                         "source_host": row.get("source_host"),
                         "source_schema_version": source_schema_version,
-                    })
+                    }
+                    record["projection_sha256"] = _restore_projection_hash(record)
+                    records.append(record)
                 if page.get("has_more") is not True:
                     break
                 if not rows:
@@ -720,30 +731,51 @@ async def sync_critical_state(
                     raise ValueError(
                         f"remote checkpoint for {stream} does not match the local source cursor history"
                     )
-                result = await _post(
-                    client,
-                    config,
-                    {
-                        "action": "ingest",
-                        "records": payload_rows,
-                        "checkpoint": {
-                            "stream": stream,
-                            "last_cursor": str(last_cursor),
-                            "metadata": {
-                                "source_commit": _source_commit(),
-                                "source_host": _source_host(),
-                                "cursor_kind": expected_kind,
-                                "local_high_water": local_high_water,
-                                "baseline_complete": baseline_complete,
-                                "capture_epoch": capture_epoch or None,
-                                "cursor_fingerprint": _cursor_fingerprint(
-                                    conn, stream, last_cursor, mutable=mutable,
-                                ),
-                            },
-                        },
+                checkpoint = {
+                    "stream": stream,
+                    "last_cursor": str(last_cursor),
+                    "metadata": {
+                        "source_commit": _source_commit(),
+                        "source_host": _source_host(),
+                        "cursor_kind": expected_kind,
+                        "local_high_water": local_high_water,
+                        "baseline_complete": baseline_complete,
+                        "capture_epoch": capture_epoch or None,
+                        "cursor_fingerprint": _cursor_fingerprint(
+                            conn, stream, last_cursor, mutable=mutable,
+                        ),
                     },
-                )
-                mirrored += int(result.get("accepted") or 0)
+                }
+                batches: list[list[dict[str, Any]]] = []
+                batch: list[dict[str, Any]] = []
+                for record in payload_rows:
+                    candidate = [*batch, record]
+                    envelope = {"action": "ingest", "records": candidate, "checkpoint": checkpoint}
+                    encoded_size = len(json.dumps(
+                        envelope, separators=(",", ":"), ensure_ascii=False,
+                    ).encode("utf-8"))
+                    if len(candidate) > 500 or encoded_size > MAX_MIRROR_INGEST_BATCH_BYTES:
+                        if not batch:
+                            raise ValueError(
+                                f"single durable mirror record for {stream} exceeds the safe request size"
+                            )
+                        batches.append(batch)
+                        batch = [record]
+                        single = {"action": "ingest", "records": batch, "checkpoint": checkpoint}
+                        if len(json.dumps(single, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > MAX_MIRROR_INGEST_BATCH_BYTES:
+                            raise ValueError(
+                                f"single durable mirror record for {stream} exceeds the safe request size"
+                            )
+                    else:
+                        batch = candidate
+                if batch or not batches:
+                    batches.append(batch)
+                for batch_index, records_batch in enumerate(batches):
+                    request_body: dict[str, Any] = {"action": "ingest", "records": records_batch}
+                    if batch_index == len(batches) - 1:
+                        request_body["checkpoint"] = checkpoint
+                    result = await _post(client, config, request_body)
+                    mirrored += int(result.get("accepted") or 0)
                 if (len(rows) >= config.rows_per_stream or not baseline_complete
                         or last_cursor < local_high_water):
                     lagging += 1
@@ -922,6 +954,13 @@ def _load_restore_bundle(bundle_path: str | Path) -> dict[str, Any]:
                              else _canonical_hash(payload))
             if not isinstance(digest, str) or expected_hash != digest:
                 raise ValueError(f"restore record hash mismatch in {name}")
+            projection_digest = record.get("projection_sha256")
+            if (record.get("source_schema_version") == "legacy-unversioned"
+                    and not isinstance(projection_digest, str)):
+                raise ValueError(f"legacy restore record has no projection integrity digest in {name}")
+            if (projection_digest is not None
+                    and projection_digest != _restore_projection_hash(record)):
+                raise ValueError(f"restore projection metadata hash mismatch in {name}")
             if record.get("operation", "upsert") not in {"upsert", "tombstone"}:
                 raise ValueError(f"restore stream {name} has an invalid operation")
             rowid = record.get("source_rowid")

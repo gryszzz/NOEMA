@@ -33,6 +33,7 @@ create unique index if not exists mirror_records_source_event_dedupe
 create or replace function noema.noema_mirror_ingest(p_records jsonb, p_checkpoint jsonb default null)
 returns jsonb language plpgsql security definer set search_path = noema, pg_temp as $$
 declare rec jsonb; accepted integer := 0; duplicates integer := 0; affected integer;
+  checkpoint_missing boolean := false;
   old_epoch text; new_epoch text; baseline_start bigint;
 begin
   if jsonb_typeof(p_records) <> 'array' or jsonb_array_length(p_records) > 500 then
@@ -41,10 +42,27 @@ begin
   if p_checkpoint is not null then
     select metadata->>'capture_epoch' into old_epoch from noema.mirror_checkpoints
       where stream=p_checkpoint->>'stream';
+    checkpoint_missing := not found;
     new_epoch := p_checkpoint->'metadata'->>'capture_epoch';
-    if new_epoch is not null and new_epoch is distinct from old_epoch then
+    if checkpoint_missing and new_epoch is not null
+       and p_checkpoint->>'stream'=any(array['agent_runtime','agent_cycle_timings','missions','mission_handoffs',
+         'ecosystem_specialists','research_trials','autonomous_research_runs','bill_budget',
+         'prediction_account_records','prediction_account_sync_state']) then
+      if exists (
+        select 1 from noema.mirror_records
+        where stream=p_checkpoint->>'stream'
+          and left(source_event_id, length(new_epoch)+1)=new_epoch||':'
+      ) then
+        raise exception 'mutable checkpoint is missing for an existing capture epoch';
+      end if;
       select coalesce(max(id),0) into baseline_start from noema.mirror_records
         where stream=p_checkpoint->>'stream';
+    end if;
+    if new_epoch is not null and new_epoch is distinct from old_epoch then
+      if baseline_start is null then
+        select coalesce(max(id),0) into baseline_start from noema.mirror_records
+          where stream=p_checkpoint->>'stream';
+      end if;
     end if;
   end if;
   for rec in select value from jsonb_array_elements(p_records) loop
