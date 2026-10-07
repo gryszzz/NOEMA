@@ -676,8 +676,11 @@ def _load_restore_bundle(bundle_path: str | Path) -> dict[str, Any]:
                 raise ValueError(f"restore stream {name} has an invalid source rowid")
             if rowid is None and record.get("operation", "upsert") == "upsert":
                 raise ValueError(f"restore stream {name} is missing its source rowid")
-            if name in MUTABLE_STREAMS and not isinstance(record.get("source_event_id"), str):
-                raise ValueError(f"restore stream {name} is missing its source event identity")
+            source_event_id = record.get("source_event_id")
+            if name in MUTABLE_STREAMS and (
+                not isinstance(source_event_id, str) or not 1 <= len(source_event_id) <= 160
+            ):
+                raise ValueError(f"restore stream {name} has an invalid source event identity")
             total += 1
             if total > MAX_RESTORE_RECORDS:
                 raise ValueError("restore bundle exceeds the record limit")

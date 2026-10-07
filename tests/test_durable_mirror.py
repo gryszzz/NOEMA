@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -37,6 +38,18 @@ def _db(path: Path) -> None:
             "INSERT INTO economic_events(id,provider,amount,created_at) VALUES (1,'openai','1.25','2026-10-06T16:01:00+00:00')"
         )
         conn.commit()
+
+
+def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
+    root = Path(__file__).resolve().parents[1]
+    sql = (root / "supabase/migrations/20261006220000_versioned_mutable_mirror_and_export.sql").read_text()
+    edge = (root / "supabase/functions/noema-durable-mirror/index.ts").read_text()
+    sql_block = re.search(r"if rec->>'stream'=any\(array\[(.*?)\]\) and", sql, re.DOTALL)
+    edge_block = re.search(r"const mutableStreams = new Set\(\[(.*?)\]\);", edge, re.DOTALL)
+    assert sql_block and edge_block
+    sql_streams = set(re.findall(r"'([^']+)'", sql_block.group(1)))
+    edge_streams = set(re.findall(r'"([^\"]+)"', edge_block.group(1)))
+    assert sql_streams == edge_streams == set(MUTABLE_STREAMS)
 
 
 @pytest.mark.asyncio

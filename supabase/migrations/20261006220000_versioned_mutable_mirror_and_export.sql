@@ -30,9 +30,10 @@ begin
     if rec->>'operation' not in ('upsert','tombstone') or rec->>'stream' is null
        or rec->>'record_key' is null or rec->>'version_sha256' is null
        or jsonb_typeof(rec->'payload') <> 'object' then raise exception 'malformed mirror record'; end if;
-    if rec->>'stream'=any(array['agent_runtime','missions','mission_handoffs','ecosystem_specialists',
+    if rec->>'stream'=any(array['agent_runtime','agent_cycle_timings','missions','mission_handoffs','ecosystem_specialists',
       'research_trials','autonomous_research_runs','bill_budget','prediction_account_records',
-      'prediction_account_sync_state']) and nullif(rec->>'source_event_id','') is null then
+      'prediction_account_sync_state']) and
+      length(coalesce(rec->>'source_event_id','')) not between 1 and 160 then
       raise exception 'mutable mirror version has no source event identity';
     end if;
     insert into noema.mirror_records(stream,record_key,version_sha256,occurred_at,payload,source_commit,

@@ -11,7 +11,7 @@ const allowedStreams = new Set([
   "bill_budget", "bill_entries", "prediction_account_records", "prediction_account_sync_state",
 ]);
 const mutableStreams = new Set([
-  "agent_runtime", "missions", "mission_handoffs", "ecosystem_specialists", "research_trials",
+  "agent_runtime", "agent_cycle_timings", "missions", "mission_handoffs", "ecosystem_specialists", "research_trials",
   "autonomous_research_runs", "bill_budget", "prediction_account_records",
   "prediction_account_sync_state",
 ]);
@@ -78,7 +78,8 @@ Deno.serve(async (request) => {
         || !item.payload || typeof item.payload !== "object" || Array.isArray(item.payload)
         || !["upsert", "tombstone"].includes(String(item.operation || "upsert"))
         || (mutableStreams.has(String(item.stream))
-          && (typeof item.source_event_id !== "string" || item.source_event_id.length > 160))) {
+          && (typeof item.source_event_id !== "string"
+            || item.source_event_id.length < 1 || item.source_event_id.length > 160))) {
         return json({ error: "invalid_record" }, 400);
       }
     }
