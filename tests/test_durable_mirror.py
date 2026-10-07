@@ -21,6 +21,7 @@ from noema.durable_mirror import (
     _ensure_mutable_capture,
     _initialize_restore_schema,
     _json_safe,
+    _legacy_canonical_hash,
     export_critical_state,
     restore_critical_state,
     sync_critical_state,
@@ -158,13 +159,16 @@ def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) 
     db = tmp_path / "noema.db"
     _db(db)
     with sqlite3.connect(db) as conn:
-        assert _ensure_mutable_capture(conn, "missions", 100)[0]
+        conn.execute("INSERT INTO missions VALUES('m2','running','2026-10-06T16:02:00+00:00')")
+        assert not _ensure_mutable_capture(conn, "missions", 1)[0]
         conn.execute("ALTER TABLE missions ADD COLUMN safety_note TEXT")
-        assert _ensure_mutable_capture(conn, "missions", 100)[0]
+        assert not _ensure_mutable_capture(conn, "missions", 1)[0]
         baseline = json.loads(conn.execute(
             "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' ORDER BY event_id DESC LIMIT 1",
         ).fetchone()[0])
         assert baseline["safety_note"] is None
+        assert not _ensure_mutable_capture(conn, "missions", 1)[0]
+        assert _ensure_mutable_capture(conn, "missions", 1)[0]
         conn.execute("UPDATE missions SET safety_note='reviewed' WHERE mission_id='m1'")
         payload = conn.execute(
             "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' ORDER BY event_id DESC LIMIT 1",
@@ -194,6 +198,11 @@ def test_mirror_hash_normalizes_js_number_roundtrip_without_losing_large_values(
     assert encoded["reliability"] == {"__noema_float_hex__": (0.25).hex()}
     assert encoded["exact_integer"] == {"__noema_integer__": str(2**60)}
     assert _decode_json_safe(encoded) == value
+
+
+def test_legacy_hash_keeps_pre_normalization_float_encoding() -> None:
+    payload = {"reliability": 0.0}
+    assert _legacy_canonical_hash(payload) != _canonical_hash(payload)
 
 
 @pytest.mark.asyncio
@@ -572,6 +581,7 @@ def test_restore_complete_bundle_preserves_rowid_and_verifies_database(tmp_path:
     assert report["status"] == "restored_and_verified"
     assert report["records"] == 1
     assert report["records_by_stream"]["missions"] == 1
+    assert target.stat().st_mode & 0o777 == 0o600
     with sqlite3.connect(target) as conn:
         row = conn.execute(
             "SELECT rowid,mission_id,status FROM missions"

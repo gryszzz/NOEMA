@@ -132,6 +132,27 @@ def _canonical_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _legacy_json_safe(value: Any) -> Any:
+    """JSON encoding used by pre-normalization mirror writers."""
+    if isinstance(value, bytes):
+        return {"__noema_bytes_b64__": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, dict):
+        return {str(key): _legacy_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_legacy_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _legacy_canonical_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        _legacy_json_safe(payload), sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, default=str, allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _source_commit() -> str:
     for key in ("RAILWAY_GIT_COMMIT_SHA", "RENDER_GIT_COMMIT", "GITHUB_SHA"):
         value = os.getenv(key, "").strip()
@@ -297,9 +318,8 @@ def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -
         for definition in trigger_definitions:
             conn.execute(definition)
         conn.execute("""UPDATE noema_mirror_capture_state
-            SET schema_signature=?,seed_rowid=CASE WHEN baseline_complete=1 THEN 0 ELSE seed_rowid END,
-                baseline_complete=CASE WHEN baseline_complete=1 THEN 0 ELSE baseline_complete END
-            WHERE stream=?""", (schema_signature, stream))
+            SET schema_signature=?,seed_rowid=0,baseline_complete=0 WHERE stream=?""",
+            (schema_signature, stream))
         state = conn.execute(
             "SELECT seed_rowid,baseline_complete,schema_signature FROM noema_mirror_capture_state WHERE stream=?",
             (stream,),
@@ -754,7 +774,10 @@ def _load_restore_bundle(bundle_path: str | Path) -> dict[str, Any]:
             if cursor <= previous or cursor > through:
                 raise ValueError(f"restore stream {name} cursors are unordered or out of range")
             previous = cursor
-            if not isinstance(digest, str) or _canonical_hash(payload) != digest:
+            expected_hash = (_legacy_canonical_hash(payload)
+                             if record.get("source_schema_version") == "legacy-unversioned"
+                             else _canonical_hash(payload))
+            if not isinstance(digest, str) or expected_hash != digest:
                 raise ValueError(f"restore record hash mismatch in {name}")
             if record.get("operation", "upsert") not in {"upsert", "tombstone"}:
                 raise ValueError(f"restore stream {name} has an invalid operation")
@@ -794,7 +817,6 @@ def restore_critical_state(
     fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.restore-", suffix=".db", dir=target.parent)
     os.close(fd)
     temp = Path(temp_name)
-    temp.unlink()
     counts: dict[str, int] = {}
     try:
         _initialize_restore_schema(temp)
@@ -855,7 +877,13 @@ def restore_critical_state(
                     conn.execute(f"INSERT INTO {quoted} ({quoted_columns}) VALUES ({placeholders})", values)
                     rowid = cursor if cursor is not None else conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     restored_row = conn.execute(f"SELECT * FROM {quoted} WHERE rowid=?", (rowid,)).fetchone()
-                    if restored_row is None or _canonical_hash(_json_safe(dict(restored_row))) != record["version_sha256"]:
+                    restored_payload = dict(restored_row) if restored_row is not None else None
+                    restored_hash = (
+                        _legacy_canonical_hash(restored_payload)
+                        if restored_payload is not None and record.get("source_schema_version") == "legacy-unversioned"
+                        else _canonical_hash(_json_safe(restored_payload)) if restored_payload is not None else None
+                    )
+                    if restored_row is None or restored_hash != record["version_sha256"]:
                         raise ValueError(f"restored row verification failed in {name}")
                     restored += 1
                 counts[name] = restored
@@ -872,6 +900,7 @@ def restore_critical_state(
 
         # Hard-link installation is atomic and fails if a concurrent process made
         # the destination; unlike replace(), it cannot overwrite that new file.
+        os.chmod(temp, 0o600)
         os.link(temp, target)
         temp.unlink()
         return {
