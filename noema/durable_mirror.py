@@ -416,6 +416,43 @@ def _mutable_events(
     } for event in events]
 
 
+def _cursor_fingerprint(
+    conn: sqlite3.Connection, stream: str, cursor: int, *, mutable: bool,
+) -> str:
+    """Hash the complete local source prefix represented by a remote cursor."""
+    digest = hashlib.sha256()
+    if mutable:
+        rows = conn.execute(
+            "SELECT event_id,record_key,source_rowid,operation,payload_json,occurred_at "
+            "FROM noema_mirror_change_events WHERE stream=? AND event_id<=? ORDER BY event_id",
+            (stream, cursor),
+        )
+        for event_id, record_key, source_rowid, operation, payload_json, occurred_at in rows:
+            entry = {
+                "event_id": int(event_id), "record_key": str(record_key),
+                "source_rowid": int(source_rowid) if source_rowid is not None else None,
+                "operation": str(operation), "payload": _json_safe(json.loads(payload_json)),
+                "occurred_at": occurred_at,
+            }
+            encoded = json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    else:
+        rows = conn.execute(
+            f"SELECT rowid AS _cursor_rowid,* FROM {_qident(stream)} WHERE rowid<=? ORDER BY rowid",
+            (cursor,),
+        )
+        names = [column[0] for column in rows.description]
+        for raw in rows:
+            record = dict(zip(names, raw))
+            rowid = int(record.pop("_cursor_rowid"))
+            entry = {"rowid": rowid, "payload": _json_safe(record)}
+            encoded = json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
 async def _post(
     client: httpx.AsyncClient,
     config: DurableMirrorConfig,
@@ -676,6 +713,13 @@ async def sync_critical_state(
                     raise ValueError(
                         f"remote checkpoint for {stream} is ahead of the local source high-water mark"
                     )
+                cursor_fingerprint = _cursor_fingerprint(conn, stream, cursor, mutable=mutable)
+                remote_fingerprint = remote_meta.get("cursor_fingerprint")
+                if (cursor > 0 and remote_fingerprint is not None
+                        and remote_fingerprint != cursor_fingerprint):
+                    raise ValueError(
+                        f"remote checkpoint for {stream} does not match the local source cursor history"
+                    )
                 result = await _post(
                     client,
                     config,
@@ -692,6 +736,9 @@ async def sync_critical_state(
                                 "local_high_water": local_high_water,
                                 "baseline_complete": baseline_complete,
                                 "capture_epoch": capture_epoch or None,
+                                "cursor_fingerprint": _cursor_fingerprint(
+                                    conn, stream, last_cursor, mutable=mutable,
+                                ),
                             },
                         },
                     },

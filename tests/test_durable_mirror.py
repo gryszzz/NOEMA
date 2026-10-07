@@ -183,6 +183,41 @@ async def test_sync_rejects_append_only_checkpoint_ahead_of_local_high_water(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", ["missions", "economic_events"])
+async def test_sync_rejects_reused_cursor_with_divergent_history(tmp_path: Path, stream: str) -> None:
+    db = tmp_path / f"reused-{stream}.db"
+    _db(db)
+    checkpoints: dict[str, dict[str, object]] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": checkpoints})
+        checkpoint = body.get("checkpoint")
+        if checkpoint:
+            checkpoints[checkpoint["stream"]] = {
+                "last_cursor": checkpoint["last_cursor"],
+                "metadata": checkpoint["metadata"],
+            }
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    config = DurableMirrorConfig(url="https://mirror.test", token="t" * 40)
+    transport = httpx.MockTransport(handler)
+    await sync_critical_state(str(db), config, streams=(stream,), transport=transport)
+    with sqlite3.connect(db) as conn:
+        if stream in MUTABLE_STREAMS:
+            conn.execute(
+                "UPDATE noema_mirror_change_events SET payload_json=? WHERE stream=? AND event_id=1",
+                (json.dumps({"mission_id": "m1", "status": "diverged"}), stream),
+            )
+        else:
+            conn.execute("UPDATE economic_events SET amount='9.99' WHERE rowid=1")
+
+    with pytest.raises(ValueError, match="does not match the local source cursor history"):
+        await sync_critical_state(str(db), config, streams=(stream,), transport=transport)
+
+
+@pytest.mark.asyncio
 async def test_sync_resumes_legacy_append_only_rowid_checkpoint(tmp_path: Path) -> None:
     db = tmp_path / "noema.db"
     _db(db)
