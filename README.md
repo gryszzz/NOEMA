@@ -139,8 +139,10 @@ The graph describes flow, not current live authority. The execution gateway rema
 | --- | --- | --- |
 | **01 · Reality-first console** | ✅ Implemented | Evidence-backed operations view, replay, diagnostics, economics |
 | **02 · Living habitat** | ✅ Implemented | Inhabitants, workstations, mission occupancy, handoffs, recorded outputs |
-| **03 · Autonomous Desk** | ✅ In progress | Single-responsibility seats, active work packets, shift tape |
-| **03B · Rule Rack / Kill Board / Shift Report** | ⏭ Next | Surface governing rules, rejected opportunities and exact rejection reasons, end-of-shift audit |
+| **03A · Autonomous Desk** | ✅ Implemented | Responsibility seats, active work packets, shift tape; seats remain unbound without a real capability |
+| **03B · Rule Rack / Kill Board / Shift Report** | ⏭ Next | Surface enforced rules, rejected opportunities and their evidence, and persistent shift reports |
+| **03C · Continuous operation and recovery** | 🔧 In progress | Source-controlled mirror, complete export, and fresh SQLite restore are implemented and locally tested; hosted recovery drill and uninterrupted-cycle proof remain outstanding |
+| **03D · Economic reconciliation and measured edge** | ◌ Proposed | Close provider-cost coverage gaps and mature prospective Kalshi/Trench evaluation before measured evidence influences bounded allocation |
 | **04 · Policy-gated execution** | 🔒 Gated | Only after explicit authority, supported adapters, budgets, evidence, and reconciliation |
 | **05 · Real-world autonomous impact** | ◌ Vision | Expand from research loops into legitimate external work with the same audit discipline |
 
