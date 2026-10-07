@@ -110,6 +110,10 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
   assert.match(staleOperations.find(rule => rule.name === 'Heavy workload slots').source, /last successful snapshot/);
   assert.equal(staleOperations.find(rule => rule.name === 'Research evidence').value, 'STALE · sufficient_for_validation');
   assert.match(staleOperations.find(rule => rule.name === 'Research evidence').source, /request failed/);
+  const missingQualification = deriveRuleRack({}, { qualification: { status: 'unavailable', stage: 'insufficient' } })
+    .find(rule => rule.name === 'Research evidence');
+  assert.equal(missingQualification.value, 'Unavailable');
+  assert.match(missingQualification.source, /no stage inferred/);
 });
 
 test('Kill Board links only persisted passes, explicit critic rejects, and terminated missions', () => {
@@ -120,7 +124,7 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
     ] },
     missions: { rows: [{ mission_id: 'x', status: 'failed', objective: 'Bad thesis', result: { failure_reason: 'ambiguous rules' } }] },
     research_runs: { rows: [
-      { id: 3, specialist: 'critic', kind: 'review', result: JSON.stringify({ critic_review: { result_accepted: false, reason: 'source stale' } }) },
+      { id: 3, specialist: 'critic', kind: 'review', result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['source stale'] } }) },
       { id: 4, specialist: 'critic', kind: 'review', result: '{malformed' },
     ] },
   } });
@@ -134,6 +138,12 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
   assert.equal(hasKillBoardCoverage({ sections: {
     decisions: { status: 'empty' }, missions: { status: 'not_recorded' }, research_runs: { status: 'empty' },
   } }), false);
+  const cutoffKills = deriveKillBoard({ sections: {
+    decisions: { rows: [{ id: 5, decision: 'PASS', created_at: '2026-10-06T12:02:00Z' }] },
+    missions: { rows: [{ mission_id: 'late-failure', status: 'failed', created_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T12:03:00Z' }] },
+    research_runs: { rows: [{ id: 6, created_at: '2026-10-06T12:04:00Z', result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['future rejection'] } }) }] },
+  } }, 12, Date.parse('2026-10-06T12:01:00Z'));
+  assert.equal(cutoffKills.length, 0);
 });
 
 test('Shift Report uses persisted records, flags partial coverage, and keeps economics unknown', () => {

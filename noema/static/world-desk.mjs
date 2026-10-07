@@ -205,6 +205,7 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
   const controlState = (value, state) => state === 'stale' ? `STALE · ${value}` : value;
   const operationsState = value => controlState(value, freshness.operations);
   const qualificationFreshness = qualification?.market_data?.freshness;
+  const qualificationUnavailable = qualification?.status === 'unavailable';
   const budgetValue = observed(bill?.model_budget_usd, 'Unavailable');
   return [
     { name: 'Research runtime', value: operationsState(observed(snapshot.runtime?.state)), source: freshness.operations === 'stale'
@@ -223,9 +224,10 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
         : bill?.status === 'estimate_missing'
           ? 'No persisted budget; model spend limit unknown'
           : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
-    { name: 'Research evidence', value: qualificationFreshness === 'stale'
+    { name: 'Research evidence', value: qualificationUnavailable ? 'Unavailable' : qualificationFreshness === 'stale'
       ? `STALE · ${observed(qualification?.stage, 'Unavailable')}` : observed(qualification?.stage, 'Unavailable'),
-      source: qualificationFreshness === 'stale' ? 'Latest qualification request failed; retained evidence is the last successful snapshot'
+      source: qualificationUnavailable ? 'Market-data qualification unavailable; no stage inferred'
+        : qualificationFreshness === 'stale' ? 'Latest qualification request failed; retained evidence is the last successful snapshot'
         : qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
     { name: 'Prediction execution', value: controlState(`enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`, freshness.gateway),
       source: freshness.gateway === 'stale' ? 'Latest gateway request failed; retained policy is the last successful snapshot'
@@ -236,9 +238,15 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
   ];
 }
 
-export function deriveKillBoard(snapshot = {}, limit = 12) {
+export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
   const items = [];
+  const beforeCutoff = value => {
+    if (!Number.isFinite(cutoff)) return true;
+    const time = parseTime(value);
+    return time != null && time <= cutoff;
+  };
   for (const row of asRows(snapshot, 'decisions')) {
+    if (!beforeCutoff(row.created_at)) continue;
     const decision = String(row.decision ?? '').toUpperCase();
     if (!['PASS', 'NO_ACTION', 'REJECT', 'REJECTED', 'BLOCKED'].includes(decision)) continue;
     items.push({ id: `decision:${row.id}`, at: row.created_at, kind: 'FORECAST DECISION',
@@ -247,6 +255,7 @@ export function deriveKillBoard(snapshot = {}, limit = 12) {
       decisionId: row.id, missionId: null });
   }
   for (const row of asRows(snapshot, 'missions')) {
+    if (!beforeCutoff(row.updated_at ?? row.completed_at ?? row.created_at)) continue;
     const status = String(row.status ?? '').toLowerCase();
     if (!['failed', 'rejected', 'terminated', 'cancelled', 'canceled'].includes(status)) continue;
     items.push({ id: `mission:${row.mission_id}`, at: row.updated_at ?? row.completed_at ?? row.created_at,
@@ -255,11 +264,13 @@ export function deriveKillBoard(snapshot = {}, limit = 12) {
       missionId: row.mission_id, decisionId: null });
   }
   for (const row of asRows(snapshot, 'research_runs')) {
+    if (!beforeCutoff(row.completed_at ?? row.created_at)) continue;
     const review = parseResult(row.result).critic_review;
     if (!review || review.result_accepted !== false) continue;
     items.push({ id: `critic:${row.id}`, at: row.completed_at ?? row.created_at,
       kind: 'EVIDENCE CRITIC', title: `${row.specialist ?? 'Specialist unknown'} · ${row.kind ?? 'research'}`,
-      reason: review.reason ?? review.verdict ?? 'Evidence critic rejected the result',
+      reason: review.reason ?? (Array.isArray(review.issues) ? review.issues.join(' · ') : null)
+        ?? review.conclusion ?? review.verdict ?? 'Evidence critic rejected the result',
       missionId: row.mission_id ?? null, decisionId: null });
   }
   return items.sort((a, b) => (parseTime(b.at) ?? 0) - (parseTime(a.at) ?? 0)

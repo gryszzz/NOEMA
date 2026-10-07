@@ -389,7 +389,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     list: document.getElementById('world-entity-list'),
     camera: { zoom: 1, panX: 0, panY: 0, orbitX: -.12, orbitY: .16 },
   };
-  let source = null, nodes = [], edges = [], timeline = [], selectedId = 'agent:NOEMA', focusNodeId = 'agent:NOEMA', selectedEdge = null, replayIndex = null, dpr = 1;
+  let source = null, nodes = [], edges = [], timeline = [], selectedId = 'agent:NOEMA', focusNodeId = 'agent:NOEMA', selectedEdge = null, replayIndex = null, replayCutoff = Infinity, dpr = 1;
   let navigation = [['agent:NOEMA']], navigationIndex = 0, viewMode = 'all';
   const hiddenTypes = new Set(), hiddenStatuses = new Set(), pinnedIds = new Set();
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -851,7 +851,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     }
     if (killsHost) {
       killsHost.replaceChildren();
-      const kills = deriveKillBoard(source);
+      const kills = deriveKillBoard(source, 12, replayCutoff);
       if (!kills.length) {
         const empty = document.createElement('p'); empty.className = 'autonomous-empty';
         empty.textContent = source?.database_present && hasKillBoardCoverage(source)
@@ -1193,6 +1193,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
   function setTime(index) {
     replayIndex = index;
     const cutoff = index === null || !timeline.length ? Infinity : timeline[index]?.at ?? Infinity;
+    replayCutoff = cutoff;
     const model = buildModel(source, cutoff, capabilitySources); nodes = model.nodes;
     edges = model.edges.map((edge) => ({ ...edge, id: edgeId(edge) }));
     document.getElementById('world-time-value').textContent = index === null ? 'Latest known state' : new Date(cutoff).toLocaleString();
