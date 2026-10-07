@@ -794,6 +794,31 @@ button.desk-tape-row:hover { color:#d6e7fc; }
 .desk-tape-row strong { overflow:hidden; color:#b8cae2; text-overflow:ellipsis; white-space:nowrap; }
 .desk-tape-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .autonomous-empty { margin:0; color:#7187a7; font:9px/1.5 var(--mono); }
+.desk-control-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  border-top:1px solid #20334d;
+}
+.desk-control-panel { min-width:0; padding:13px 16px 15px; border-right:1px solid #20334d; }
+.desk-control-panel:last-child { border-right:0; }
+.desk-control-panel>header {
+  display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+  margin-bottom:9px; color:#8198ba; font:8px var(--mono);
+}
+.desk-control-panel>header strong { color:#c1d5ee; letter-spacing:.08em; }
+.desk-rule-row,.desk-kill-row { display:grid; gap:4px; padding:8px 0; border-top:1px solid #1c2c43; }
+.desk-rule-row:first-child,.desk-kill-row:first-child { border-top:0; }
+.desk-rule-row strong,.desk-kill-row strong { color:#dceaff; font:9px/1.4 var(--mono); }
+.desk-rule-row span,.desk-kill-row span { color:#a6b8d1; font:9px/1.45 var(--mono); overflow-wrap:anywhere; }
+.desk-rule-row small,.desk-kill-row small { color:#7187a7; font:8px/1.45 var(--mono); overflow-wrap:anywhere; }
+.desk-kill-row { width:100%; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.desk-kill-row:hover { background:#152338; }
+.desk-report-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-bottom:9px; }
+.desk-report-stats>div { display:grid; gap:4px; padding:7px; border:1px solid #223752; background:#0a1421; }
+.desk-report-stats small { color:#7187a7; font:7px var(--mono); }
+.desk-report-stats strong { color:#dceaff; font:14px var(--mono); }
+#autonomous-shift-report>p { margin:7px 0 0; color:#91a5c3; font:8px/1.5 var(--mono); }
+#autonomous-shift-report .desk-report-economics { color:#f0bf73; }
 .autonomous-desk-truth {
   margin:0;
   padding:9px 18px 11px;
@@ -809,4 +834,6 @@ button.desk-tape-row:hover { color:#d6e7fc; }
   .autonomous-desk-seats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .autonomous-shift-grid { grid-template-columns:1fr; }
   .autonomous-route { border-right:0; border-bottom:1px solid #20334d; }
+  .desk-control-grid { grid-template-columns:1fr; }
+  .desk-control-panel { border-right:0; border-bottom:1px solid #20334d; }
 }

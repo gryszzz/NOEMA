@@ -5,6 +5,9 @@ import {
   bindAutonomousDesk,
   deriveShiftPackets,
   deriveShiftTape,
+  deriveRuleRack,
+  deriveKillBoard,
+  deriveShiftReport,
 } from '../noema/static/world-desk.mjs';
 
 test('autonomous desk binds only observable specialists/tools and leaves missing seats vacant', () => {
@@ -61,4 +64,52 @@ test('shift tape is bounded and chronological newest-first', () => {
     { id: 'c', at: 2, actor: 'C', title: 'two' },
   ], 2);
   assert.deepEqual(tape.map(item => item.id), ['b', 'c']);
+});
+
+test('Rule Rack shows enforced observations and leaves missing configuration unknown', () => {
+  const rules = deriveRuleRack({
+    runtime: { state: 'running' },
+    resources: { state: 'ready', limits: { experiments: 1 }, minimum_available_memory_percent: 20 },
+  }, {
+    bill: { model_budget_usd: '0.50', basis: 'operator-reported', status: 'within_owner_limit' },
+    gateway: { enabled: false, master_halt: true, prediction_execution_enabled: false },
+    wallets: { control_plane: { live_execution_enabled: false, mission_authority_present: false, halted: true } },
+    qualification: { stage: 'collecting', explanation: 'Insufficient prospective data' },
+  });
+  assert.match(rules.find(rule => rule.name === 'Model budget').value, /0\.50/);
+  assert.match(rules.find(rule => rule.name === 'Prediction execution').value, /live=false/);
+  assert.match(rules.find(rule => rule.name === 'Research evidence').source, /Insufficient/);
+  assert.equal(deriveRuleRack({}, {})[2].value, 'Unavailable');
+});
+
+test('Kill Board links only persisted passes, explicit critic rejects, and terminated missions', () => {
+  const kills = deriveKillBoard({ sections: {
+    decisions: { rows: [
+      { id: 1, market_id: 'M1', decision: 'PASS', reason: 'After-cost edge below threshold' },
+      { id: 2, market_id: 'M2', decision: 'BUY_YES' },
+    ] },
+    missions: { rows: [{ mission_id: 'x', status: 'failed', objective: 'Bad thesis', result: { failure_reason: 'ambiguous rules' } }] },
+    research_runs: { rows: [{ id: 3, specialist: 'critic', kind: 'review', result: { critic_review: { result_accepted: false, reason: 'source stale' } } }] },
+  } });
+  assert.equal(kills.length, 3);
+  assert.ok(kills.some(item => item.reason === 'After-cost edge below threshold'));
+  assert.ok(kills.some(item => item.reason === 'ambiguous rules'));
+  assert.ok(kills.some(item => item.reason === 'source stale'));
+});
+
+test('Shift Report uses persisted records, flags partial coverage, and keeps economics unknown', () => {
+  const report = deriveShiftReport({
+    as_of: '2026-10-06T12:00:00Z',
+    sections: {
+      missions: { has_more: false, rows: [{ mission_id: 'm1', status: 'completed', updated_at: '2026-10-06T11:00:00Z' }] },
+      research_runs: { has_more: true, rows: [{ id: 1, specialist: 'kalshi-research', created_at: '2026-10-06T10:00:00Z', compute_cost_usd: null }] },
+      decisions: { has_more: false, rows: [{ id: 2, created_at: '2026-10-06T09:00:00Z' }] },
+      activity: { rows: [] }, mission_events: { rows: [] },
+    },
+  });
+  assert.equal(report.counts.completed, 1);
+  assert.equal(report.counts.investigations, 1);
+  assert.equal(report.coverage, 'partial · section cap reached');
+  assert.equal(report.compute_cost_usd, null);
+  assert.match(report.economic_contribution, /Unknown/);
 });

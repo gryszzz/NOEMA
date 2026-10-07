@@ -55,6 +55,10 @@ try {
   page.on('response', response=>{if(response.status()>=400)failedResponses.push(`${response.status()} ${response.url()}`);});
   await page.goto(url); await page.getByRole('heading',{name:'NOEMA OPERATING WORLD'}).waitFor();
   await page.evaluate(() => document.fonts.ready);
+  await page.waitForFunction(() => document.querySelector('#autonomous-rule-rack')?.innerText.includes('Prediction execution'));
+  assert.ok((await page.locator('#autonomous-rule-rack').innerText()).includes('Prediction execution'));
+  assert.ok((await page.locator('#autonomous-kill-board').innerText()).includes('BTC-15M'));
+  assert.ok((await page.locator('#autonomous-shift-report').innerText()).includes('Unknown'));
   await page.locator('#tab-economics').click();
   assert.equal(await page.locator('#tab-economics').getAttribute('aria-selected'),'true');
   await page.locator('#lane-rows').getByText('Prediction markets',{exact:true}).waitFor({state:'attached'});

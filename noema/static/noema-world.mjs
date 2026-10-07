@@ -2,7 +2,10 @@ import { HABITAT_ZONES, HABITAT_FAR_LAYOUT, habitatZoneKey, habitatSlotPosition,
 import { deriveInhabitantActivity, handoffTraversal, inhabitantGlyph } from './world-inhabitants.mjs';
 import { workstationDescriptor } from './world-workstations.mjs';
 import { deriveMissionOccupancies, deriveActiveMissionLineage, recordedDeliverable } from './world-occupancy.mjs';
-import { bindAutonomousDesk, deriveShiftPackets, deriveShiftTape } from './world-desk.mjs';
+import {
+  bindAutonomousDesk, deriveShiftPackets, deriveShiftTape, deriveRuleRack,
+  deriveKillBoard, deriveShiftReport,
+} from './world-desk.mjs';
 
 // Lightweight navigable spatial view. All vertices and edges are projected from
 // the same bounded /api/operations snapshot rendered by the workstation.
@@ -728,6 +731,9 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
     const seatsHost = document.getElementById('autonomous-desk-seats');
     const routeHost = document.getElementById('autonomous-desk-route');
     const tapeHost = document.getElementById('autonomous-desk-tape');
+    const rulesHost = document.getElementById('autonomous-rule-rack');
+    const killsHost = document.getElementById('autonomous-kill-board');
+    const reportHost = document.getElementById('autonomous-shift-report');
     const stateHost = document.getElementById('autonomous-desk-state');
     if (!seatsHost || !routeHost || !tapeHost || !stateHost) return;
 
@@ -831,6 +837,65 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         }
         tapeHost.append(row);
       }
+    }
+
+    if (rulesHost) {
+      rulesHost.replaceChildren();
+      for (const rule of deriveRuleRack(source, capabilitySources)) {
+        const row = document.createElement('article'); row.className = 'desk-rule-row';
+        const name = document.createElement('strong'); name.textContent = rule.name;
+        const value = document.createElement('span'); value.textContent = rule.value;
+        const basis = document.createElement('small'); basis.textContent = rule.source;
+        row.append(name, value, basis); rulesHost.append(row);
+      }
+    }
+    if (killsHost) {
+      killsHost.replaceChildren();
+      const kills = deriveKillBoard(source);
+      if (!kills.length) {
+        const empty = document.createElement('p'); empty.className = 'autonomous-empty';
+        empty.textContent = source?.database_present
+          ? 'No persisted PASS, critic rejection, or terminated mission is present in the loaded records.'
+          : 'Decision history unavailable; no failures are inferred.';
+        killsHost.append(empty);
+      }
+      for (const item of kills) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'desk-kill-row';
+        const heading = document.createElement('strong'); heading.textContent = `${item.kind} · ${item.title}`;
+        const reason = document.createElement('span'); reason.textContent = item.reason;
+        const meta = document.createElement('small'); meta.textContent = `${item.at ?? 'time unknown'} · ${item.id}`;
+        button.append(heading, reason, meta);
+        button.onclick = () => {
+          const node = item.decisionId != null ? nodeById(`forecast:${item.decisionId}`)
+            : item.missionId ? nodeById(`mission:${item.missionId}`) : null;
+          if (node) { selectNode(node); document.getElementById('workstation-topology')?.scrollIntoView({ block: 'nearest' }); }
+        };
+        killsHost.append(button);
+      }
+    }
+    if (reportHost) {
+      reportHost.replaceChildren();
+      const report = deriveShiftReport(source);
+      const stats = [
+        ['MISSIONS', report.counts.missions], ['INVESTIGATIONS', report.counts.investigations],
+        ['FORECASTS', report.counts.forecasts], ['COMPLETED', report.counts.completed],
+        ['FAILURES', report.counts.failures], ['RECORDED EVENTS', report.counts.events],
+      ];
+      const grid = document.createElement('div'); grid.className = 'desk-report-stats';
+      for (const [label, value] of stats) {
+        const cell = document.createElement('div'); const title = document.createElement('small'); title.textContent = label;
+        const number = document.createElement('strong'); number.textContent = String(value);
+        cell.append(title, number); grid.append(cell);
+      }
+      reportHost.append(grid);
+      const summary = document.createElement('p'); summary.textContent = `Window ${report.window_hours}h · ${report.coverage} · model/compute cost ${report.compute_cost_usd == null ? 'Unknown' : `$${report.compute_cost_usd.toFixed(4)}`} (${report.compute_cost_records} explicit run records${report.compute_cost_unknown ? ', some unknown' : ''}).`;
+      reportHost.append(summary);
+      const people = document.createElement('p'); people.textContent = `Recorded contributors: ${report.contributors.join(' · ') || 'Unknown'}; this counts linked investigations, not independent-agent performance.`;
+      reportHost.append(people);
+      const blockers = document.createElement('p'); blockers.textContent = `Outstanding blockers: ${report.blockers.map(item => `${item.mission_id} · ${item.status} · ${item.objective}`).join(' | ') || 'None in loaded mission rows'}.`;
+      reportHost.append(blockers);
+      const economics = document.createElement('p'); economics.className = 'desk-report-economics'; economics.textContent = report.economic_contribution;
+      reportHost.append(economics);
     }
   }
 
