@@ -203,12 +203,18 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
   const observed = (value, fallback = 'Unknown') => value == null || value === '' ? fallback : String(value);
   const controlValue = value => typeof value === 'boolean' ? String(value) : 'UNKNOWN';
   const controlState = (value, state) => state === 'stale' ? `STALE · ${value}` : value;
+  const operationsState = value => controlState(value, freshness.operations);
+  const qualificationFreshness = qualification?.market_data?.freshness;
   const budgetValue = observed(bill?.model_budget_usd, 'Unavailable');
   return [
-    { name: 'Research runtime', value: observed(snapshot.runtime?.state), source: 'Persisted worker heartbeat / cycle state' },
-    { name: 'Heavy workload slots', value: resources.limits
+    { name: 'Research runtime', value: operationsState(observed(snapshot.runtime?.state)), source: freshness.operations === 'stale'
+      ? 'Latest /api/operations request failed; retained worker state is the last successful snapshot'
+      : 'Persisted worker heartbeat / cycle state' },
+    { name: 'Heavy workload slots', value: operationsState(resources.limits
       ? `${Object.entries(resources.limits).map(([key, value]) => `${key.replaceAll('_', ' ')} ${value}`).join(' · ')} · ${observed(resources.state)}`
-      : 'Unavailable', source: `Deterministic resource admission · memory floor ${observed(resources.minimum_available_memory_percent, 'Unknown')}%` },
+      : 'Unavailable'), source: freshness.operations === 'stale'
+        ? 'Latest /api/operations request failed; retained admission limits are the last successful snapshot'
+        : `Deterministic resource admission · memory floor ${observed(resources.minimum_available_memory_percent, 'Unknown')}%` },
     { name: 'Model budget', value: billFreshness === 'stale' && budgetValue !== 'Unavailable'
       ? `STALE · ${budgetValue}` : budgetValue, source: billFreshness === 'stale'
       ? 'Latest /api/bill request failed; retained budget is the last successful snapshot'
@@ -217,7 +223,10 @@ export function deriveRuleRack(snapshot = {}, sources = {}) {
         : bill?.status === 'estimate_missing'
           ? 'No persisted budget; model spend limit unknown'
           : `Persisted operator budget · ${bill?.basis ?? 'coverage unknown'}` },
-    { name: 'Research evidence', value: observed(qualification?.stage, 'Unavailable'), source: qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
+    { name: 'Research evidence', value: qualificationFreshness === 'stale'
+      ? `STALE · ${observed(qualification?.stage, 'Unavailable')}` : observed(qualification?.stage, 'Unavailable'),
+      source: qualificationFreshness === 'stale' ? 'Latest qualification request failed; retained evidence is the last successful snapshot'
+        : qualification?.explanation ?? 'Qualification evidence unavailable; no readiness inferred' },
     { name: 'Prediction execution', value: controlState(`enabled=${controlValue(gateway?.enabled)} · halt=${controlValue(gateway?.master_halt)} · live=${controlValue(gateway?.prediction_execution_enabled)}`, freshness.gateway),
       source: freshness.gateway === 'stale' ? 'Latest gateway request failed; retained policy is the last successful snapshot'
         : gateway?.status ?? 'Gateway policy unavailable; execution state unknown' },
@@ -267,7 +276,7 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}) {
   const runs = within('research_runs');
   const forecasts = within('decisions');
   const events = [...within('activity'), ...within('mission_events')];
-  const sectionRecorded = name => snapshot.sections?.[name]?.status === 'recorded';
+  const sectionRecorded = name => ['recorded', 'empty'].includes(snapshot.sections?.[name]?.status);
   const missionAvailable = sectionRecorded('missions');
   const runsAvailable = sectionRecorded('research_runs');
   const decisionsAvailable = sectionRecorded('decisions');

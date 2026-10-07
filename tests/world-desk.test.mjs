@@ -101,6 +101,14 @@ test('Rule Rack shows enforced observations and leaves missing configuration unk
   });
   assert.match(staleControls.find(rule => rule.name === 'Prediction execution').value, /^STALE ·/);
   assert.match(staleControls.find(rule => rule.name === 'Treasury authority').source, /last successful snapshot/);
+  const staleOperations = deriveRuleRack({ runtime: { state: 'running' }, resources: { state: 'ready', limits: { experiments: 1 } } }, {
+    qualification: { stage: 'sufficient_for_validation', market_data: { freshness: 'stale' } },
+    freshness: { operations: 'stale' },
+  });
+  assert.match(staleOperations.find(rule => rule.name === 'Research runtime').value, /^STALE ·/);
+  assert.match(staleOperations.find(rule => rule.name === 'Heavy workload slots').source, /last successful snapshot/);
+  assert.equal(staleOperations.find(rule => rule.name === 'Research evidence').value, 'STALE · sufficient_for_validation');
+  assert.match(staleOperations.find(rule => rule.name === 'Research evidence').source, /request failed/);
 });
 
 test('Kill Board links only persisted passes, explicit critic rejects, and terminated missions', () => {
@@ -140,6 +148,12 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.match(absent.coverage, /unavailable · not recorded/);
   assert.equal(absent.counts.missions, null);
   assert.equal(absent.blockers, null);
+  const empty = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: Object.fromEntries(
+    ['missions', 'research_runs', 'decisions', 'activity', 'mission_events'].map(name => [name, { status: 'empty', rows: [] }]),
+  ) });
+  assert.equal(empty.counts.missions, 0);
+  assert.equal(empty.counts.investigations, 0);
+  assert.equal(empty.coverage, 'loaded records only');
   const staleSnapshot = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
     missions: { status: 'recorded', rows: [] }, research_runs: { status: 'recorded', rows: [] },
     decisions: { status: 'recorded', rows: [] }, activity: { status: 'recorded', rows: [] },
