@@ -223,6 +223,57 @@ def _primary_key_columns(conn: sqlite3.Connection, stream: str) -> tuple[str, ..
     return tuple(str(row[1]) for row in sorted(columns, key=lambda row: int(row[5]) or 10**9) if int(row[5]))
 
 
+def _validate_restore_projection_identity(
+    conn: sqlite3.Connection, stream: str, record: dict[str, Any],
+) -> None:
+    """Bind the projected row key and operation to verified payload identity."""
+    key = record["record_key"]
+    suffix = key[len(stream) + 1:]
+    payload = record["payload"]
+    operation = record.get("operation", "upsert")
+    if (record.get("source_schema_version") == "legacy-unversioned"
+            and operation == "upsert" and suffix.isascii() and suffix.isdecimal()
+            and int(suffix) == record.get("source_rowid")
+            and "__noema_tombstone__" not in payload):
+        # Original append-only mirror rows keyed by source rowid predate stable
+        # primary-key identities. Preserve that specific legacy representation.
+        return
+    columns = _primary_key_columns(conn, stream)
+    if not columns:
+        raise ValueError(f"restore stream {stream} has no primary-key identity")
+    if operation == "tombstone":
+        identity = payload.get("identity")
+        if isinstance(identity, str):
+            try:
+                identity = json.loads(identity)
+            except json.JSONDecodeError:
+                identity = None
+        if (set(payload) != {"__noema_tombstone__", "identity"}
+                or payload.get("__noema_tombstone__") != 1):
+            raise ValueError(f"restore tombstone identity is invalid in {stream}")
+        if isinstance(identity, dict) and set(identity) == set(columns):
+            values = [identity[column] for column in columns]
+        elif isinstance(identity, list) and len(identity) == len(columns):
+            values = identity
+        else:
+            raise ValueError(f"restore tombstone identity is invalid in {stream}")
+    else:
+        if "__noema_tombstone__" in payload or any(column not in payload for column in columns):
+            raise ValueError(f"restore upsert identity is invalid in {stream}")
+        values = [payload[column] for column in columns]
+        if (len(columns) == 1 and suffix.isascii() and suffix.isdecimal()
+                and str(values[0]) == suffix and record.get("source_rowid") == int(suffix)):
+            # Older append-only writers encoded a single numeric primary key
+            # directly in record_key instead of as SQLite JSON-array hex.
+            return
+    placeholders = ",".join("?" for _ in values)
+    encoded = conn.execute(
+        f"SELECT lower(hex(CAST(json_array({placeholders}) AS BLOB)))", tuple(values),
+    ).fetchone()[0]
+    if suffix != encoded:
+        raise ValueError(f"restore record key does not match payload identity in {stream}")
+
+
 def _record_key(conn: sqlite3.Connection, stream: str, row: dict[str, Any]) -> str:
     keys = _primary_key_columns(conn, stream)
     if not keys or any(row.get(key) is None for key in keys):
@@ -888,6 +939,7 @@ def restore_critical_state(
                 floor = int(stream["restore_floor_id"])
                 latest: dict[str, dict[str, Any]] = {}
                 for record in stream["records"]:
+                    _validate_restore_projection_identity(conn, name, record)
                     payload = record["payload"]
                     conn.execute(
                         "INSERT INTO noema_mirror_history VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

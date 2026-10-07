@@ -803,3 +803,21 @@ def test_restore_rejects_hash_tampering_and_existing_target(tmp_path: Path) -> N
     with pytest.raises(FileExistsError, match="never overwrites"):
         restore_critical_state(bundle, target)
     assert target.read_bytes() == b"local truth"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [("operation", "tombstone", "tombstone identity"),
+     ("record_key", "missions:deadbeef", "record key does not match")],
+)
+def test_restore_rejects_projection_metadata_tampering(tmp_path: Path, field: str, value: str, message: str) -> None:
+    bundle, target = tmp_path / f"tampered-{field}.json", tmp_path / "must-not-exist.db"
+    _restore_bundle(bundle)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    record = next(item for item in data["streams"] if item["name"] == "missions")["records"][0]
+    record[field] = value
+    bundle.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        restore_critical_state(bundle, target)
+    assert not target.exists()
