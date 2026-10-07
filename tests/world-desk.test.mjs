@@ -163,6 +163,7 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
     sections: {
       missions: { status: 'recorded', has_more: false, rows: [{ mission_id: 'm1', status: 'completed', updated_at: '2026-10-06T11:00:00Z' }] },
       research_runs: { status: 'recorded', has_more: true, rows: [{ id: 1, specialist: 'kalshi-research', created_at: '2026-10-06T10:00:00Z', compute_cost_usd: null }] },
+      sessions: { status: 'empty', has_more: false, rows: [] },
       decisions: { status: 'recorded', has_more: false, rows: [{ id: 2, created_at: '2026-10-06T09:00:00Z' }] },
       activity: { status: 'recorded', rows: [] }, mission_events: { status: 'recorded', rows: [] },
     },
@@ -175,7 +176,7 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.match(report.economic_contribution, /Unknown/);
   const oldBlocker = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
     missions: { status: 'recorded', rows: [{ mission_id: 'old', status: 'blocked', updated_at: '2026-10-01T00:00:00Z' }] },
-    research_runs: { status: 'empty', rows: [] }, decisions: { status: 'empty', rows: [] },
+    research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] }, decisions: { status: 'empty', rows: [] },
     activity: { status: 'empty', rows: [] }, mission_events: { status: 'empty', rows: [] },
   } });
   assert.equal(oldBlocker.counts.missions, 0);
@@ -191,7 +192,7 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.equal(absent.counts.missions, null);
   assert.equal(absent.blockers, null);
   const empty = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: Object.fromEntries(
-    ['missions', 'research_runs', 'decisions', 'activity', 'mission_events'].map(name => [name, { status: 'empty', rows: [] }]),
+    ['missions', 'research_runs', 'sessions', 'decisions', 'activity', 'mission_events'].map(name => [name, { status: 'empty', rows: [] }]),
   ) });
   assert.equal(empty.counts.missions, 0);
   assert.equal(empty.counts.investigations, 0);
@@ -199,6 +200,7 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   const historical = deriveShiftReport({ as_of: '2026-10-06T12:10:00Z', sections: {
     missions: { status: 'recorded', rows: [{ mission_id: 'm1', status: 'completed', created_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T12:05:00Z' }] },
     research_runs: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z', compute_cost_usd: 1 }] },
+    sessions: { status: 'empty', rows: [] },
     decisions: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z' }] },
     activity: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z' }] },
     mission_events: { status: 'recorded', rows: [{ mission_id: 'm1', status: 'queued', created_at: '2026-10-06T11:30:00Z' }, { mission_id: 'm1', status: 'completed', created_at: '2026-10-06T12:05:00Z' }] },
@@ -209,8 +211,45 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.equal(historical.blockers[0].status, 'queued');
   const staleSnapshot = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
     missions: { status: 'recorded', rows: [] }, research_runs: { status: 'recorded', rows: [] },
+    sessions: { status: 'empty', rows: [] },
     decisions: { status: 'recorded', rows: [] }, activity: { status: 'recorded', rows: [] },
     mission_events: { status: 'recorded', rows: [] },
   } }, 24, { operations: 'stale' });
   assert.match(staleSnapshot.coverage, /partial · operations snapshot stale/);
+});
+
+test('Shift Report includes persisted model-session costs without double counting run costs', () => {
+  const report = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', rows: [
+      { mission_id: 'm-model', run_id: 1, session_id: 's-model' },
+      { mission_id: 'm-run', run_id: 2, session_id: 's-run' },
+    ] },
+    research_runs: { status: 'recorded', rows: [
+      { id: 1, mission_id: 'm-model', specialist: 'kalshi-research', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', compute_cost_usd: null },
+      { id: 2, mission_id: 'm-run', specialist: 'evidence-critic', created_at: '2026-10-06T08:00:00Z', completed_at: '2026-10-06T11:00:00Z', compute_cost_usd: 0.05 },
+    ] },
+    sessions: { status: 'recorded', rows: [
+      { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12 },
+      { session_id: 's-run', created_at: '2026-10-06T08:00:00Z', completed_at: '2026-10-06T11:00:00Z', estimated_model_cost_usd: 0.40 },
+    ] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+    mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.ok(Math.abs(report.compute_cost_usd - 0.17) < 1e-10);
+  assert.equal(report.compute_cost_records, 2);
+  assert.equal(report.compute_cost_unknown, true);
+  assert.equal(report.counts.investigations, 2);
+});
+
+test('Shift Report assigns completed investigations to their completion window', () => {
+  const report = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'empty', rows: [] },
+    research_runs: { status: 'recorded', rows: [{ id: 1, specialist: 'kalshi-research',
+      created_at: '2026-10-04T10:00:00Z', completed_at: '2026-10-06T11:00:00Z', compute_cost_usd: 0.3 }] },
+    sessions: { status: 'empty', rows: [] }, decisions: { status: 'empty', rows: [] },
+    activity: { status: 'empty', rows: [] }, mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.equal(report.counts.investigations, 1);
+  assert.deepEqual(report.contributors, ['kalshi-research']);
+  assert.equal(report.compute_cost_usd, 0.3);
 });

@@ -890,7 +890,7 @@ export function createNoemaWorld(onSelect = () => {}, onSelectEdge = () => {}) {
         cell.append(title, number); grid.append(cell);
       }
       reportHost.append(grid);
-      const summary = document.createElement('p'); summary.textContent = `Window ${report.window_hours}h · ${report.coverage} · model/compute cost ${report.compute_cost_usd == null ? 'Unknown' : `$${report.compute_cost_usd.toFixed(4)}`} (${report.compute_cost_records} explicit run records${report.compute_cost_unknown ? ', some unknown' : ''}).`;
+      const summary = document.createElement('p'); summary.textContent = `Window ${report.window_hours}h · ${report.coverage} · model/compute cost ${report.compute_cost_usd == null ? 'Unknown' : `$${report.compute_cost_usd.toFixed(4)}`} (${report.compute_cost_records} explicit cost records${report.compute_cost_unknown ? ', some unknown' : ''}).`;
       reportHost.append(summary);
       const people = document.createElement('p'); people.textContent = `Recorded contributors: ${report.contributors.join(' · ') || 'Unknown'}; this counts linked investigations, not independent-agent performance.`;
       reportHost.append(people);
