@@ -672,9 +672,9 @@ async def sync_critical_state(
                     local_high_water = int(conn.execute("SELECT coalesce(max(event_id),0) FROM noema_mirror_change_events WHERE stream=?", (stream,)).fetchone()[0])
                 else:
                     local_high_water = int(conn.execute(f"SELECT coalesce(max(rowid),0) FROM {_qident(stream)}").fetchone()[0])
-                if mutable and cursor > local_high_water:
+                if cursor > local_high_water:
                     raise ValueError(
-                        f"remote mutable checkpoint for {stream} is ahead of the local change journal"
+                        f"remote checkpoint for {stream} is ahead of the local source high-water mark"
                     )
                 result = await _post(
                     client,

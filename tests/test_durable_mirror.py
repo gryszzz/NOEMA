@@ -151,10 +151,33 @@ async def test_sync_rejects_mutable_checkpoint_ahead_of_local_journal(tmp_path: 
         ingested.extend(body["records"])
         return httpx.Response(200, json={"accepted": len(body["records"])})
 
-    with pytest.raises(ValueError, match="ahead of the local change journal"):
+    with pytest.raises(ValueError, match="ahead of the local source high-water mark"):
         await sync_critical_state(
             str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
             streams=("missions",), transport=httpx.MockTransport(handler),
+        )
+    assert ingested == []
+
+
+@pytest.mark.asyncio
+async def test_sync_rejects_append_only_checkpoint_ahead_of_local_high_water(tmp_path: Path) -> None:
+    db = tmp_path / "rolled-back-append-only.db"
+    _db(db)
+    ingested: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": {"economic_events": {
+                "last_cursor": "21", "metadata": {"cursor_kind": "rowid"},
+            }}})
+        ingested.extend(body["records"])
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    with pytest.raises(ValueError, match="ahead of the local source high-water mark"):
+        await sync_critical_state(
+            str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            streams=("economic_events",), transport=httpx.MockTransport(handler),
         )
     assert ingested == []
 
