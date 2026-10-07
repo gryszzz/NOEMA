@@ -813,11 +813,21 @@ def build_operations(
                                 }
                                 review = compact.get("critic_review")
                                 if isinstance(review, dict):
-                                    compact["critic_review"] = {
-                                        key: (value[:500] if isinstance(value, str) else value)
-                                        for key, value in review.items()
-                                        if key in {"verdict", "result_accepted", "accepted", "reason", "status"}
-                                    }
+                                    compact_review = {}
+                                    for key in ("verdict", "result_accepted", "accepted", "reason",
+                                                "status", "conclusion", "issues"):
+                                        value = review.get(key)
+                                        if isinstance(value, str):
+                                            compact_review[key] = value[:500]
+                                        elif key == "issues" and isinstance(value, list):
+                                            compact_review[key] = [
+                                                item[:500] for item in value[:10] if isinstance(item, str)
+                                            ]
+                                        elif key in review and (
+                                            isinstance(value, (bool, int, float)) or value is None
+                                        ):
+                                            compact_review[key] = value
+                                    compact["critic_review"] = compact_review
                                 encoded_result = json.dumps(compact, sort_keys=True)
                             record["result"] = encoded_result[:4000]
                         except (ValueError, TypeError):

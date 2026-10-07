@@ -340,20 +340,13 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     events: eventsAvailable ? events.length : null };
   const runCostValues = runs.map(row => row.compute_cost_usd == null ? null : Number(row.compute_cost_usd))
     .filter(value => value != null && Number.isFinite(value) && value >= 0);
-  const missionsById = new Map(asRows(snapshot, 'missions').map(row => [String(row.mission_id), row]));
-  const sessionIdsCoveredByRun = new Set();
-  for (const run of runs) {
-    if (run.compute_cost_usd == null || !Number.isFinite(Number(run.compute_cost_usd))
-        || Number(run.compute_cost_usd) < 0) continue;
-    if (run.session_id != null) sessionIdsCoveredByRun.add(String(run.session_id));
-    const linkedMission = run.mission_id == null ? null : missionsById.get(String(run.mission_id));
-    if (linkedMission?.session_id != null) sessionIdsCoveredByRun.add(String(linkedMission.session_id));
-    for (const mission of missionsById.values()) {
-      if (mission.run_id != null && String(mission.run_id) === String(run.id)
-          && mission.session_id != null) sessionIdsCoveredByRun.add(String(mission.session_id));
-    }
+  const sessionCostRows = [];
+  const seenSessionCosts = new Set();
+  for (const row of sessions) {
+    if (row.session_id != null && seenSessionCosts.has(String(row.session_id))) continue;
+    if (row.session_id != null) seenSessionCosts.add(String(row.session_id));
+    sessionCostRows.push(row);
   }
-  const sessionCostRows = sessions.filter(row => !sessionIdsCoveredByRun.has(String(row.session_id)));
   const sessionCostValues = sessionCostRows.map(row => row.estimated_model_cost_usd == null
     ? null : Number(row.estimated_model_cost_usd))
     .filter(value => value != null && Number.isFinite(value) && value >= 0);

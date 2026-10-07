@@ -118,6 +118,34 @@ def test_experiment_projection_links_persisted_runs_evidence_decisions_and_criti
     assert json.loads(run["result"])["critic_review"]["result_accepted"] is True
 
 
+def test_large_rejected_run_keeps_bounded_critic_details_in_operations_projection(tmp_path):
+    path = tmp_path / "large-critic-result.db"
+    result = {
+        "critic_review": {
+            "verdict": "REJECT",
+            "result_accepted": False,
+            "issues": ["Critical evidence mismatch", "Second issue"],
+            "conclusion": "The evidence does not support the research result.",
+        },
+        "large_payload": "x" * 5000,
+    }
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TABLE autonomous_research_runs(
+            id,trial_id,specialist,kind,evidence_hash,worker_version,status,created_at,
+            completed_at,elapsed_seconds,compute_cost_usd,result_json,evidence_path,mission_id)""")
+        conn.execute("INSERT INTO autonomous_research_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            1, "trial-a", "evidence-critic", "validation", "hash", "v1", "quarantined",
+            NOW.isoformat(), NOW.isoformat(), 1.0, None, json.dumps(result), None, "mission-a",
+        ))
+
+    run = build_operations(str(path), now=NOW)["sections"]["research_runs"]["rows"][0]
+    projected = json.loads(run["result"])
+    assert len(run["result"]) <= 4000
+    assert projected["critic_review"]["issues"] == ["Critical evidence mismatch", "Second issue"]
+    assert projected["critic_review"]["conclusion"] == "The evidence does not support the research result."
+    assert projected["critic_review"]["result_accepted"] is False
+
+
 def test_sidecar_terminal_run_wins_over_incomplete_worker_copy(tmp_path):
     worker, sidecar = tmp_path / "worker.db", tmp_path / "console-state.db"
     schema = """CREATE TABLE autonomous_research_runs(

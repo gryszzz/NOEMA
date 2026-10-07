@@ -218,7 +218,7 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
   assert.match(staleSnapshot.coverage, /partial · operations snapshot stale/);
 });
 
-test('Shift Report includes persisted model-session costs without double counting run costs', () => {
+test('Shift Report sums distinct model-session and worker costs without duplicate sessions', () => {
   const report = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
     missions: { status: 'recorded', rows: [
       { mission_id: 'm-model', run_id: 1, session_id: 's-model' },
@@ -230,13 +230,14 @@ test('Shift Report includes persisted model-session costs without double countin
     ] },
     sessions: { status: 'recorded', rows: [
       { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12 },
+      { session_id: 's-model', created_at: '2026-10-06T09:00:00Z', completed_at: '2026-10-06T11:30:00Z', estimated_model_cost_usd: 0.12 },
       { session_id: 's-run', created_at: '2026-10-06T08:00:00Z', completed_at: '2026-10-06T11:00:00Z', estimated_model_cost_usd: 0.40 },
     ] },
     decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
     mission_events: { status: 'empty', rows: [] },
   } });
-  assert.ok(Math.abs(report.compute_cost_usd - 0.17) < 1e-10);
-  assert.equal(report.compute_cost_records, 2);
+  assert.ok(Math.abs(report.compute_cost_usd - 0.57) < 1e-10);
+  assert.equal(report.compute_cost_records, 3);
   assert.equal(report.compute_cost_unknown, true);
   assert.equal(report.counts.investigations, 2);
 });
