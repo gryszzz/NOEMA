@@ -40,7 +40,7 @@ target-version = "py312"
 extend-exclude = ["openclaw"]
 
 [tool.setuptools.package-data]
-noema = ["static/*.html", "static/*.css", "static/*.mjs", "static/brand/*.png", "static/fonts/*"]
+noema = ["static/*.html", "static/*.css", "static/*.mjs", "static/*.webmanifest", "static/*.png", "static/brand/*.png", "static/fonts/*"]
 
 [tool.setuptools.packages.find]
 include = ["noema", "noema.*"]

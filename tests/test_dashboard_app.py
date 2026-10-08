@@ -145,9 +145,13 @@ def test_dashboard_root_renders_console() -> None:
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert "NOEMA · Autonomous economy" in response.text
-    assert "Operational records" in response.text
+    assert "NOEMA · Research desk" in response.text
+    assert "Agent swarm / mission board" in response.text
+    assert "AMBIENT MOTION · LINKS ARE PERSISTED" in response.text
     assert client.get("/static/brand/noema-face.png").status_code == 200
+    assert client.get("/static/research-desk-room.png").status_code == 200
+    assert client.get("/static/noema-crawler-mascot.png").status_code == 200
+    assert client.get("/static/noema.webmanifest").status_code == 200
 
 
 def test_overview_endpoint_is_safe_without_database(monkeypatch, tmp_path) -> None:

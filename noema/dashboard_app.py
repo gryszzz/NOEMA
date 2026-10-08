@@ -34,6 +34,7 @@ from .console_replication import (
 )
 from .console_state import console_state_db_path
 from .dashboard_data import build_overview
+from .discovery_dashboard import build_discovery_overview
 from .doctor import doctor_report
 from .economic_dashboard import build_economic_overview
 from .economic_measurement import build_economic_measurement
@@ -930,7 +931,7 @@ def _inflate_snapshot_file(compressed_path: str, directory: Path) -> tuple[str, 
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    path = Path(__file__).with_name("static") / "index.html"
+    path = Path(__file__).with_name("static") / "research-desk.html"
     return path.read_text()
 
 
@@ -1088,6 +1089,12 @@ async def bill() -> dict[str, Any]:
 @app.get("/api/radar")
 async def radar() -> list[dict[str, Any]]:
     return [row.__dict__ for row in build_radar(_db_path())]
+
+
+@app.get("/api/research-discovery")
+def research_discovery() -> dict[str, Any]:
+    """Read-only, allowlisted evidence projection for public discovery runs."""
+    return build_discovery_overview((_db_path(), _console_state_db_path()))
 
 
 @app.get("/api/trench")

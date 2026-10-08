@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "NOEMA Economic Research Desk",
+  "short_name": "NOEMA",
+  "description": "Authenticated live economic research workstation",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09070d",
+  "theme_color": "#09070d",
+  "icons": [
+    {
+      "src": "/static/brand/noema-v2-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/brand/noema-face.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

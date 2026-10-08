@@ -575,8 +575,9 @@ def test_main_is_work_console_and_api_never_initializes_database(tmp_path, monke
     monkeypatch.setenv("NOEMA_DB_PATH", str(path))
     with TestClient(app) as client:
         response = client.get("/")
-        assert 'Operational records' in response.text
+        assert 'Agent swarm / mission board' in response.text
         assert 'Observe · Infer · Verify · Act' not in response.text
+        assert client.get("/api/research-discovery").json()["record_count"] == 0
         assert client.get("/static/operations.mjs").status_code == 200
         assert client.get("/api/operations").json()["database_present"] is False
         assert not path.exists()
