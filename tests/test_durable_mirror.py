@@ -24,6 +24,7 @@ from noema.durable_mirror import (
     _legacy_canonical_hash,
     _load_restore_bundle,
     export_critical_state,
+    mutable_schema_migration,
     restore_critical_state,
     sync_critical_state,
 )
@@ -446,6 +447,22 @@ def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) 
     assert json.loads(payload)["safety_note"] == "reviewed"
 
 
+def test_mutable_schema_migration_can_drop_a_captured_column(tmp_path: Path) -> None:
+    db = tmp_path / "mutable-drop-column.db"
+    _db(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE missions ADD COLUMN safety_note TEXT")
+        _ensure_mutable_capture(conn, "missions", 100)
+        with mutable_schema_migration(conn, "missions", rows_per_stream=100):
+            conn.execute("ALTER TABLE missions DROP COLUMN safety_note")
+        conn.execute("UPDATE missions SET status='completed' WHERE mission_id='m1'")
+        payload = conn.execute(
+            "SELECT payload_json FROM noema_mirror_change_events WHERE stream='missions' "
+            "ORDER BY event_id DESC LIMIT 1",
+        ).fetchone()[0]
+    assert "safety_note" not in json.loads(payload)
+
+
 def test_mutable_capture_supports_tables_without_timestamp_columns(tmp_path: Path) -> None:
     db = tmp_path / "noema.db"
     with sqlite3.connect(db) as conn:
@@ -559,6 +576,45 @@ async def test_export_writes_explicit_empty_streams_and_fails_closed(tmp_path: P
             transport=httpx.MockTransport(incomplete),
         )
     assert not (tmp_path / "should-not-exist.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_export_rejects_corrupt_record_hash_before_publishing_complete_bundle(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "corrupt-recovery.json"
+    manifest_streams = [{
+        "name": name, "record_count": 1 if name == "agent_runtime" else 0,
+        "restore_floor_id": 0,
+        "checkpoint": {"last_cursor": "1" if name == "agent_runtime" else "0", "metadata": {
+            "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+            "local_high_water": 1 if name == "agent_runtime" else 0,
+            "baseline_complete": True, "restore_floor_id": 0,
+            "capture_epoch": "epoch" if name in MUTABLE_STREAMS else None,
+        }},
+    } for name in DEFAULT_STREAMS]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "export_manifest":
+            return httpx.Response(200, json={
+                "complete": True, "through_cursor": 1, "streams": manifest_streams,
+            })
+        if body["action"] == "pull":
+            rows = [{
+                "id": 1, "stream": "agent_runtime", "record_key": "agent_runtime:1",
+                "source_rowid": 1, "operation": "upsert", "payload": {"state": "ok"},
+                "version_sha256": "0" * 64,
+            }] if body["streams"] == ["agent_runtime"] else []
+            return httpx.Response(200, json={"records": rows, "has_more": False, "next_id": 1 if rows else 0})
+        raise AssertionError(body)
+
+    with pytest.raises(RuntimeError, match="fail local restore validation"):
+        await export_critical_state(
+            target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            transport=httpx.MockTransport(handler),
+        )
+    assert not target.exists()
 
 
 @pytest.mark.asyncio

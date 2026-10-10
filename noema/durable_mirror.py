@@ -10,6 +10,8 @@ import re
 import sqlite3
 import tempfile
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -409,6 +411,29 @@ def _ensure_mutable_capture(conn: sqlite3.Connection, stream: str, limit: int) -
     return done, capture_epoch
 
 
+@contextmanager
+def mutable_schema_migration(
+    conn: sqlite3.Connection,
+    stream: str,
+    rows_per_stream: int = 1000,
+) -> Iterator[None]:
+    """Temporarily remove CDC triggers around mutable-table DDL, then reseed and reinstall them."""
+    if stream not in MUTABLE_STREAMS:
+        raise ValueError(f"{stream} is not a mutable mirror stream")
+    prefix = "noema_mirror_" + stream
+    with conn:
+        for suffix in ("_ai", "_ad", "_au"):
+            conn.execute(f"DROP TRIGGER IF EXISTS {_qident(prefix + suffix)}")
+        conn.execute(
+            "UPDATE noema_mirror_capture_state SET schema_signature='' WHERE stream=?",
+            (stream,),
+        )
+        try:
+            yield
+        finally:
+            _ensure_mutable_capture(conn, stream, rows_per_stream)
+
+
 def _mutable_events(
     conn: sqlite3.Connection, stream: str, cursor: int, limit: int, capture_epoch: str,
 ) -> list[dict[str, Any]]:
@@ -767,6 +792,10 @@ async def export_critical_state(
             "checkpoint_metadata": manifest.get("checkpoint_metadata", {}),
             "streams": result_streams,
         }
+        try:
+            _load_restore_bundle(bundle)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise RuntimeError("durable mirror export contains records that fail local restore validation") from exc
         serialized_bundle = json.dumps(
             bundle, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
         ).encode("utf-8")
@@ -1052,15 +1081,18 @@ def _decode_json_safe(value: Any) -> Any:
     return value
 
 
-def _load_restore_bundle(bundle_path: str | Path) -> dict[str, Any]:
-    path = Path(bundle_path)
-    size = path.stat().st_size
-    if size <= 0 or size > MAX_RESTORE_BUNDLE_BYTES:
-        raise ValueError("restore bundle is empty or exceeds the size limit")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("restore bundle is not valid UTF-8 JSON") from exc
+def _load_restore_bundle(bundle_path: str | Path | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(bundle_path, dict):
+        data = bundle_path
+    else:
+        path = Path(bundle_path)
+        size = path.stat().st_size
+        if size <= 0 or size > MAX_RESTORE_BUNDLE_BYTES:
+            raise ValueError("restore bundle is empty or exceeds the size limit")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("restore bundle is not valid UTF-8 JSON") from exc
     if not isinstance(data, dict):
         raise TypeError("restore bundle root must be an object")
     if data.get("format") != RESTORE_BUNDLE_FORMAT or data.get("format_version") != RESTORE_BUNDLE_VERSION:
