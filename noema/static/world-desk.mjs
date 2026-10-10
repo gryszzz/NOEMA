@@ -220,6 +220,27 @@ function persistedCriticReview(row = {}) {
   return Object.keys(review).length ? review : null;
 }
 
+function criticEvaluationForRun(snapshot = {}, run = {}) {
+  const missionId = run.mission_id == null ? null : String(run.mission_id);
+  if (missionId == null || run.id == null) return null;
+  const events = asRows(snapshot, 'mission_events').filter(event =>
+    String(event.mission_id ?? '') === missionId
+      && String(event.event_type ?? '').toLowerCase() === 'critic_evaluation');
+  const runIdentity = event => {
+    const payload = parseResult(event.payload);
+    const value = event.research_run_id ?? event.run_id ?? payload.research_run_id ?? payload.run_id;
+    return value == null ? null : String(value);
+  };
+  const tagged = events.filter(event => runIdentity(event) != null);
+  const matches = tagged.filter(event => runIdentity(event) === String(run.id));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1 || tagged.length > 0) return null;
+  const missionRuns = asRows(snapshot, 'research_runs').filter(row =>
+    String(row.mission_id ?? '') === missionId);
+  const legacyEvents = events.filter(event => runIdentity(event) == null);
+  return missionRuns.length === 1 && legacyEvents.length === 1 ? legacyEvents[0] : null;
+}
+
 export function deriveRuleRack(snapshot = {}, sources = {}) {
   if (sources.historicalReplay) {
     return ['Research runtime', 'Heavy workload slots', 'Model budget', 'Research evidence', 'Prediction execution', 'Treasury authority']
@@ -304,19 +325,8 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
     if (!review || review.result_accepted !== false) continue;
     let at = row.completed_at ?? row.created_at;
     if (Number.isFinite(cutoff)) {
-      const events = asRows(snapshot, 'mission_events');
-      const criticEvent = events
-        .filter(event => event.mission_id === row.mission_id
-          && String(event.event_type ?? '').toLowerCase() === 'critic_evaluation')
-        .sort((a, b) => (parseTime(a.created_at) ?? 0) - (parseTime(b.created_at) ?? 0))
-        .at(-1);
-      const completedHandoff = asRows(snapshot, 'handoffs')
-        .filter(handoff => handoff.mission_id === row.mission_id
-          && String(handoff.status ?? '').toLowerCase() === 'completed')
-        .sort((a, b) => (parseTime(a.updated_at ?? a.created_at) ?? 0)
-          - (parseTime(b.updated_at ?? b.created_at) ?? 0))
-        .at(-1);
-      at = criticEvent?.created_at ?? completedHandoff?.updated_at ?? completedHandoff?.created_at;
+      const criticEvent = criticEvaluationForRun(snapshot, row);
+      at = criticEvent?.created_at;
       if (!beforeCutoff(at)) continue;
     } else if (!beforeCutoff(at)) continue;
     items.push({ id: `critic:${row.id}`, at,
@@ -340,20 +350,14 @@ export function hasKillBoardCoverage(snapshot = {}, cutoff = Infinity) {
 
 function hasCriticReplayCoverage(snapshot = {}) {
   const sections = snapshot.sections ?? {};
-  if (!['mission_events', 'handoffs'].every(name =>
+  if (!['mission_events'].every(name =>
     ['recorded', 'empty'].includes(sections[name]?.status) && sections[name]?.has_more !== true
       && !asRows(snapshot, name).some(row => row.record_status === 'invalid'))) return false;
-  const events = asRows(snapshot, 'mission_events');
-  const handoffs = asRows(snapshot, 'handoffs');
   return asRows(snapshot, 'research_runs').every(row => {
     const review = persistedCriticReview(row);
     if (!review || review.result_accepted !== false) return true;
-    return events.some(event => event.mission_id === row.mission_id
-      && String(event.event_type ?? '').toLowerCase() === 'critic_evaluation'
-      && parseTime(event.created_at) != null)
-      || handoffs.some(handoff => handoff.mission_id === row.mission_id
-        && String(handoff.status ?? '').toLowerCase() === 'completed'
-        && parseTime(handoff.updated_at ?? handoff.created_at) != null);
+    const event = criticEvaluationForRun(snapshot, row);
+    return Boolean(event && parseTime(event.created_at) != null);
   });
 }
 
@@ -397,12 +401,16 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
       return { ...mission, objective: null, status, updated_at: updatedAt };
     });
     const filteredSections = Object.fromEntries(Object.entries(sections).map(([name, section]) => {
-      const timeField = name === 'missions' ? 'created_at'
-        : ['research_runs', 'sessions'].includes(name) ? null : 'created_at';
-      const rows = name === 'missions' ? missions : (section.rows ?? []).filter(row => {
-        if (timeField === null) return beforeCutoff(row.completed_at ?? row.created_at);
-        return beforeCutoff(row[timeField]);
-      });
+      const rows = name === 'missions' ? missions : (section.rows ?? [])
+        .filter(row => beforeCutoff(row.created_at))
+        .map(row => {
+          if (!['research_runs', 'sessions'].includes(name) || beforeCutoff(row.completed_at)) return row;
+          if (name === 'research_runs') return { ...row, status: 'running', completed_at: null,
+            elapsed_seconds: null, compute_cost_usd: null, result: null };
+          return { ...row, status: 'running', completed_at: null, input_tokens: null,
+            output_tokens: null, cached_tokens: null, estimated_model_cost_usd: null,
+            compute_cost_usd: null, result: null };
+        });
       return [name, { ...section, rows }];
     }));
     snapshot = { ...snapshot, as_of: new Date(cutoff).toISOString(), sections: filteredSections };

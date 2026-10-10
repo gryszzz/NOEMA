@@ -174,6 +174,41 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
   } }, 12, Date.parse(cutoff));
   assert.deepEqual(criticReplay('2026-10-06T12:03:00Z'), []);
   assert.equal(criticReplay('2026-10-06T12:06:00Z')[0].at, '2026-10-06T12:05:00Z');
+  const repeatedCritics = cutoff => deriveKillBoard({ sections: {
+    decisions: { status: 'empty', rows: [] }, missions: { status: 'empty', rows: [] },
+    research_runs: { status: 'recorded', rows: [
+      { id: 11, mission_id: 'reused', specialist: 'first', completed_at: '2026-10-06T12:00:00Z',
+        result: JSON.stringify({ critic_review: { result_accepted: false, reason: 'first rejection' } }) },
+      { id: 12, mission_id: 'reused', specialist: 'second', completed_at: '2026-10-06T12:10:00Z',
+        result: JSON.stringify({ critic_review: { result_accepted: false, reason: 'second rejection' } }) },
+    ] },
+    mission_events: { status: 'recorded', rows: [
+      { id: 1, mission_id: 'reused', event_type: 'critic_evaluation', created_at: '2026-10-06T12:05:00Z',
+        payload: { research_run_id: 11 } },
+      { id: 2, mission_id: 'reused', event_type: 'critic_evaluation', created_at: '2026-10-06T12:15:00Z',
+        payload: { research_run_id: 12 } },
+    ] },
+    handoffs: { status: 'empty', rows: [] },
+  } }, 12, Date.parse(cutoff));
+  assert.deepEqual(repeatedCritics('2026-10-06T12:07:00Z').map(item => [item.id, item.at]), [
+    ['critic:11', '2026-10-06T12:05:00Z'],
+  ]);
+  assert.deepEqual(repeatedCritics('2026-10-06T12:16:00Z').map(item => [item.id, item.at]), [
+    ['critic:12', '2026-10-06T12:15:00Z'], ['critic:11', '2026-10-06T12:05:00Z'],
+  ]);
+  const ambiguousLegacy = { sections: {
+    decisions: { status: 'empty', rows: [] }, missions: { status: 'empty', rows: [] },
+    research_runs: { status: 'recorded', rows: [
+      { id: 21, mission_id: 'legacy-reused', result: { critic_review: { result_accepted: false } } },
+      { id: 22, mission_id: 'legacy-reused', result: { critic_review: { result_accepted: false } } },
+    ] },
+    mission_events: { status: 'recorded', rows: [
+      { mission_id: 'legacy-reused', event_type: 'critic_evaluation', created_at: '2026-10-06T12:05:00Z' },
+      { mission_id: 'legacy-reused', event_type: 'critic_evaluation', created_at: '2026-10-06T12:15:00Z' },
+    ] }, handoffs: { status: 'empty', rows: [] },
+  } };
+  assert.equal(hasKillBoardCoverage(ambiguousLegacy, Date.parse('2026-10-06T12:16:00Z')), false);
+  assert.deepEqual(deriveKillBoard(ambiguousLegacy, 12, Date.parse('2026-10-06T12:16:00Z')), []);
   const unTimestampedReplay = deriveKillBoard({ sections: {
     research_runs: { rows: [{ id: 8, mission_id: 'no-event', completed_at: '2026-10-06T12:00:00Z',
       result: JSON.stringify({ critic_review: { result_accepted: false } }) }] },
@@ -388,4 +423,24 @@ test('Shift Report assigns completed investigations to their completion window',
   assert.equal(report.counts.investigations, 1);
   assert.deepEqual(report.contributors, ['kalshi-research']);
   assert.equal(report.compute_cost_usd, 0.3);
+});
+
+test('Shift Report replays runs and sessions that were active at the selected cutoff', () => {
+  const report = deriveShiftReport({ as_of: '2026-10-06T12:10:00Z', sections: {
+    missions: { status: 'empty', rows: [] },
+    research_runs: { status: 'recorded', rows: [{ id: 31, specialist: 'paper-research',
+      created_at: '2026-10-06T12:01:00Z', completed_at: '2026-10-06T12:09:00Z',
+      status: 'completed', elapsed_seconds: 8, compute_cost_usd: 0.08,
+      result: { observations: 4 } }] },
+    sessions: { status: 'recorded', rows: [{ session_id: 'session-31',
+      created_at: '2026-10-06T12:02:00Z', completed_at: '2026-10-06T12:08:00Z',
+      status: 'completed', input_tokens: 100, output_tokens: 25,
+      estimated_model_cost_usd: 0.02, compute_cost_usd: 0.01 }] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+    mission_events: { status: 'empty', rows: [] },
+  } }, 24, {}, Date.parse('2026-10-06T12:05:00Z'));
+  assert.equal(report.counts.investigations, 1);
+  assert.deepEqual(report.contributors, ['paper-research']);
+  assert.equal(report.compute_cost_usd, null);
+  assert.equal(report.compute_cost_unknown, true);
 });

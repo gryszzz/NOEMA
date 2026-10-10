@@ -136,6 +136,13 @@ async def test_real_subprocess_openclaw_handoff_is_critic_checked_and_learned(tm
                           'handoff_requested', 'handoff_completed', 'critic_evaluation',
                           'handoff_requested', 'handoff_accepted', 'handoff_running',
                           'openclaw_lesson_persisted', 'handoff_completed']
+        critic_payload = json.loads(conn.execute(
+            "SELECT payload_json FROM mission_events WHERE mission_id=? AND event_type='critic_evaluation'",
+            (mission[0],),
+        ).fetchone()[0])
+        assert critic_payload['research_run_id'] == conn.execute(
+            'SELECT id FROM autonomous_research_runs'
+        ).fetchone()[0]
         assert conn.execute('SELECT mission_id FROM research_lessons').fetchone()[0] == mission[0]
     updated_plan = review_research_ecosystem(path)
     before_share = next(item.attention_fraction for item in plan.allocations
