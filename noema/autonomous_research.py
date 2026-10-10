@@ -792,7 +792,7 @@ async def run_research_work(
                     event_type="critic_evaluation",
                     status=mission_status,
                     detail=critic_result["conclusion"],
-                    payload=critic_result,
+                    payload={**critic_result, "research_run_id": run_id},
                 )
                 with store.conn:
                     store.conn.execute(

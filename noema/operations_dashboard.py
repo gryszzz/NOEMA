@@ -620,6 +620,56 @@ def _object(value: str) -> dict:
     return parsed
 
 
+def _bounded_sidecar_research_result(payload: dict[str, Any], limit: int = 4000) -> str:
+    """Keep sidecar research JSON valid while retaining bounded critic evidence."""
+    encoded = json.dumps(payload, sort_keys=True)
+    if len(encoded) <= limit:
+        return encoded
+    compact: dict[str, Any] = {}
+    for key in ("observations", "observation_count", "valid_markets"):
+        value = payload.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            compact[key] = value
+    review = payload.get("critic_review")
+    compact_review: dict[str, Any] = {}
+    if isinstance(review, dict):
+        for key in ("verdict", "result_accepted", "accepted", "reason", "status", "conclusion"):
+            value = review.get(key)
+            if isinstance(value, str):
+                compact_review[key] = value[:500]
+            elif key in review and (isinstance(value, (bool, int, float)) or value is None):
+                compact_review[key] = value
+        issues = review.get("issues")
+        if isinstance(issues, list):
+            compact_review["issues"] = [item[:500] for item in issues[:10] if isinstance(item, str)]
+    if compact_review:
+        compact["critic_review"] = compact_review
+    encoded = json.dumps(compact, sort_keys=True)
+    while len(encoded) > limit:
+        issues = compact_review.get("issues")
+        if isinstance(issues, list) and issues:
+            issues.pop()
+        else:
+            long_text = next((key for key in ("conclusion", "reason")
+                              if isinstance(compact_review.get(key), str)
+                              and compact_review[key]), None)
+            if long_text:
+                compact_review[long_text] = compact_review[long_text][:len(compact_review[long_text]) // 2]
+            elif compact_review:
+                optional = next((key for key in ("status", "reason", "conclusion", "accepted")
+                                 if key in compact_review), None)
+                if optional:
+                    compact_review.pop(optional)
+                else:
+                    break
+            elif compact:
+                compact.pop(next(iter(compact)))
+            else:
+                break
+        encoded = json.dumps(compact, sort_keys=True)
+    return encoded
+
+
 def build_operations(
     path: str, *, additional_paths: tuple[str, ...] = (), now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -807,19 +857,59 @@ def build_operations(
                             if name == "research_runs" and len(encoded_result) > 4000:
                                 compact = {
                                     key: result_payload[key]
-                                    for key in ("observations", "observation_count", "valid_markets",
-                                                "critic_review", "verdict", "accepted")
-                                    if key in result_payload
+                                    for key in ("observations", "observation_count", "valid_markets")
+                                    if isinstance(result_payload.get(key), int)
+                                    and not isinstance(result_payload.get(key), bool)
                                 }
-                                review = compact.get("critic_review")
+                                for key in ("verdict",):
+                                    if isinstance(result_payload.get(key), str):
+                                        compact[key] = result_payload[key][:200]
+                                for key in ("accepted",):
+                                    if isinstance(result_payload.get(key), bool):
+                                        compact[key] = result_payload[key]
+                                review = result_payload.get("critic_review")
                                 if isinstance(review, dict):
-                                    compact["critic_review"] = {
-                                        key: (value[:500] if isinstance(value, str) else value)
-                                        for key, value in review.items()
-                                        if key in {"verdict", "result_accepted", "accepted", "reason", "status"}
-                                    }
+                                    compact_review = {}
+                                    for key in ("verdict", "result_accepted", "accepted", "reason",
+                                                "status", "conclusion", "issues"):
+                                        value = review.get(key)
+                                        if isinstance(value, str):
+                                            compact_review[key] = value[:500]
+                                        elif key == "issues" and isinstance(value, list):
+                                            compact_review[key] = [
+                                                item[:500] for item in value[:10] if isinstance(item, str)
+                                            ]
+                                        elif key in review and (
+                                            isinstance(value, (bool, int, float)) or value is None
+                                        ):
+                                            compact_review[key] = value
+                                    compact["critic_review"] = compact_review
                                 encoded_result = json.dumps(compact, sort_keys=True)
-                            record["result"] = encoded_result[:4000]
+                                compact_review = compact.get("critic_review", {})
+                                while len(encoded_result) > 4000:
+                                    issues = compact_review.get("issues")
+                                    if isinstance(issues, list) and issues:
+                                        issues.pop()
+                                    else:
+                                        long_text = next((key for key in ("conclusion", "reason")
+                                                          if isinstance(compact_review.get(key), str)
+                                                          and compact_review[key]), None)
+                                        if long_text:
+                                            compact_review[long_text] = compact_review[long_text][:len(compact_review[long_text]) // 2]
+                                        elif "valid_markets" in compact:
+                                            compact.pop("valid_markets")
+                                        elif len(compact_review) > 2:
+                                            optional = next((key for key in ("status", "reason", "conclusion", "accepted")
+                                                             if key in compact_review), None)
+                                            if optional is None:
+                                                compact_review.pop(next(reversed(compact_review)))
+                                            else:
+                                                compact_review.pop(optional)
+                                        else:
+                                            compact_review["verdict"] = str(compact_review.get("verdict", "REJECTED"))[:80]
+                                            compact = {"critic_review": compact_review}
+                                    encoded_result = json.dumps(compact, sort_keys=True)
+                            record["result"] = encoded_result
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
                     elif name == "experiments":
@@ -1034,8 +1124,10 @@ def _append_additional_console_records(
                                     break
                             review = payload.get("critic_review")
                             if isinstance(review, dict):
-                                record["critic_review"] = review
-                            record["result"] = json.dumps(payload, sort_keys=True)[:4000]
+                                record["critic_review"] = json.loads(
+                                    _bounded_sidecar_research_result({"critic_review": review})
+                                ).get("critic_review", {})
+                            record["result"] = _bounded_sidecar_research_result(payload)
                         except (ValueError, TypeError):
                             record["record_status"] = "invalid"
                         identity = research_run_identity(record)
