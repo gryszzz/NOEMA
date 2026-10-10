@@ -52,6 +52,7 @@ _TIMESTAMP_FIELDS = (
 
 RESTORE_BUNDLE_FORMAT = "noema-durable-mirror-export"
 RESTORE_BUNDLE_VERSION = 2
+STREAMING_RESTORE_BUNDLE_VERSION = 3
 MAX_RESTORE_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_RESTORE_RECORDS = 250_000
 MAX_MIRROR_INGEST_BATCH_BYTES = 4_000_000
@@ -226,6 +227,42 @@ def _stream_rows(
             "source_rowid": rowid,
         })
     return result
+
+
+def _restore_record_from_mirror(row: dict[str, Any], stream: str) -> dict[str, Any]:
+    """Normalize one mirror row for either recovery bundle format."""
+    mirror_id = int(row.get("id") or 0)
+    record_key = row.get("record_key")
+    source_rowid = row.get("source_rowid")
+    source_event_id = row.get("source_event_id")
+    source_schema_version = row.get("source_schema_version")
+    payload = row.get("payload")
+    payload_json = row.get("payload_json")
+    if isinstance(payload_json, str):
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"durable mirror returned invalid payload JSON for {stream}") from exc
+    legacy_identity = False
+    if source_rowid is None and isinstance(record_key, str):
+        prefix = f"{stream}:"
+        suffix = record_key[len(prefix):] if record_key.startswith(prefix) else ""
+        if suffix.isascii() and suffix.isdecimal() and int(suffix) > 0:
+            source_rowid = int(suffix)
+            legacy_identity = True
+    if stream in MUTABLE_STREAMS and source_event_id is None and legacy_identity:
+        source_event_id = f"legacy:{mirror_id}"
+        source_schema_version = source_schema_version or "legacy-unversioned"
+    record = {
+        "mirror_id": mirror_id, "stream": stream, "record_key": record_key,
+        "version_sha256": row.get("version_sha256"), "occurred_at": row.get("occurred_at"),
+        "operation": row.get("operation") or "upsert", "source_rowid": source_rowid,
+        "source_event_id": source_event_id, "payload": payload,
+        "source_commit": row.get("source_commit"), "source_host": row.get("source_host"),
+        "source_schema_version": source_schema_version,
+    }
+    record["projection_sha256"] = _restore_projection_hash(record)
+    return record
 
 
 def _primary_key_columns(conn: sqlite3.Connection, stream: str) -> tuple[str, ...]:
@@ -667,162 +704,146 @@ async def export_critical_state(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Download one watermark-pinned, complete recovery bundle atomically."""
+    """Write a complete disk-backed recovery bundle without a lifetime row cap."""
     config = config or DurableMirrorConfig.from_env()
     if not config.ready:
         raise RuntimeError("durable mirror export is not configured")
-    async with httpx.AsyncClient(timeout=config.timeout_seconds, transport=transport) as client:
-        manifest = await _post(client, config, {"action": "export_manifest", "streams": list(DEFAULT_STREAMS)})
-        if manifest.get("complete") is not True or manifest.get("streams") is None:
-            raise RuntimeError("durable mirror refused a complete export; checkpoints or streams are incomplete")
-        try:
-            watermark = int(manifest.get("through_cursor"))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("durable mirror export manifest has no valid watermark") from exc
-        declared = {item.get("name"): item for item in manifest["streams"] if isinstance(item, dict)}
-        if set(declared) != set(DEFAULT_STREAMS):
-            raise RuntimeError("durable mirror export manifest omitted critical streams")
-        expected_counts: dict[str, int] = {}
-        aggregate_expected = 0
-        for stream in DEFAULT_STREAMS:
-            try:
-                count = int(declared[stream]["record_count"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise RuntimeError(f"durable mirror manifest has no count for {stream}") from exc
-            if count < 0:
-                raise RuntimeError(f"durable mirror manifest has an invalid count for {stream}")
-            aggregate_expected += count
-            if aggregate_expected > MAX_RESTORE_RECORDS:
-                raise RuntimeError("durable mirror export exceeds the local aggregate record limit")
-            expected_counts[stream] = count
-        result_streams = []
-        for stream in DEFAULT_STREAMS:
-            meta = declared[stream]
-            expected_count = expected_counts[stream]
-            records: list[dict[str, Any]] = []
-            since_id = 0
-            while True:
-                page = await _post(client, config, {
-                    "action": "pull", "streams": [stream], "since_id": since_id,
-                    "through_id": watermark, "limit": min(1000, max(50, config.rows_per_stream * 5)),
-                })
-                rows = page.get("records")
-                if not isinstance(rows, list):
-                    raise TypeError(f"durable mirror returned an invalid page for {stream}")
-                for row in rows:
-                    if not isinstance(row, dict) or row.get("stream") != stream:
-                        raise RuntimeError(f"durable mirror returned a malformed record for {stream}")
-                    mirror_id = int(row.get("id") or 0)
-                    if mirror_id <= since_id or mirror_id > watermark:
-                        raise RuntimeError(f"durable mirror returned unordered/out-of-watermark records for {stream}")
-                    since_id = mirror_id
-                    record_key = row.get("record_key")
-                    source_rowid = row.get("source_rowid")
-                    source_event_id = row.get("source_event_id")
-                    source_schema_version = row.get("source_schema_version")
-                    payload = row.get("payload")
-                    # The Edge Function's JSON parse/stringify hop can collapse
-                    # legacy JSONB numerics such as 0.0 to 0. Pull the original
-                    # JSONB text alongside the object so legacy hashes retain
-                    # the exact numeric representation stored by PostgreSQL.
-                    payload_json = row.get("payload_json")
-                    if isinstance(payload_json, str):
-                        try:
-                            payload = json.loads(payload_json)
-                        except json.JSONDecodeError as exc:
-                            raise RuntimeError(f"durable mirror returned invalid payload JSON for {stream}") from exc
-                    legacy_identity = False
-                    if source_rowid is None and isinstance(record_key, str):
-                        prefix = f"{stream}:"
-                        suffix = record_key[len(prefix):] if record_key.startswith(prefix) else ""
-                        if suffix.isascii() and suffix.isdecimal() and int(suffix) > 0:
-                            source_rowid = int(suffix)
-                            legacy_identity = True
-                    if stream in MUTABLE_STREAMS and source_event_id is None and legacy_identity:
-                        source_event_id = f"legacy:{mirror_id}"
-                        source_schema_version = source_schema_version or "legacy-unversioned"
-                    record = {
-                        "mirror_id": mirror_id, "stream": stream, "record_key": record_key,
-                        "version_sha256": row.get("version_sha256"), "occurred_at": row.get("occurred_at"),
-                        "operation": row.get("operation") or "upsert", "source_rowid": source_rowid,
-                        "source_event_id": source_event_id,
-                        "payload": payload, "source_commit": row.get("source_commit"),
-                        "source_host": row.get("source_host"),
-                        "source_schema_version": source_schema_version,
-                    }
-                    record["projection_sha256"] = _restore_projection_hash(record)
-                    records.append(record)
-                if page.get("has_more") is not True:
-                    break
-                if not rows:
-                    raise RuntimeError(f"durable mirror returned an incomplete empty page for {stream}")
-            if len(records) != expected_count:
-                raise RuntimeError(f"durable mirror export is incomplete for {stream}")
-            checkpoint = meta.get("checkpoint")
-            if not isinstance(checkpoint, dict):
-                raise TypeError(f"durable mirror omitted checkpoint metadata for {stream}")
-            checkpoint_metadata = checkpoint.get("metadata")
-            if not isinstance(checkpoint_metadata, dict) or checkpoint_metadata.get("baseline_complete") is not True:
-                raise RuntimeError(f"durable mirror checkpoint is incomplete for {stream}")
-            expected_kind = "change_event_id" if stream in MUTABLE_STREAMS else "rowid"
-            if checkpoint_metadata.get("cursor_kind") != expected_kind:
-                raise RuntimeError(f"durable mirror checkpoint cursor type is invalid for {stream}")
-            try:
-                last_cursor = int(checkpoint.get("last_cursor") or 0)
-                local_high_water = int(checkpoint_metadata["local_high_water"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise RuntimeError(f"durable mirror checkpoint is invalid for {stream}") from exc
-            if last_cursor != local_high_water:
-                raise RuntimeError(f"durable mirror checkpoint does not match local state for {stream}")
-            if stream in MUTABLE_STREAMS:
-                try:
-                    int(checkpoint_metadata["restore_floor_id"])
-                    if not checkpoint_metadata.get("capture_epoch"):
-                        raise ValueError("missing capture epoch")
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise RuntimeError(f"mutable stream checkpoint has no restore floor for {stream}") from exc
-            result_streams.append({
-                "name": stream, "from_cursor": 0, "through_cursor": watermark,
-                "complete": True, "record_count": expected_count, "checkpoint": checkpoint,
-                "restore_floor_id": int(meta.get("restore_floor_id") or 0), "records": records,
-            })
-        bundle = {
-            "format": RESTORE_BUNDLE_FORMAT, "format_version": RESTORE_BUNDLE_VERSION,
-            "complete": True, "through_cursor": watermark,
-            "checkpoint_metadata": manifest.get("checkpoint_metadata", {}),
-            "streams": result_streams,
-        }
-        try:
-            _load_restore_bundle(bundle)
-        except (TypeError, ValueError, KeyError) as exc:
-            raise RuntimeError("durable mirror export contains records that fail local restore validation") from exc
-        serialized_bundle = json.dumps(
-            bundle, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
-        ).encode("utf-8")
-        if len(serialized_bundle) > MAX_RESTORE_BUNDLE_BYTES:
-            raise RuntimeError("durable mirror export exceeds the local bundle byte limit")
     target = Path(output_path).expanduser().absolute()
     if target.exists():
         raise FileExistsError("export target already exists; choose a new recovery bundle path")
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    temp = Path(temp_name)
+    conn = sqlite3.connect(temp)
     try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(serialized_bundle.decode("utf-8"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temp_name, target)
-        Path(temp_name).unlink()
-    except Exception:
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("CREATE TABLE bundle_manifest (manifest_json TEXT NOT NULL)")
+        conn.execute("""CREATE TABLE bundle_records (
+            stream TEXT NOT NULL, mirror_id INTEGER NOT NULL, record_json TEXT NOT NULL,
+            PRIMARY KEY(stream, mirror_id)
+        )""")
+        async with httpx.AsyncClient(timeout=config.timeout_seconds, transport=transport) as client:
+            manifest = await _post(client, config, {
+                "action": "export_manifest", "streams": list(DEFAULT_STREAMS),
+            })
+            if manifest.get("complete") is not True or manifest.get("streams") is None:
+                raise RuntimeError("durable mirror refused a complete export; checkpoints or streams are incomplete")
+            try:
+                watermark = int(manifest.get("through_cursor"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("durable mirror export manifest has no valid watermark") from exc
+            declared = {item.get("name"): item for item in manifest["streams"] if isinstance(item, dict)}
+            if set(declared) != set(DEFAULT_STREAMS):
+                raise RuntimeError("durable mirror export manifest omitted critical streams")
+            stream_metadata: list[dict[str, Any]] = []
+            total_records = 0
+            for stream in DEFAULT_STREAMS:
+                meta = declared[stream]
+                try:
+                    expected_count = int(meta["record_count"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(f"durable mirror manifest has no count for {stream}") from exc
+                if expected_count < 0:
+                    raise RuntimeError(f"durable mirror manifest has an invalid count for {stream}")
+                checkpoint = meta.get("checkpoint")
+                if not isinstance(checkpoint, dict):
+                    raise TypeError(f"durable mirror omitted checkpoint metadata for {stream}")
+                checkpoint_metadata = checkpoint.get("metadata")
+                if not isinstance(checkpoint_metadata, dict) or checkpoint_metadata.get("baseline_complete") is not True:
+                    raise RuntimeError(f"durable mirror checkpoint is incomplete for {stream}")
+                expected_kind = "change_event_id" if stream in MUTABLE_STREAMS else "rowid"
+                if checkpoint_metadata.get("cursor_kind") != expected_kind:
+                    raise RuntimeError(f"durable mirror checkpoint cursor type is invalid for {stream}")
+                try:
+                    last_cursor = int(checkpoint.get("last_cursor") or 0)
+                    local_high_water = int(checkpoint_metadata["local_high_water"])
+                    floor = int(meta.get("restore_floor_id") or 0)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(f"durable mirror checkpoint is invalid for {stream}") from exc
+                if last_cursor != local_high_water:
+                    raise RuntimeError(f"durable mirror checkpoint does not match local state for {stream}")
+                if stream in MUTABLE_STREAMS:
+                    try:
+                        checkpoint_floor = int(checkpoint_metadata["restore_floor_id"])
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise RuntimeError(f"mutable stream checkpoint has no restore floor for {stream}") from exc
+                    if checkpoint_floor != floor or not checkpoint_metadata.get("capture_epoch"):
+                        raise RuntimeError(f"mutable stream restore floor is inconsistent for {stream}")
+                elif floor != 0:
+                    raise RuntimeError(f"append-only stream {stream} cannot declare a mutable restore floor")
+                since_id = 0
+                seen = 0
+                previous = 0
+                while True:
+                    page = await _post(client, config, {
+                        "action": "pull", "streams": [stream], "since_id": since_id,
+                        "through_id": watermark, "limit": min(1000, max(50, config.rows_per_stream * 5)),
+                    })
+                    rows = page.get("records")
+                    if not isinstance(rows, list):
+                        raise TypeError(f"durable mirror returned an invalid page for {stream}")
+                    for row in rows:
+                        if not isinstance(row, dict) or row.get("stream") != stream:
+                            raise RuntimeError(f"durable mirror returned a malformed record for {stream}")
+                        record = _restore_record_from_mirror(row, stream)
+                        mirror_id = int(record["mirror_id"])
+                        if mirror_id <= since_id or mirror_id > watermark:
+                            raise RuntimeError(f"durable mirror returned unordered/out-of-watermark records for {stream}")
+                        try:
+                            previous = _validate_restore_record(stream, record, previous, watermark)
+                        except (TypeError, ValueError) as exc:
+                            raise RuntimeError(
+                                "durable mirror export contains records that fail local restore validation"
+                            ) from exc
+                        conn.execute("INSERT INTO bundle_records VALUES(?,?,?)", (
+                            stream, mirror_id,
+                            json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+                        ))
+                        since_id = mirror_id
+                        seen += 1
+                    if page.get("has_more") is not True:
+                        break
+                    if not rows:
+                        raise RuntimeError(f"durable mirror returned an incomplete empty page for {stream}")
+                if seen != expected_count:
+                    raise RuntimeError(f"durable mirror export is incomplete for {stream}")
+                total_records += seen
+                stream_metadata.append({
+                    "name": stream, "from_cursor": 0, "through_cursor": watermark,
+                    "complete": True, "record_count": seen, "checkpoint": checkpoint,
+                    "restore_floor_id": floor,
+                })
+                conn.commit()
+        bundle_header = {
+            "format": RESTORE_BUNDLE_FORMAT,
+            "format_version": STREAMING_RESTORE_BUNDLE_VERSION,
+            "complete": True, "through_cursor": watermark,
+            "checkpoint_metadata": manifest.get("checkpoint_metadata", {}),
+            "streams": stream_metadata,
+        }
+        conn.execute("INSERT INTO bundle_manifest VALUES(?)", (
+            json.dumps(bundle_header, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+        ))
+        conn.commit()
+        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("durable mirror export bundle failed its SQLite integrity check")
+        conn.close()
+        os.chmod(temp, 0o600)
+        fd = os.open(temp, os.O_RDONLY)
         try:
+            os.fsync(fd)
+        finally:
             os.close(fd)
-        except OSError:
-            pass
-        Path(temp_name).unlink(missing_ok=True)
+        os.link(temp, target)
+        temp.unlink()
+        return {"status": "exported_complete", "output": str(target), "through_cursor": watermark,
+                "streams": len(stream_metadata), "records": total_records,
+                "format_version": STREAMING_RESTORE_BUNDLE_VERSION}
+    except Exception:
+        conn.close()
+        temp.unlink(missing_ok=True)
         raise
-    return {"status": "exported_complete", "output": str(target), "through_cursor": watermark,
-            "streams": len(result_streams), "records": sum(item["record_count"] for item in result_streams)}
 
 
 async def sync_critical_state(
@@ -1081,21 +1102,114 @@ def _decode_json_safe(value: Any) -> Any:
     return value
 
 
+def _validate_restore_record(
+    name: str, record: Any, previous: int, through: int,
+) -> int:
+    if not isinstance(record, dict) or record.get("stream") != name:
+        raise ValueError(f"restore stream {name} contains a malformed record")
+    key = record.get("record_key")
+    payload = record.get("payload")
+    digest = record.get("version_sha256")
+    if not isinstance(key, str) or not key.startswith(name + ":") or not isinstance(payload, dict):
+        raise TypeError(f"restore stream {name} contains a malformed record")
+    try:
+        cursor = int(record.get("mirror_id"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"restore stream {name} has an invalid mirror cursor") from exc
+    if cursor <= previous or cursor > through:
+        raise ValueError(f"restore stream {name} cursors are unordered or out of range")
+    expected_hash = (_legacy_canonical_hash(payload)
+                     if record.get("source_schema_version") == "legacy-unversioned"
+                     else _canonical_hash(payload))
+    if not isinstance(digest, str) or expected_hash != digest:
+        raise ValueError(f"restore record hash mismatch in {name}")
+    projection_digest = record.get("projection_sha256")
+    if not isinstance(projection_digest, str):
+        raise TypeError(f"restore record has no projection integrity digest in {name}")
+    if projection_digest != _restore_projection_hash(record):
+        raise ValueError(f"restore projection metadata hash mismatch in {name}")
+    if record.get("operation", "upsert") not in {"upsert", "tombstone"}:
+        raise ValueError(f"restore stream {name} has an invalid operation")
+    rowid = record.get("source_rowid")
+    if rowid is not None and (not isinstance(rowid, int) or rowid < 0):
+        raise ValueError(f"restore stream {name} has an invalid source rowid")
+    if rowid is None and record.get("operation", "upsert") == "upsert":
+        raise ValueError(f"restore stream {name} is missing its source rowid")
+    source_event_id = record.get("source_event_id")
+    if name in MUTABLE_STREAMS and (
+        not isinstance(source_event_id, str) or not 1 <= len(source_event_id) <= 160
+    ):
+        raise ValueError(f"restore stream {name} has an invalid source event identity")
+    return cursor
+
+
+def _iter_bundle_records(path: str | Path, stream: str) -> Iterator[dict[str, Any]]:
+    conn = sqlite3.connect(f"file:{Path(path).absolute()}?mode=ro", uri=True)
+    try:
+        cursor = conn.execute(
+            "SELECT record_json FROM bundle_records WHERE stream=? ORDER BY mirror_id", (stream,),
+        )
+        for (record_json,) in cursor:
+            record = json.loads(record_json)
+            if not isinstance(record, dict):
+                raise TypeError(f"streaming restore record in {stream} is malformed")
+            yield record
+    finally:
+        conn.close()
+
+
 def _load_restore_bundle(bundle_path: str | Path | dict[str, Any]) -> dict[str, Any]:
+    streaming_path: str | None = None
     if isinstance(bundle_path, dict):
         data = bundle_path
     else:
         path = Path(bundle_path)
         size = path.stat().st_size
-        if size <= 0 or size > MAX_RESTORE_BUNDLE_BYTES:
-            raise ValueError("restore bundle is empty or exceeds the size limit")
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("restore bundle is not valid UTF-8 JSON") from exc
+        if size <= 0:
+            raise ValueError("restore bundle is empty")
+        with path.open("rb") as handle:
+            signature = handle.read(16)
+        if signature == b"SQLite format 3\x00":
+            conn = sqlite3.connect(f"file:{path.absolute()}?mode=ro", uri=True)
+            try:
+                if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("streaming restore bundle failed its SQLite integrity check")
+                row = conn.execute("SELECT manifest_json FROM bundle_manifest").fetchone()
+                if row is None:
+                    raise ValueError("streaming restore bundle has no manifest")
+                data = json.loads(row[0])
+                if not isinstance(data, dict) or data.get("format_version") != STREAMING_RESTORE_BUNDLE_VERSION:
+                    raise ValueError("unsupported streaming restore bundle format or version")
+                streams = data.get("streams")
+                if not isinstance(streams, list):
+                    raise TypeError("streaming restore bundle has no streams")
+                for item in streams:
+                    if not isinstance(item, dict):
+                        raise TypeError("restore stream entry must be an object")
+                    name = item.get("name")
+                    actual = conn.execute(
+                        "SELECT count(*) FROM bundle_records WHERE stream=?", (name,),
+                    ).fetchone()[0]
+                    if actual != item.get("record_count"):
+                        raise ValueError(f"restore stream {name} record count does not match its manifest")
+                    item["_streaming_records"] = True
+                streaming_path = str(path.absolute())
+            except (sqlite3.Error, json.JSONDecodeError) as exc:
+                raise ValueError("streaming restore bundle is malformed") from exc
+            finally:
+                conn.close()
+        else:
+            if size > MAX_RESTORE_BUNDLE_BYTES:
+                raise ValueError("restore bundle is empty or exceeds the size limit")
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("restore bundle is not valid UTF-8 JSON") from exc
     if not isinstance(data, dict):
         raise TypeError("restore bundle root must be an object")
-    if data.get("format") != RESTORE_BUNDLE_FORMAT or data.get("format_version") != RESTORE_BUNDLE_VERSION:
+    if data.get("format") != RESTORE_BUNDLE_FORMAT or data.get("format_version") not in {
+        RESTORE_BUNDLE_VERSION, STREAMING_RESTORE_BUNDLE_VERSION,
+    }:
         raise ValueError("unsupported restore bundle format or version")
     if data.get("complete") is not True:
         raise ValueError("restore requires a complete, non-paginated export")
@@ -1154,57 +1268,31 @@ def _load_restore_bundle(bundle_path: str | Path | dict[str, Any]) -> dict[str, 
                 raise ValueError(f"mutable stream {name} restore floor is inconsistent")
         elif floor != 0:
             raise ValueError(f"append-only stream {name} cannot declare a mutable restore floor")
-        records = item.get("records")
-        if not isinstance(records, list):
-            raise TypeError(f"restore stream {name} records must be an array")
-        if int(item.get("record_count", -1)) != len(records):
-            raise ValueError(f"restore stream {name} record count does not match its manifest")
         previous = 0
+        if item.get("_streaming_records"):
+            if streaming_path is None:
+                raise ValueError("streaming restore records require a bundle path")
+            records = _iter_bundle_records(streaming_path, name)
+            expected_count = int(item.get("record_count", -1))
+            if expected_count < 0:
+                raise ValueError(f"restore stream {name} has an invalid record count")
+        else:
+            records = item.get("records")
+            if not isinstance(records, list):
+                raise TypeError(f"restore stream {name} records must be an array")
+            expected_count = len(records)
+            if int(item.get("record_count", -1)) != expected_count:
+                raise ValueError(f"restore stream {name} record count does not match its manifest")
         for record in records:
-            if not isinstance(record, dict) or record.get("stream") != name:
-                raise ValueError(f"restore stream {name} contains a malformed record")
-            key = record.get("record_key")
-            payload = record.get("payload")
-            digest = record.get("version_sha256")
-            if not isinstance(key, str) or not key.startswith(name + ":") or not isinstance(payload, dict):
-                raise TypeError(f"restore stream {name} contains a malformed record")
-            try:
-                cursor = int(record.get("mirror_id"))
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"restore stream {name} has an invalid mirror cursor") from exc
-            if cursor <= previous or cursor > through:
-                raise ValueError(f"restore stream {name} cursors are unordered or out of range")
-            previous = cursor
-            expected_hash = (_legacy_canonical_hash(payload)
-                             if record.get("source_schema_version") == "legacy-unversioned"
-                             else _canonical_hash(payload))
-            if not isinstance(digest, str) or expected_hash != digest:
-                raise ValueError(f"restore record hash mismatch in {name}")
-            projection_digest = record.get("projection_sha256")
-            if (record.get("source_schema_version") == "legacy-unversioned"
-                    and not isinstance(projection_digest, str)):
-                raise ValueError(f"legacy restore record has no projection integrity digest in {name}")
-            if (projection_digest is not None
-                    and projection_digest != _restore_projection_hash(record)):
-                raise ValueError(f"restore projection metadata hash mismatch in {name}")
-            if record.get("operation", "upsert") not in {"upsert", "tombstone"}:
-                raise ValueError(f"restore stream {name} has an invalid operation")
-            rowid = record.get("source_rowid")
-            if rowid is not None and (not isinstance(rowid, int) or rowid < 0):
-                raise ValueError(f"restore stream {name} has an invalid source rowid")
-            if rowid is None and record.get("operation", "upsert") == "upsert":
-                raise ValueError(f"restore stream {name} is missing its source rowid")
-            source_event_id = record.get("source_event_id")
-            if name in MUTABLE_STREAMS and (
-                not isinstance(source_event_id, str) or not 1 <= len(source_event_id) <= 160
-            ):
-                raise ValueError(f"restore stream {name} has an invalid source event identity")
+            previous = _validate_restore_record(name, record, previous, through)
             total += 1
-            if total > MAX_RESTORE_RECORDS:
+            if not item.get("_streaming_records") and total > MAX_RESTORE_RECORDS:
                 raise ValueError("restore bundle exceeds the record limit")
     if seen != set(DEFAULT_STREAMS):
         missing = sorted(set(DEFAULT_STREAMS) - seen)
         raise ValueError("restore bundle omits critical streams: " + ", ".join(missing))
+    if streaming_path is not None:
+        data["_streaming_bundle_path"] = streaming_path
     return data
 
 
@@ -1240,6 +1328,11 @@ def restore_critical_state(
                 source_event_id TEXT, occurred_at TEXT, source_commit TEXT, source_host TEXT,
                 source_schema_version TEXT, payload_json TEXT NOT NULL, PRIMARY KEY(stream,mirror_id)
             )""")
+            conn.execute("""CREATE TABLE restore_latest (
+                stream TEXT NOT NULL, record_key TEXT NOT NULL, mirror_id INTEGER NOT NULL,
+                record_json TEXT NOT NULL, PRIMARY KEY(stream,record_key)
+            )""")
+            streaming_path = bundle.get("_streaming_bundle_path")
             for stream in bundle["streams"]:
                 name = stream["name"]
                 if name not in known_tables:
@@ -1249,8 +1342,9 @@ def restore_critical_state(
                 columns = {str(row["name"]) for row in columns_info}
                 restored = 0
                 floor = int(stream["restore_floor_id"])
-                latest: dict[str, dict[str, Any]] = {}
-                for record in stream["records"]:
+                records = (_iter_bundle_records(streaming_path, name)
+                           if streaming_path else iter(stream["records"]))
+                for record in records:
                     _validate_restore_projection_identity(conn, name, record)
                     payload = record["payload"]
                     conn.execute(
@@ -1262,8 +1356,17 @@ def restore_critical_state(
                          json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)),
                     )
                     if int(record["mirror_id"]) > floor:
-                        latest[str(record["record_key"])] = record
-                for record in latest.values():
+                        conn.execute("""INSERT INTO restore_latest VALUES(?,?,?,?)
+                            ON CONFLICT(stream,record_key) DO UPDATE SET
+                            mirror_id=excluded.mirror_id,record_json=excluded.record_json
+                            WHERE excluded.mirror_id > restore_latest.mirror_id""",
+                            (name, str(record["record_key"]), int(record["mirror_id"]),
+                             json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)))
+                latest_cursor = conn.execute(
+                    "SELECT record_json FROM restore_latest WHERE stream=? ORDER BY mirror_id", (name,),
+                )
+                for (record_json,) in latest_cursor:
+                    record = json.loads(record_json)
                     if record.get("operation", "upsert") == "tombstone":
                         continue
                     payload = record["payload"]

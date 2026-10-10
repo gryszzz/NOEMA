@@ -15,11 +15,13 @@ from noema.durable_mirror import (
     MUTABLE_STREAMS,
     RESTORE_BUNDLE_FORMAT,
     RESTORE_BUNDLE_VERSION,
+    STREAMING_RESTORE_BUNDLE_VERSION,
     DurableMirrorConfig,
     _canonical_hash,
     _decode_json_safe,
     _ensure_mutable_capture,
     _initialize_restore_schema,
+    _iter_bundle_records,
     _json_safe,
     _legacy_canonical_hash,
     _load_restore_bundle,
@@ -559,12 +561,12 @@ async def test_export_writes_explicit_empty_streams_and_fails_closed(tmp_path: P
     )
     assert result["status"] == "exported_complete"
     assert target.stat().st_mode & 0o777 == 0o600
-    exported = json.loads(target.read_text(encoding="utf-8"))
+    exported = _load_restore_bundle(target)
     assert exported["format"] == RESTORE_BUNDLE_FORMAT
-    assert exported["format_version"] == 2
+    assert exported["format_version"] == STREAMING_RESTORE_BUNDLE_VERSION
     assert exported["complete"] is True
     assert len(exported["streams"]) == len(DEFAULT_STREAMS)
-    assert all(stream["from_cursor"] == 0 and stream["records"] == [] for stream in exported["streams"])
+    assert all(stream["from_cursor"] == 0 and stream["record_count"] == 0 for stream in exported["streams"])
 
     def incomplete(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"complete": False, "streams": []})
@@ -650,8 +652,7 @@ async def test_export_recovers_legacy_mirror_rows_with_original_sqlite_rowid(tmp
 
     await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
         transport=httpx.MockTransport(handler))
-    exported = json.loads(target.read_text())
-    record = next(item for item in exported["streams"] if item["name"] == "missions")["records"][0]
+    record = next(_iter_bundle_records(target, "missions"))
     assert record["source_rowid"] == 7
     assert record["source_event_id"] == "legacy:19"
     assert record["source_schema_version"] == "legacy-unversioned"
@@ -703,34 +704,62 @@ async def test_export_preserves_legacy_numeric_json_for_hash_validation(tmp_path
 
     await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
         transport=httpx.MockTransport(handler))
-    exported = _load_restore_bundle(target)
-    record = next(item for item in exported["streams"] if item["name"] == "missions")["records"][0]
+    record = next(_iter_bundle_records(target, "missions"))
     assert record["payload"]["legacy_real"] == 0.0
 
 
 @pytest.mark.asyncio
-async def test_export_refuses_aggregate_record_count_above_restore_limit(tmp_path: Path) -> None:
-    target = tmp_path / "too-large.json"
+async def test_export_and_restore_exceed_legacy_aggregate_record_limit(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "large.sqlite"
+    monkeypatch.setattr(durable_mirror, "MAX_RESTORE_RECORDS", 1)
+    fixture_path = tmp_path / "fixture.json"
+    _restore_bundle(fixture_path)
+    payload = next(item for item in json.loads(fixture_path.read_text())["streams"]
+                   if item["name"] == "missions")["records"][0]["payload"]
+    records = []
+    for n in (1, 2):
+        record = {"id": n, "stream": "missions",
+            "record_key": "missions:5b226d697373696f6e2d707265736572766564225d",
+            "version_sha256": _canonical_hash(payload), "occurred_at": payload["created_at"],
+            "operation": "upsert", "source_rowid": 7, "source_event_id": f"epoch:{n}",
+            "source_schema_version": None, "payload": payload}
+        records.append(record)
     manifest_streams = [{
-        "name": name,
-        "record_count": 125_001 if name == "missions" else 125_000 if name == "economic_events" else 0,
-        "checkpoint": {},
+        "name": name, "record_count": 2 if name == "missions" else 0,
+        "restore_floor_id": 0,
+        "checkpoint": {"last_cursor": "2" if name == "missions" else "0", "metadata": {
+            "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+            "local_high_water": 2 if name == "missions" else 0, "baseline_complete": True,
+            "restore_floor_id": 0, "capture_epoch": "epoch" if name in MUTABLE_STREAMS else None,
+        }},
     } for name in DEFAULT_STREAMS]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert json.loads(request.content)["action"] == "export_manifest"
-        return httpx.Response(200, json={"complete": True, "through_cursor": 1,
-            "streams": manifest_streams, "checkpoint_metadata": {}})
+        body = json.loads(request.content)
+        if body["action"] == "export_manifest":
+            return httpx.Response(200, json={"complete": True, "through_cursor": 2,
+                "streams": manifest_streams, "checkpoint_metadata": {}})
+        if body["action"] == "pull":
+            rows = records if body["streams"] == ["missions"] else []
+            return httpx.Response(200, json={"records": rows, "has_more": False})
+        raise AssertionError(body)
 
-    with pytest.raises(RuntimeError, match="aggregate record limit"):
-        await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
-            transport=httpx.MockTransport(handler))
-    assert not target.exists()
+    result = await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+        transport=httpx.MockTransport(handler))
+    assert result["records"] == 2
+    assert len(list(_iter_bundle_records(target, "missions"))) == 2
+    restored = tmp_path / "large-restored.db"
+    restore_critical_state(target, restored)
+    with sqlite3.connect(restored) as conn:
+        assert conn.execute("SELECT mission_id,status FROM missions").fetchall() == [
+            ("mission-preserved", "completed"),
+        ]
+        assert conn.execute("SELECT count(*) FROM noema_mirror_history WHERE stream='missions'").fetchone()[0] == 2
 
 
 @pytest.mark.asyncio
-async def test_export_refuses_bundle_above_restore_byte_limit(tmp_path: Path, monkeypatch) -> None:
-    target = tmp_path / "too-large.json"
+async def test_export_streaming_bundle_exceeds_legacy_json_byte_limit(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "large.sqlite"
     monkeypatch.setattr(durable_mirror, "MAX_RESTORE_BUNDLE_BYTES", 1000)
     manifest_streams = [{
         "name": name, "record_count": int(name == "economic_events"), "restore_floor_id": 0,
@@ -756,10 +785,11 @@ async def test_export_refuses_bundle_above_restore_byte_limit(tmp_path: Path, mo
             return httpx.Response(200, json={"records": rows, "has_more": False})
         raise AssertionError(body)
 
-    with pytest.raises(RuntimeError, match="bundle byte limit"):
-        await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
-            transport=httpx.MockTransport(handler))
-    assert not target.exists()
+    result = await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+        transport=httpx.MockTransport(handler))
+    assert result["records"] == 1
+    assert target.stat().st_size > 1000
+    assert len(list(_iter_bundle_records(target, "economic_events"))) == 1
 
 
 @pytest.mark.asyncio
@@ -918,6 +948,7 @@ def _restore_bundle(path: Path) -> None:
                 "source_commit": "fixture",
                 "source_host": "fixture",
             }]
+            records[0]["projection_sha256"] = durable_mirror._restore_projection_hash(records[0])
         streams.append({
             "name": name,
             "from_cursor": 0,
@@ -1008,6 +1039,7 @@ def test_restore_verifies_append_only_payload_after_additive_schema_change(
         "source_schema_version": None,
         "payload": payload,
     }]
+    stream["records"][0]["projection_sha256"] = durable_mirror._restore_projection_hash(stream["records"][0])
     stream["record_count"] = 1
     bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
 
@@ -1071,6 +1103,7 @@ def test_restore_rejects_projection_metadata_tampering(tmp_path: Path, field: st
     data = json.loads(bundle.read_text(encoding="utf-8"))
     record = next(item for item in data["streams"] if item["name"] == "missions")["records"][0]
     record[field] = value
+    record["projection_sha256"] = durable_mirror._restore_projection_hash(record)
     bundle.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
@@ -1094,5 +1127,18 @@ def test_restore_rejects_paired_tampering_of_legacy_row_identity(tmp_path: Path)
     bundle.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ValueError, match="projection metadata hash mismatch"):
+        restore_critical_state(bundle, target)
+    assert not target.exists()
+
+
+def test_restore_requires_projection_digest_for_every_v2_record(tmp_path: Path) -> None:
+    bundle, target = tmp_path / "missing-projection.json", tmp_path / "missing-projection.db"
+    _restore_bundle(bundle)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    record = next(item for item in data["streams"] if item["name"] == "missions")["records"][0]
+    del record["projection_sha256"]
+    bundle.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(TypeError, match="no projection integrity digest"):
         restore_critical_state(bundle, target)
     assert not target.exists()
