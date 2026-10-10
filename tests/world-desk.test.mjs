@@ -310,14 +310,19 @@ test('Shift Report attributes terminal missions to completion time', () => {
     missions: { status: 'recorded', rows: [
       { mission_id: 'old', status: 'completed', completed_at: '2026-10-04T11:00:00Z', updated_at: '2026-10-06T11:00:00Z' },
       { mission_id: 'new', status: 'failed', completed_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T11:05:00Z' },
+      { mission_id: 'interrupted', status: 'interrupted', completed_at: '2026-10-06T11:30:00Z', updated_at: '2026-10-06T11:35:00Z' },
     ] },
     research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] },
     decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
     mission_events: { status: 'empty', rows: [] },
   } });
-  assert.equal(report.counts.missions, 1);
+  assert.equal(report.counts.missions, 2);
   assert.equal(report.counts.completed, 0);
-  assert.equal(report.counts.failures, 1);
+  assert.equal(report.counts.failures, 2);
+  const killed = deriveKillBoard({ sections: { missions: { rows: [
+    { mission_id: 'interrupted', status: 'interrupted', completed_at: '2026-10-06T11:30:00Z' },
+  ] } } });
+  assert.equal(killed[0].missionId, 'interrupted');
 });
 
 test('Shift Report assigns completed investigations to their completion window', () => {

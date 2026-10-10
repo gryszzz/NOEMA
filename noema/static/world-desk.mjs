@@ -283,7 +283,7 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
   }
   for (const row of asRows(snapshot, 'missions')) {
     const status = String(row.status ?? '').toLowerCase();
-    if (!['failed', 'rejected', 'terminated', 'quarantined', 'cancelled', 'canceled'].includes(status)) continue;
+    if (!['failed', 'rejected', 'terminated', 'quarantined', 'interrupted', 'cancelled', 'canceled'].includes(status)) continue;
     const at = row.completed_at ?? row.updated_at ?? row.created_at;
     if (!beforeCutoff(at)) continue;
     items.push({ id: `mission:${row.mission_id}`, at,
@@ -389,7 +389,7 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
   const within = (section, timeField = 'created_at') => asRows(snapshot, section)
     .filter(row => { const time = parseTime(row[timeField]); return time != null && time >= since && time <= now; });
   const terminalMissionStates = new Set(['completed', 'passed', 'failed', 'rejected', 'terminated',
-    'quarantined', 'cancelled', 'canceled']);
+    'quarantined', 'interrupted', 'cancelled', 'canceled']);
   const missions = asRows(snapshot, 'missions').filter(row => {
     const terminal = terminalMissionStates.has(String(row.status ?? '').toLowerCase());
     const time = parseTime(terminal
@@ -413,7 +413,7 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
   const counts = { missions: missionAvailable ? missions.length : null,
     investigations: runsAvailable ? runs.length : null, forecasts: decisionsAvailable ? forecasts.length : null,
     completed: missionAvailable ? missions.filter(row => ['completed', 'passed'].includes(String(row.status).toLowerCase())).length : null,
-    failures: missionAvailable ? missions.filter(row => ['failed', 'rejected', 'terminated', 'quarantined', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length : null,
+    failures: missionAvailable ? missions.filter(row => ['failed', 'rejected', 'terminated', 'quarantined', 'interrupted', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length : null,
     events: eventsAvailable ? events.length : null };
   const validCost = value => value != null
     && !(typeof value === 'string' && value.trim() === '')
