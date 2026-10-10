@@ -17,7 +17,7 @@ export const DESK_STAGES = Object.freeze([
 
 const ACTIVE_MISSION_STATES = new Set(['claimed', 'running', 'waiting']);
 const MISSION_STATE_EVENT_TYPES = new Set([
-  'opportunity_discovered', 'opportunity_rediscovered', 'mission_superseded', 'evidence_refreshed',
+  'opportunity_discovered', 'opportunity_rediscovered', 'mission_superseded',
   'claimed', 'resource_queue', 'handoff_requested', 'handoff_accepted', 'handoff_running',
   'lesson_applied', 'work_started', 'critic_evaluation', 'work_failed',
 ]);

@@ -368,7 +368,7 @@ test('Shift Report replay ignores handoff outcomes as mission state transitions'
     mission_events: { status: 'recorded', rows: [
       { mission_id: 'refreshed', event_type: 'opportunity_discovered', status: 'discovered', created_at: '2026-10-06T12:00:00Z' },
       { mission_id: 'refreshed', event_type: 'resource_queue', status: 'queued', created_at: '2026-10-06T12:02:00Z' },
-      { mission_id: 'refreshed', event_type: 'evidence_refreshed', status: 'discovered', created_at: '2026-10-06T12:06:00Z' },
+      { mission_id: 'refreshed', event_type: 'evidence_refreshed', status: 'discovered', created_at: '2026-10-06T12:04:00Z' },
     ] },
     research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] },
     decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
