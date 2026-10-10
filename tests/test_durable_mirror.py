@@ -184,6 +184,79 @@ async def test_sync_rejects_append_only_checkpoint_ahead_of_local_high_water(tmp
 
 
 @pytest.mark.asyncio
+async def test_sync_preflights_every_stream_before_remote_writes(tmp_path: Path) -> None:
+    db = tmp_path / "preflight-all-streams.db"
+    _db(db)
+    ingest_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": {
+                "economic_events": {"last_cursor": "99", "metadata": {"cursor_kind": "rowid"}},
+            }})
+        ingest_calls.append(body)
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    with pytest.raises(ValueError, match="ahead of the local source high-water mark"):
+        await sync_critical_state(
+            str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            streams=("missions", "economic_events"), transport=httpx.MockTransport(handler),
+        )
+    assert ingest_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_reuses_saved_cursor_fingerprint_and_hashes_only_new_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "incremental-fingerprint.db"
+    _db(db)
+    checkpoints: dict[str, dict[str, object]] = {}
+    full_hash_calls = 0
+    original_fingerprint = durable_mirror._cursor_fingerprint
+    original_fingerprint_v2 = durable_mirror._cursor_fingerprint_v2
+
+    def count_full_hash(*args, **kwargs):
+        nonlocal full_hash_calls
+        full_hash_calls += 1
+        return original_fingerprint(*args, **kwargs)
+
+    def count_full_hash_v2(*args, **kwargs):
+        nonlocal full_hash_calls
+        full_hash_calls += 1
+        return original_fingerprint_v2(*args, **kwargs)
+
+    monkeypatch.setattr(durable_mirror, "_cursor_fingerprint", count_full_hash)
+    monkeypatch.setattr(durable_mirror, "_cursor_fingerprint_v2", count_full_hash_v2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": checkpoints})
+        checkpoint = body.get("checkpoint")
+        if checkpoint:
+            checkpoints[checkpoint["stream"]] = {
+                "last_cursor": checkpoint["last_cursor"],
+                "metadata": checkpoint["metadata"],
+            }
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    config = DurableMirrorConfig(url="https://mirror.test", token="t" * 40)
+    transport = httpx.MockTransport(handler)
+    await sync_critical_state(str(db), config, streams=("economic_events",), transport=transport)
+    assert checkpoints["economic_events"]["metadata"]["cursor_fingerprint_version"] == 2
+    initial_calls = full_hash_calls
+
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO economic_events(provider,amount) VALUES('later','2.00')")
+    await sync_critical_state(str(db), config, streams=("economic_events",), transport=transport)
+
+    assert full_hash_calls == initial_calls
+    assert checkpoints["economic_events"]["last_cursor"] == "2"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", ["missions", "economic_events"])
 async def test_sync_rejects_reused_cursor_with_divergent_history(tmp_path: Path, stream: str) -> None:
     db = tmp_path / f"reused-{stream}.db"
@@ -260,10 +333,9 @@ async def test_sync_marks_append_only_write_after_page_fetch_as_lagging(
         nonlocal inserted
         rows = original_stream_rows(conn, stream, after_rowid=after_rowid, limit=limit)
         if not inserted:
-            with sqlite3.connect(db) as writer:
-                writer.execute(
-                    "INSERT INTO economic_events(id,provider,amount,created_at) VALUES (2,'openai','2.50','2026-10-06T16:02:00+00:00')",
-                )
+            conn.execute(
+                "INSERT INTO economic_events(id,provider,amount,created_at) VALUES (2,'openai','2.50','2026-10-06T16:02:00+00:00')",
+            )
             inserted = True
         return rows
 

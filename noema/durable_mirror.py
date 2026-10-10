@@ -462,6 +462,151 @@ def _cursor_fingerprint(
     return digest.hexdigest()
 
 
+def _cursor_fingerprint_v2(
+    conn: sqlite3.Connection, stream: str, cursor: int, *, mutable: bool,
+) -> str:
+    """Build a versioned rolling digest for a source prefix (migration fallback)."""
+    digest = hashlib.sha256(b"NOEMA durable mirror cursor fingerprint v2").digest()
+    return _advance_cursor_fingerprint_v2(
+        conn, stream, 0, cursor, digest.hex(), mutable=mutable,
+    )
+
+
+def _advance_cursor_fingerprint_v2(
+    conn: sqlite3.Connection, stream: str, after_cursor: int, through_cursor: int,
+    previous_fingerprint: str, *, mutable: bool,
+) -> str:
+    """Extend a rolling source digest using only rows after the saved cursor."""
+    try:
+        digest = bytes.fromhex(previous_fingerprint)
+    except ValueError as exc:
+        raise ValueError("invalid local cursor fingerprint") from exc
+    if len(digest) != hashlib.sha256().digest_size:
+        raise ValueError("invalid local cursor fingerprint")
+    if mutable:
+        rows = conn.execute(
+            "SELECT event_id,record_key,source_rowid,operation,payload_json,occurred_at "
+            "FROM noema_mirror_change_events WHERE stream=? AND event_id>? AND event_id<=? ORDER BY event_id",
+            (stream, after_cursor, through_cursor),
+        )
+        entries = ({
+            "event_id": int(event_id), "record_key": str(record_key),
+            "source_rowid": int(source_rowid) if source_rowid is not None else None,
+            "operation": str(operation), "payload": _json_safe(json.loads(payload_json)),
+            "occurred_at": occurred_at,
+        } for event_id, record_key, source_rowid, operation, payload_json, occurred_at in rows)
+    else:
+        rows = conn.execute(
+            f"SELECT rowid AS _cursor_rowid,* FROM {_qident(stream)} "
+            "WHERE rowid>? AND rowid<=? ORDER BY rowid",
+            (after_cursor, through_cursor),
+        )
+        names = [column[0] for column in rows.description]
+        def append_only_entries():
+            for raw in rows:
+                record = dict(zip(names, raw))
+                rowid = int(record.pop("_cursor_rowid"))
+                yield {"rowid": rowid, "payload": _json_safe(record)}
+        entries = append_only_entries()
+    for entry in entries:
+        encoded = json.dumps(
+            entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        digest = hashlib.sha256(digest + len(encoded).to_bytes(8, "big") + encoded).digest()
+    return digest.hex()
+
+
+def _ensure_cursor_state_table(conn: sqlite3.Connection, streams: tuple[str, ...]) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS noema_mirror_change_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT, stream TEXT NOT NULL,
+        record_key TEXT NOT NULL, source_rowid INTEGER, operation TEXT NOT NULL,
+        payload_json TEXT NOT NULL, occurred_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS noema_mirror_cursor_state (
+        stream TEXT PRIMARY KEY, cursor_kind TEXT NOT NULL, capture_epoch TEXT NOT NULL DEFAULT '',
+        last_cursor INTEGER NOT NULL, fingerprint_version INTEGER NOT NULL,
+        fingerprint_sha256 TEXT NOT NULL
+    )""")
+    for stream in streams:
+        quoted_stream = _qident(stream)
+        literal_stream = _sql_string(stream)
+        for operation in ("UPDATE", "DELETE"):
+            suffix = "au" if operation == "UPDATE" else "ad"
+            trigger_name = _qident("noema_mirror_cursor_invalidate_" + stream + "_" + suffix)
+            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS {trigger_name}
+                AFTER {operation} ON {quoted_stream} BEGIN
+                  DELETE FROM noema_mirror_cursor_state
+                  WHERE stream={literal_stream} AND last_cursor>=OLD.rowid;
+                END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS noema_mirror_cursor_event_invalidate_au
+        AFTER UPDATE ON noema_mirror_change_events BEGIN
+          DELETE FROM noema_mirror_cursor_state
+          WHERE stream=OLD.stream AND last_cursor>=OLD.event_id;
+        END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS noema_mirror_cursor_event_invalidate_ad
+        AFTER DELETE ON noema_mirror_change_events BEGIN
+          DELETE FROM noema_mirror_cursor_state
+          WHERE stream=OLD.stream AND last_cursor>=OLD.event_id;
+        END""")
+
+
+def _fingerprint_at_remote_cursor(
+    conn: sqlite3.Connection, stream: str, cursor: int, *, mutable: bool,
+    capture_epoch: str, remote_meta: dict[str, Any],
+) -> str:
+    """Verify remote continuity with a saved local digest, hashing history only on cache misses."""
+    cursor_kind = "change_event_id" if mutable else "rowid"
+    state = conn.execute(
+        "SELECT cursor_kind,capture_epoch,last_cursor,fingerprint_version,fingerprint_sha256 "
+        "FROM noema_mirror_cursor_state WHERE stream=?", (stream,),
+    ).fetchone()
+    local_fingerprint = None
+    if (state is not None and state[0] == cursor_kind and state[1] == capture_epoch
+            and int(state[2]) == cursor and int(state[3]) == 2):
+        local_fingerprint = str(state[4])
+
+    remote_fingerprint = remote_meta.get("cursor_fingerprint")
+    remote_version = remote_meta.get("cursor_fingerprint_version", 1)
+    if local_fingerprint is not None:
+        if remote_fingerprint is not None and remote_version == 2 and remote_fingerprint != local_fingerprint:
+            raise ValueError(
+                f"remote checkpoint for {stream} does not match the local source cursor history"
+            )
+        if remote_fingerprint is not None and remote_version != 2:
+            legacy_fingerprint = _cursor_fingerprint(conn, stream, cursor, mutable=mutable)
+            if remote_fingerprint != legacy_fingerprint:
+                raise ValueError(
+                    f"remote checkpoint for {stream} does not match the local source cursor history"
+                )
+        return local_fingerprint
+
+    if remote_fingerprint is not None and remote_version != 2:
+        legacy_fingerprint = _cursor_fingerprint(conn, stream, cursor, mutable=mutable)
+        if remote_fingerprint != legacy_fingerprint:
+            raise ValueError(
+                f"remote checkpoint for {stream} does not match the local source cursor history"
+            )
+    fingerprint = _cursor_fingerprint_v2(conn, stream, cursor, mutable=mutable)
+    if remote_fingerprint is not None and remote_version == 2 and remote_fingerprint != fingerprint:
+        raise ValueError(
+            f"remote checkpoint for {stream} does not match the local source cursor history"
+        )
+    return fingerprint
+
+
+def _save_cursor_fingerprint(
+    conn: sqlite3.Connection, stream: str, cursor: int, *, mutable: bool,
+    capture_epoch: str, fingerprint: str,
+) -> None:
+    conn.execute("""INSERT INTO noema_mirror_cursor_state
+        (stream,cursor_kind,capture_epoch,last_cursor,fingerprint_version,fingerprint_sha256)
+        VALUES (?,?,?,?,2,?) ON CONFLICT(stream) DO UPDATE SET
+        cursor_kind=excluded.cursor_kind,capture_epoch=excluded.capture_epoch,
+        last_cursor=excluded.last_cursor,fingerprint_version=excluded.fingerprint_version,
+        fingerprint_sha256=excluded.fingerprint_sha256""",
+        (stream, "change_event_id" if mutable else "rowid", capture_epoch, cursor, fingerprint))
+
+
 async def _post(
     client: httpx.AsyncClient,
     config: DurableMirrorConfig,
@@ -671,6 +816,10 @@ async def sync_critical_state(
         present = tuple(stream for stream in streams if stream in _tables(conn))
         if not present:
             return {"status": "no_streams", "mirrored": 0, "streams": 0}
+        _ensure_cursor_state_table(
+            conn, tuple(stream for stream in present if stream not in MUTABLE_STREAMS),
+        )
+        conn.commit()
 
         async with httpx.AsyncClient(
             timeout=config.timeout_seconds, transport=transport,
@@ -682,13 +831,23 @@ async def sync_critical_state(
             if not isinstance(checkpoints, dict):
                 checkpoints = {}
 
-            mirrored = 0
-            touched = 0
-            lagging = 0
+            capture_states: dict[str, tuple[bool, str]] = {}
+            for stream in present:
+                if stream in MUTABLE_STREAMS:
+                    capture_states[stream] = _ensure_mutable_capture(
+                        conn, stream, config.rows_per_stream,
+                    )
+                    conn.commit()
+
+            # Validate every local stream and prepare every request before the
+            # first remote write. A bad later stream must not leave an earlier
+            # stream's remote checkpoint advanced. The immediate transaction
+            # also keeps each row page and its fingerprint on one local snapshot.
+            plans: list[dict[str, Any]] = []
+            conn.execute("BEGIN IMMEDIATE")
             for stream in present:
                 mutable = stream in MUTABLE_STREAMS
-                baseline_complete, capture_epoch = _ensure_mutable_capture(conn, stream, config.rows_per_stream) if mutable else (True, "")
-                conn.commit()
+                baseline_complete, capture_epoch = capture_states.get(stream, (True, ""))
                 raw_checkpoint = checkpoints.get(stream)
                 cursor = 0
                 expected_kind = "change_event_id" if mutable else "rowid"
@@ -711,7 +870,6 @@ async def sync_critical_state(
 
                 rows = (_mutable_events(conn, stream, cursor, config.rows_per_stream, capture_epoch) if mutable else
                         _stream_rows(conn, stream, after_rowid=cursor, limit=config.rows_per_stream))
-                touched += 1
                 last_cursor = cursor
                 if rows:
                     last_cursor = int(rows[-1]["_cursor"] if mutable else rows[-1]["source_rowid"])
@@ -724,13 +882,13 @@ async def sync_critical_state(
                     raise ValueError(
                         f"remote checkpoint for {stream} is ahead of the local source high-water mark"
                     )
-                cursor_fingerprint = _cursor_fingerprint(conn, stream, cursor, mutable=mutable)
-                remote_fingerprint = remote_meta.get("cursor_fingerprint")
-                if (cursor > 0 and remote_fingerprint is not None
-                        and remote_fingerprint != cursor_fingerprint):
-                    raise ValueError(
-                        f"remote checkpoint for {stream} does not match the local source cursor history"
-                    )
+                cursor_fingerprint = _fingerprint_at_remote_cursor(
+                    conn, stream, cursor, mutable=mutable, capture_epoch=capture_epoch or "",
+                    remote_meta=remote_meta,
+                )
+                new_fingerprint = _advance_cursor_fingerprint_v2(
+                    conn, stream, cursor, last_cursor, cursor_fingerprint, mutable=mutable,
+                )
                 checkpoint = {
                     "stream": stream,
                     "last_cursor": str(last_cursor),
@@ -741,9 +899,8 @@ async def sync_critical_state(
                         "local_high_water": local_high_water,
                         "baseline_complete": baseline_complete,
                         "capture_epoch": capture_epoch or None,
-                        "cursor_fingerprint": _cursor_fingerprint(
-                            conn, stream, last_cursor, mutable=mutable,
-                        ),
+                        "cursor_fingerprint_version": 2,
+                        "cursor_fingerprint": new_fingerprint,
                     },
                 }
                 batches: list[list[dict[str, Any]]] = []
@@ -770,20 +927,37 @@ async def sync_critical_state(
                         batch = candidate
                 if batch or not batches:
                     batches.append(batch)
+                plans.append({
+                    "stream": stream, "mutable": mutable, "capture_epoch": capture_epoch or "",
+                    "last_cursor": last_cursor, "fingerprint": new_fingerprint,
+                    "checkpoint": checkpoint, "batches": batches,
+                    "lagging": (len(rows) >= config.rows_per_stream or not baseline_complete
+                                or last_cursor < local_high_water),
+                })
+
+            for plan in plans:
+                _save_cursor_fingerprint(
+                    conn, plan["stream"], plan["last_cursor"], mutable=plan["mutable"],
+                    capture_epoch=plan["capture_epoch"], fingerprint=plan["fingerprint"],
+                )
+            conn.commit()
+
+            mirrored = 0
+            lagging = 0
+            for plan in plans:
+                batches = plan["batches"]
                 for batch_index, records_batch in enumerate(batches):
                     request_body: dict[str, Any] = {"action": "ingest", "records": records_batch}
                     if batch_index == len(batches) - 1:
-                        request_body["checkpoint"] = checkpoint
+                        request_body["checkpoint"] = plan["checkpoint"]
                     result = await _post(client, config, request_body)
                     mirrored += int(result.get("accepted") or 0)
-                if (len(rows) >= config.rows_per_stream or not baseline_complete
-                        or last_cursor < local_high_water):
-                    lagging += 1
+                lagging += int(plan["lagging"])
 
             return {
                 "status": "persisted",
                 "mirrored": mirrored,
-                "streams": touched,
+                "streams": len(plans),
                 "lagging_streams": lagging,
                 "present_streams": len(present),
             }
