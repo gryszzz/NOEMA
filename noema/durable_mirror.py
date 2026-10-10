@@ -927,10 +927,28 @@ async def sync_critical_state(
                         batch = candidate
                 if batch or not batches:
                     batches.append(batch)
+                seed_checkpoint = None
+                if (mutable and len(batches) > 1
+                        and (not isinstance(raw_checkpoint, dict)
+                             or remote_meta.get("capture_epoch") != capture_epoch)):
+                    first_batch_cursor = int(rows[len(batches[0]) - 1]["_cursor"])
+                    seed_fingerprint = _advance_cursor_fingerprint_v2(
+                        conn, stream, cursor, first_batch_cursor, cursor_fingerprint,
+                        mutable=True,
+                    )
+                    seed_metadata = dict(checkpoint["metadata"])
+                    seed_metadata["baseline_complete"] = False
+                    seed_metadata["cursor_fingerprint"] = seed_fingerprint
+                    seed_checkpoint = {
+                        **checkpoint,
+                        "last_cursor": str(first_batch_cursor),
+                        "metadata": seed_metadata,
+                    }
                 plans.append({
                     "stream": stream, "mutable": mutable, "capture_epoch": capture_epoch or "",
                     "last_cursor": last_cursor, "fingerprint": new_fingerprint,
-                    "checkpoint": checkpoint, "batches": batches,
+                    "checkpoint": checkpoint, "seed_checkpoint": seed_checkpoint,
+                    "batches": batches,
                     "lagging": (len(rows) >= config.rows_per_stream or not baseline_complete
                                 or last_cursor < local_high_water),
                 })
@@ -948,7 +966,9 @@ async def sync_critical_state(
                 batches = plan["batches"]
                 for batch_index, records_batch in enumerate(batches):
                     request_body: dict[str, Any] = {"action": "ingest", "records": records_batch}
-                    if batch_index == len(batches) - 1:
+                    if batch_index == 0 and plan["seed_checkpoint"] is not None:
+                        request_body["checkpoint"] = plan["seed_checkpoint"]
+                    elif batch_index == len(batches) - 1:
                         request_body["checkpoint"] = plan["checkpoint"]
                     result = await _post(client, config, request_body)
                     mirrored += int(result.get("accepted") or 0)

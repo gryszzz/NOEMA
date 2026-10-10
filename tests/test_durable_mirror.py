@@ -387,6 +387,44 @@ async def test_sync_splits_large_ingest_batches_before_edge_body_limit(tmp_path:
     assert result["mirrored"] == 201
 
 
+@pytest.mark.asyncio
+async def test_split_mutable_baseline_establishes_incomplete_floor_before_uploads(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "split-mutable-baseline.db"
+    _db(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE missions ADD COLUMN evidence TEXT")
+        conn.executemany(
+            "INSERT INTO missions(mission_id,status,created_at,evidence) VALUES(?,?,?,?)",
+            [(f"large-{index}", "running", "2026-10-06T16:02:00+00:00", "x" * 21_000)
+             for index in range(200)],
+        )
+    ingest_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "checkpoints":
+            return httpx.Response(200, json={"checkpoints": {}})
+        assert len(request.content) <= durable_mirror.MAX_MIRROR_INGEST_BATCH_BYTES
+        ingest_calls.append(body)
+        return httpx.Response(200, json={"accepted": len(body["records"])})
+
+    result = await sync_critical_state(
+        str(db), DurableMirrorConfig(url="https://mirror.test", token="t" * 40, rows_per_stream=500),
+        streams=("missions",), transport=httpx.MockTransport(handler),
+    )
+
+    assert len(ingest_calls) > 1
+    first_checkpoint = ingest_calls[0]["checkpoint"]
+    final_checkpoint = ingest_calls[-1]["checkpoint"]
+    assert first_checkpoint["metadata"]["baseline_complete"] is False
+    assert int(first_checkpoint["last_cursor"]) < int(final_checkpoint["last_cursor"])
+    assert final_checkpoint["metadata"]["baseline_complete"] is True
+    assert all("checkpoint" not in call for call in ingest_calls[1:-1])
+    assert result["mirrored"] == 201
+
+
 def test_mutable_capture_recreates_triggers_after_schema_change(tmp_path: Path) -> None:
     db = tmp_path / "noema.db"
     _db(db)
