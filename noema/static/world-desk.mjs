@@ -394,7 +394,7 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
         status = String(event.status).toLowerCase();
         updatedAt = event.created_at;
       }
-      return { ...mission, status, updated_at: updatedAt };
+      return { ...mission, objective: null, status, updated_at: updatedAt };
     });
     const filteredSections = Object.fromEntries(Object.entries(sections).map(([name, section]) => {
       const timeField = name === 'missions' ? 'created_at'

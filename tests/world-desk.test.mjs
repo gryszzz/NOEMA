@@ -360,6 +360,21 @@ test('Shift Report replay ignores handoff outcomes as mission state transitions'
   } }, 24, {}, cutoff);
   assert.equal(completed.counts.completed, 1);
   assert.deepEqual(completed.blockers, []);
+
+  const refreshedObjective = deriveShiftReport({ as_of: '2026-10-06T12:06:00Z', sections: {
+    missions: { status: 'recorded', rows: [{ mission_id: 'refreshed', status: 'queued',
+      objective: 'Objective from after the replay cutoff', created_at: '2026-10-06T12:00:00Z',
+      updated_at: '2026-10-06T12:06:00Z' }] },
+    mission_events: { status: 'recorded', rows: [
+      { mission_id: 'refreshed', event_type: 'opportunity_discovered', status: 'discovered', created_at: '2026-10-06T12:00:00Z' },
+      { mission_id: 'refreshed', event_type: 'resource_queue', status: 'queued', created_at: '2026-10-06T12:02:00Z' },
+      { mission_id: 'refreshed', event_type: 'evidence_refreshed', status: 'discovered', created_at: '2026-10-06T12:06:00Z' },
+    ] },
+    research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+  } }, 24, {}, cutoff);
+  assert.deepEqual(refreshedObjective.blockers.map(row => [row.mission_id, row.status, row.objective]),
+    [['refreshed', 'queued', 'refreshed']]);
 });
 
 test('Shift Report assigns completed investigations to their completion window', () => {
