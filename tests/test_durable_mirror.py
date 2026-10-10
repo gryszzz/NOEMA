@@ -25,6 +25,7 @@ from noema.durable_mirror import (
     _json_safe,
     _legacy_canonical_hash,
     _load_restore_bundle,
+    _source_projection_hash,
     export_critical_state,
     mutable_schema_migration,
     restore_critical_state,
@@ -63,6 +64,9 @@ def test_mutable_stream_contract_matches_sql_and_edge_function() -> None:
     assert "source_rowid = split_part(record_key, ':', 2)::bigint" in sql
     assert "source_event_id = 'legacy:' || id::text" in sql
     assert "payload::text as payload_json" in sql
+    assert "source_projection_sha256" in sql
+    assert "source projection digest is required" in sql
+    assert 'source_schema_version === "sqlite-v1"' in edge
     assert "noema_mirror_export_manifest(p_streams text[])\nreturns jsonb language plpgsql stable" in sql
     assert "mutable checkpoint is missing for an existing capture epoch" in sql
     assert "[functions.noema-durable-mirror]\nverify_jwt = false" in config
@@ -88,6 +92,8 @@ async def test_sync_critical_state_uses_remote_checkpoints_and_hashes_rows(tmp_p
                     record["payload"], sort_keys=True, separators=(",", ":"), ensure_ascii=False,
                 ).encode()
                 assert record["version_sha256"] == hashlib.sha256(encoded).hexdigest()
+                assert record["source_schema_version"] == "sqlite-v1"
+                assert record["source_projection_sha256"] == _source_projection_hash(record)
             return httpx.Response(200, json={"status": "persisted", "accepted": len(records), "duplicates": 0})
         raise AssertionError(body)
 
@@ -620,6 +626,44 @@ async def test_export_rejects_corrupt_record_hash_before_publishing_complete_bun
 
 
 @pytest.mark.asyncio
+async def test_export_rejects_corrupted_source_projection_before_minting_bundle_digest(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "corrupt-projection.sqlite"
+    payload = {"agent_id": "agent-one", "state": "healthy"}
+    original = {"stream": "agent_runtime", "record_key": "agent_runtime:agent-one",
+        "version_sha256": _canonical_hash(payload), "operation": "upsert", "source_rowid": 1,
+        "source_event_id": "epoch:1", "source_schema_version": "sqlite-v1", "payload": payload}
+    source_digest = _source_projection_hash(original)
+    # The remote row has a forged rowid but retains the source digest sent at ingest.
+    row = {"id": 1, **original, "source_rowid": 2,
+        "source_projection_sha256": source_digest}
+    manifest_streams = [{
+        "name": name, "record_count": int(name == "agent_runtime"), "restore_floor_id": 0,
+        "checkpoint": {"last_cursor": "1" if name == "agent_runtime" else "0", "metadata": {
+            "cursor_kind": "change_event_id" if name in MUTABLE_STREAMS else "rowid",
+            "local_high_water": 1 if name == "agent_runtime" else 0, "baseline_complete": True,
+            "restore_floor_id": 0, "capture_epoch": "epoch" if name in MUTABLE_STREAMS else None,
+        }},
+    } for name in DEFAULT_STREAMS]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["action"] == "export_manifest":
+            return httpx.Response(200, json={"complete": True, "through_cursor": 1,
+                "streams": manifest_streams})
+        if body["action"] == "pull":
+            rows = [row] if body["streams"] == ["agent_runtime"] else []
+            return httpx.Response(200, json={"records": rows, "has_more": False})
+        raise AssertionError(body)
+
+    with pytest.raises(RuntimeError, match="fail local restore validation"):
+        await export_critical_state(target, DurableMirrorConfig(url="https://mirror.test", token="t" * 40),
+            transport=httpx.MockTransport(handler))
+    assert not target.exists()
+
+
+@pytest.mark.asyncio
 async def test_export_recovers_legacy_mirror_rows_with_original_sqlite_rowid(tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.json"
     _restore_bundle(fixture)
@@ -722,7 +766,8 @@ async def test_export_and_restore_exceed_legacy_aggregate_record_limit(tmp_path:
             "record_key": "missions:5b226d697373696f6e2d707265736572766564225d",
             "version_sha256": _canonical_hash(payload), "occurred_at": payload["created_at"],
             "operation": "upsert", "source_rowid": 7, "source_event_id": f"epoch:{n}",
-            "source_schema_version": None, "payload": payload}
+            "source_schema_version": "sqlite-v1", "payload": payload}
+        record["source_projection_sha256"] = _source_projection_hash(record)
         records.append(record)
     manifest_streams = [{
         "name": name, "record_count": 2 if name == "missions" else 0,
@@ -755,6 +800,22 @@ async def test_export_and_restore_exceed_legacy_aggregate_record_limit(tmp_path:
             ("mission-preserved", "completed"),
         ]
         assert conn.execute("SELECT count(*) FROM noema_mirror_history WHERE stream='missions'").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM noema_mirror_history WHERE source_projection_sha256 IS NOT NULL").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name='restore_latest'").fetchone()[0] == 0
+
+    original_loader = durable_mirror._load_restore_bundle
+
+    def replace_bundle_records_after_validation(bundle_path):
+        loaded = original_loader(bundle_path)
+        with sqlite3.connect(bundle_path) as bundle_conn:
+            bundle_conn.execute("DELETE FROM bundle_records")
+        return loaded
+
+    monkeypatch.setattr(durable_mirror, "_load_restore_bundle", replace_bundle_records_after_validation)
+    changed_target = tmp_path / "changed-bundle-restored.db"
+    with pytest.raises(ValueError, match="changed after validation"):
+        restore_critical_state(target, changed_target)
+    assert not changed_target.exists()
 
 
 @pytest.mark.asyncio

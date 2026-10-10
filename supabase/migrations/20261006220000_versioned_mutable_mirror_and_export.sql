@@ -3,6 +3,7 @@ alter table noema.mirror_records add column if not exists operation text not nul
 alter table noema.mirror_records add column if not exists source_rowid bigint;
 alter table noema.mirror_records add column if not exists source_schema_version text;
 alter table noema.mirror_records add column if not exists source_event_id text;
+alter table noema.mirror_records add column if not exists source_projection_sha256 text;
 
 -- The previous worker encoded SQLite rowids in record_key but did not populate
 -- the later provenance columns. Preserve those original identities in place;
@@ -23,6 +24,12 @@ where stream = any(array['agent_runtime','agent_cycle_timings','missions','missi
   'ecosystem_specialists','research_trials','autonomous_research_runs','bill_budget',
   'prediction_account_records','prediction_account_sync_state'])
   and source_event_id is null;
+
+-- Rows predating source projection digests remain explicitly legacy. New workers
+-- persist a digest with each source record before PostgreSQL assigns its mirror ID.
+update noema.mirror_records
+set source_schema_version = coalesce(source_schema_version, 'legacy-unversioned')
+where source_projection_sha256 is null;
 
 alter table noema.mirror_records drop constraint if exists mirror_records_stream_record_key_version_sha256_key;
 create unique index if not exists mirror_records_legacy_content_dedupe
@@ -69,6 +76,14 @@ begin
     if rec->>'operation' not in ('upsert','tombstone') or rec->>'stream' is null
        or rec->>'record_key' is null or rec->>'version_sha256' is null
        or jsonb_typeof(rec->'payload') <> 'object' then raise exception 'malformed mirror record'; end if;
+    if rec->>'source_projection_sha256' is not null
+       and rec->>'source_projection_sha256' !~ '^[a-f0-9]{64}$' then
+      raise exception 'invalid source projection digest';
+    end if;
+    if rec->>'source_schema_version'='sqlite-v1'
+       and coalesce(rec->>'source_projection_sha256','') !~ '^[a-f0-9]{64}$' then
+      raise exception 'source projection digest is required';
+    end if;
     if rec->>'stream'=any(array['agent_runtime','agent_cycle_timings','missions','mission_handoffs','ecosystem_specialists',
       'research_trials','autonomous_research_runs','bill_budget','prediction_account_records',
       'prediction_account_sync_state']) and
@@ -76,11 +91,12 @@ begin
       raise exception 'mutable mirror version has no source event identity';
     end if;
     insert into noema.mirror_records(stream,record_key,version_sha256,occurred_at,payload,source_commit,
-      source_host,operation,source_rowid,source_schema_version,source_event_id)
+      source_host,operation,source_rowid,source_schema_version,source_event_id,source_projection_sha256)
     values(rec->>'stream',rec->>'record_key',rec->>'version_sha256',
       nullif(rec->>'occurred_at','')::timestamptz,rec->'payload',rec->>'source_commit',rec->>'source_host',
-      coalesce(rec->>'operation','upsert'),nullif(rec->>'source_rowid','')::bigint,rec->>'source_schema_version',
-      rec->>'source_event_id')
+      coalesce(rec->>'operation','upsert'),nullif(rec->>'source_rowid','')::bigint,
+      coalesce(rec->>'source_schema_version',case when rec->>'source_projection_sha256' is null then 'legacy-unversioned' end),
+      rec->>'source_event_id',rec->>'source_projection_sha256')
     on conflict do nothing;
     get diagnostics affected = row_count;
     if affected=1 then accepted := accepted+1; else duplicates := duplicates+1; end if;
@@ -106,7 +122,7 @@ create or replace function noema.noema_mirror_pull(p_streams text[],p_since_id b
 returns jsonb language sql security definer set search_path = noema, pg_temp as $$
   with page as (
     select id,stream,record_key,version_sha256,occurred_at,payload,payload::text as payload_json,source_commit,source_host,
-      mirrored_at,operation,source_rowid,source_schema_version,source_event_id
+      mirrored_at,operation,source_rowid,source_schema_version,source_event_id,source_projection_sha256
     from noema.mirror_records where stream=any(p_streams) and id>p_since_id
       and (p_through_id is null or id<=p_through_id)
     order by id limit least(greatest(p_limit,1),1000)

@@ -229,6 +229,14 @@ def _stream_rows(
     return result
 
 
+def _source_projection_hash(record: dict[str, Any]) -> str:
+    """Bind source identity to the payload before the mirror assigns its own cursor."""
+    return _canonical_hash({key: record.get(key) for key in (
+        "stream", "record_key", "version_sha256", "operation", "source_rowid",
+        "source_event_id", "source_schema_version",
+    )})
+
+
 def _restore_record_from_mirror(row: dict[str, Any], stream: str) -> dict[str, Any]:
     """Normalize one mirror row for either recovery bundle format."""
     mirror_id = int(row.get("id") or 0)
@@ -236,6 +244,7 @@ def _restore_record_from_mirror(row: dict[str, Any], stream: str) -> dict[str, A
     source_rowid = row.get("source_rowid")
     source_event_id = row.get("source_event_id")
     source_schema_version = row.get("source_schema_version")
+    source_projection_sha256 = row.get("source_projection_sha256")
     payload = row.get("payload")
     payload_json = row.get("payload_json")
     if isinstance(payload_json, str):
@@ -250,6 +259,8 @@ def _restore_record_from_mirror(row: dict[str, Any], stream: str) -> dict[str, A
         if suffix.isascii() and suffix.isdecimal() and int(suffix) > 0:
             source_rowid = int(suffix)
             legacy_identity = True
+    if source_schema_version is None and source_projection_sha256 is None:
+        source_schema_version = "legacy-unversioned"
     if stream in MUTABLE_STREAMS and source_event_id is None and legacy_identity:
         source_event_id = f"legacy:{mirror_id}"
         source_schema_version = source_schema_version or "legacy-unversioned"
@@ -260,6 +271,7 @@ def _restore_record_from_mirror(row: dict[str, Any], stream: str) -> dict[str, A
         "source_event_id": source_event_id, "payload": payload,
         "source_commit": row.get("source_commit"), "source_host": row.get("source_host"),
         "source_schema_version": source_schema_version,
+        "source_projection_sha256": source_projection_sha256,
     }
     record["projection_sha256"] = _restore_projection_hash(record)
     return record
@@ -791,7 +803,9 @@ async def export_critical_state(
                         if mirror_id <= since_id or mirror_id > watermark:
                             raise RuntimeError(f"durable mirror returned unordered/out-of-watermark records for {stream}")
                         try:
-                            previous = _validate_restore_record(stream, record, previous, watermark)
+                            previous = _validate_restore_record(
+                                stream, record, previous, watermark, require_source_projection=True,
+                            )
                         except (TypeError, ValueError) as exc:
                             raise RuntimeError(
                                 "durable mirror export contains records that fail local restore validation"
@@ -924,6 +938,11 @@ async def sync_critical_state(
                 if rows:
                     last_cursor = int(rows[-1]["_cursor"] if mutable else rows[-1]["source_rowid"])
                 payload_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
+                for record in payload_rows:
+                    record["operation"] = record.get("operation") or "upsert"
+                    record["source_event_id"] = record.get("source_event_id")
+                    record["source_schema_version"] = "sqlite-v1"
+                    record["source_projection_sha256"] = _source_projection_hash(record)
                 if mutable:
                     local_high_water = int(conn.execute("SELECT coalesce(max(event_id),0) FROM noema_mirror_change_events WHERE stream=?", (stream,)).fetchone()[0])
                 else:
@@ -1103,7 +1122,7 @@ def _decode_json_safe(value: Any) -> Any:
 
 
 def _validate_restore_record(
-    name: str, record: Any, previous: int, through: int,
+    name: str, record: Any, previous: int, through: int, *, require_source_projection: bool = False,
 ) -> int:
     if not isinstance(record, dict) or record.get("stream") != name:
         raise ValueError(f"restore stream {name} contains a malformed record")
@@ -1123,6 +1142,13 @@ def _validate_restore_record(
                      else _canonical_hash(payload))
     if not isinstance(digest, str) or expected_hash != digest:
         raise ValueError(f"restore record hash mismatch in {name}")
+    source_projection = record.get("source_projection_sha256")
+    legacy_projection = record.get("source_schema_version") == "legacy-unversioned"
+    if require_source_projection and not legacy_projection:
+        if not isinstance(source_projection, str) or not re.fullmatch(r"[a-f0-9]{64}", source_projection):
+            raise ValueError(f"restore record has no source projection digest in {name}")
+        if source_projection != _source_projection_hash(record):
+            raise ValueError(f"restore source projection digest mismatch in {name}")
     projection_digest = record.get("projection_sha256")
     if not isinstance(projection_digest, str):
         raise TypeError(f"restore record has no projection integrity digest in {name}")
@@ -1143,8 +1169,11 @@ def _validate_restore_record(
     return cursor
 
 
-def _iter_bundle_records(path: str | Path, stream: str) -> Iterator[dict[str, Any]]:
-    conn = sqlite3.connect(f"file:{Path(path).absolute()}?mode=ro", uri=True)
+def _iter_bundle_records(
+    path: str | Path, stream: str, *, connection: sqlite3.Connection | None = None,
+) -> Iterator[dict[str, Any]]:
+    owns_connection = connection is None
+    conn = connection or sqlite3.connect(f"file:{Path(path).absolute()}?mode=ro", uri=True)
     try:
         cursor = conn.execute(
             "SELECT record_json FROM bundle_records WHERE stream=? ORDER BY mirror_id", (stream,),
@@ -1155,7 +1184,8 @@ def _iter_bundle_records(path: str | Path, stream: str) -> Iterator[dict[str, An
                 raise TypeError(f"streaming restore record in {stream} is malformed")
             yield record
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def _load_restore_bundle(bundle_path: str | Path | dict[str, Any]) -> dict[str, Any]:
@@ -1171,6 +1201,8 @@ def _load_restore_bundle(bundle_path: str | Path | dict[str, Any]) -> dict[str, 
             signature = handle.read(16)
         if signature == b"SQLite format 3\x00":
             conn = sqlite3.connect(f"file:{path.absolute()}?mode=ro", uri=True)
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("BEGIN")
             try:
                 if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise ValueError("streaming restore bundle failed its SQLite integrity check")
@@ -1284,7 +1316,10 @@ def _load_restore_bundle(bundle_path: str | Path | dict[str, Any]) -> dict[str, 
             if int(item.get("record_count", -1)) != expected_count:
                 raise ValueError(f"restore stream {name} record count does not match its manifest")
         for record in records:
-            previous = _validate_restore_record(name, record, previous, through)
+            previous = _validate_restore_record(
+                name, record, previous, through,
+                require_source_projection=(data.get("format_version") == STREAMING_RESTORE_BUNDLE_VERSION),
+            )
             total += 1
             if not item.get("_streaming_records") and total > MAX_RESTORE_RECORDS:
                 raise ValueError("restore bundle exceeds the record limit")
@@ -1309,12 +1344,32 @@ def restore_critical_state(
     if target.exists():
         raise FileExistsError("restore target already exists; recovery never overwrites local state")
     bundle = _load_restore_bundle(bundle_path)
+    streaming_path = bundle.get("_streaming_bundle_path")
+    bundle_connection: sqlite3.Connection | None = None
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.restore-", suffix=".db", dir=target.parent)
     os.close(fd)
     temp = Path(temp_name)
     counts: dict[str, int] = {}
     try:
+        if streaming_path:
+            bundle_connection = sqlite3.connect(f"file:{Path(streaming_path).absolute()}?mode=ro", uri=True)
+            bundle_connection.execute("PRAGMA query_only=ON")
+            bundle_connection.execute("BEGIN")
+            if bundle_connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise ValueError("streaming restore bundle failed its SQLite integrity check")
+            manifest_row = bundle_connection.execute(
+                "SELECT manifest_json FROM bundle_manifest",
+            ).fetchone()
+            if manifest_row is None:
+                raise ValueError("streaming restore bundle has no manifest")
+            persisted_manifest = json.loads(manifest_row[0])
+            expected_manifest = {key: value for key, value in bundle.items()
+                                 if key != "_streaming_bundle_path"}
+            for item in expected_manifest["streams"]:
+                item.pop("_streaming_records", None)
+            if persisted_manifest != expected_manifest:
+                raise ValueError("streaming restore bundle changed after validation")
         _initialize_restore_schema(temp)
         conn = sqlite3.connect(temp, timeout=30)
         conn.row_factory = sqlite3.Row
@@ -1326,13 +1381,13 @@ def restore_critical_state(
                 mirror_id INTEGER NOT NULL, stream TEXT NOT NULL, record_key TEXT NOT NULL,
                 version_sha256 TEXT NOT NULL, operation TEXT NOT NULL, source_rowid INTEGER,
                 source_event_id TEXT, occurred_at TEXT, source_commit TEXT, source_host TEXT,
-                source_schema_version TEXT, payload_json TEXT NOT NULL, PRIMARY KEY(stream,mirror_id)
+                source_schema_version TEXT, source_projection_sha256 TEXT, payload_json TEXT NOT NULL,
+                PRIMARY KEY(stream,mirror_id)
             )""")
-            conn.execute("""CREATE TABLE restore_latest (
+            conn.execute("""CREATE TEMP TABLE restore_latest (
                 stream TEXT NOT NULL, record_key TEXT NOT NULL, mirror_id INTEGER NOT NULL,
                 record_json TEXT NOT NULL, PRIMARY KEY(stream,record_key)
             )""")
-            streaming_path = bundle.get("_streaming_bundle_path")
             for stream in bundle["streams"]:
                 name = stream["name"]
                 if name not in known_tables:
@@ -1342,17 +1397,26 @@ def restore_critical_state(
                 columns = {str(row["name"]) for row in columns_info}
                 restored = 0
                 floor = int(stream["restore_floor_id"])
-                records = (_iter_bundle_records(streaming_path, name)
+                records = (_iter_bundle_records(streaming_path, name, connection=bundle_connection)
                            if streaming_path else iter(stream["records"]))
+                record_count = 0
+                previous_cursor = 0
                 for record in records:
+                    previous_cursor = _validate_restore_record(
+                        name, record, previous_cursor, int(stream["through_cursor"]),
+                        require_source_projection=(
+                            bundle.get("format_version") == STREAMING_RESTORE_BUNDLE_VERSION
+                        ),
+                    )
+                    record_count += 1
                     _validate_restore_projection_identity(conn, name, record)
                     payload = record["payload"]
                     conn.execute(
-                        "INSERT INTO noema_mirror_history VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO noema_mirror_history VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (int(record["mirror_id"]), name, record["record_key"], record["version_sha256"],
                          record.get("operation", "upsert"), record.get("source_rowid"), record.get("source_event_id"),
                          record.get("occurred_at"), record.get("source_commit"), record.get("source_host"),
-                         record.get("source_schema_version"),
+                         record.get("source_schema_version"), record.get("source_projection_sha256"),
                          json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)),
                     )
                     if int(record["mirror_id"]) > floor:
@@ -1362,6 +1426,8 @@ def restore_critical_state(
                             WHERE excluded.mirror_id > restore_latest.mirror_id""",
                             (name, str(record["record_key"]), int(record["mirror_id"]),
                              json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)))
+                if streaming_path and record_count != int(stream["record_count"]):
+                    raise ValueError(f"streaming restore stream {name} changed after validation")
                 latest_cursor = conn.execute(
                     "SELECT record_json FROM restore_latest WHERE stream=? ORDER BY mirror_id", (name,),
                 )
@@ -1425,6 +1491,8 @@ def restore_critical_state(
             "integrity_check": "ok",
         }
     finally:
+        if bundle_connection is not None:
+            bundle_connection.close()
         for candidate in (temp, Path(str(temp) + "-wal"), Path(str(temp) + "-shm")):
             try:
                 candidate.unlink(missing_ok=True)

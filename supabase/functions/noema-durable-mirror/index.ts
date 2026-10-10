@@ -77,6 +77,12 @@ Deno.serve(async (request) => {
         || typeof item.version_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.version_sha256)
         || !item.payload || typeof item.payload !== "object" || Array.isArray(item.payload)
         || !["upsert", "tombstone"].includes(String(item.operation || "upsert"))
+        || (item.source_projection_sha256 != null
+          && (typeof item.source_projection_sha256 !== "string"
+            || !/^[a-f0-9]{64}$/.test(item.source_projection_sha256)))
+        || (item.source_schema_version === "sqlite-v1"
+          && (typeof item.source_projection_sha256 !== "string"
+            || !/^[a-f0-9]{64}$/.test(item.source_projection_sha256)))
         || (mutableStreams.has(String(item.stream))
           && (typeof item.source_event_id !== "string"
             || item.source_event_id.length < 1 || item.source_event_id.length > 160))) {
