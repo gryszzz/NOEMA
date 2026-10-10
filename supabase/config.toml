@@ -1,0 +1,2 @@
+[functions.noema-durable-mirror]
+verify_jwt = false
