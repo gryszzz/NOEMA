@@ -242,7 +242,10 @@ test('Shift Report uses persisted records, flags partial coverage, and keeps eco
     sessions: { status: 'empty', rows: [] },
     decisions: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z' }] },
     activity: { status: 'recorded', rows: [{ id: 1, created_at: '2026-10-06T12:05:00Z' }] },
-    mission_events: { status: 'recorded', rows: [{ mission_id: 'm1', status: 'queued', created_at: '2026-10-06T11:30:00Z' }, { mission_id: 'm1', status: 'completed', created_at: '2026-10-06T12:05:00Z' }] },
+    mission_events: { status: 'recorded', rows: [
+      { mission_id: 'm1', event_type: 'resource_queue', status: 'queued', created_at: '2026-10-06T11:30:00Z' },
+      { mission_id: 'm1', event_type: 'critic_evaluation', status: 'completed', created_at: '2026-10-06T12:05:00Z' },
+    ] },
   } }, 24, {}, Date.parse('2026-10-06T12:00:00Z'));
   assert.equal(historical.counts.missions, 1);
   assert.equal(historical.counts.completed, 0);
@@ -323,6 +326,25 @@ test('Shift Report attributes terminal missions to completion time', () => {
     { mission_id: 'interrupted', status: 'interrupted', completed_at: '2026-10-06T11:30:00Z' },
   ] } } });
   assert.equal(killed[0].missionId, 'interrupted');
+});
+
+test('Shift Report replay ignores handoff outcomes as mission state transitions', () => {
+  const cutoff = Date.parse('2026-10-06T12:05:00Z');
+  const report = deriveShiftReport({ as_of: '2026-10-06T12:06:00Z', sections: {
+    missions: { status: 'recorded', rows: [{ mission_id: 'review', status: 'completed',
+      created_at: '2026-10-06T12:00:00Z', updated_at: '2026-10-06T12:06:00Z' }] },
+    mission_events: { status: 'recorded', rows: [
+      { mission_id: 'review', event_type: 'claimed', status: 'claimed', created_at: '2026-10-06T12:01:00Z' },
+      { mission_id: 'review', event_type: 'work_started', status: 'running', created_at: '2026-10-06T12:02:00Z' },
+      { mission_id: 'review', event_type: 'handoff_requested', status: 'waiting', created_at: '2026-10-06T12:03:00Z' },
+      { mission_id: 'review', event_type: 'handoff_completed', status: 'completed', created_at: '2026-10-06T12:04:00Z' },
+      { mission_id: 'review', event_type: 'critic_evaluation', status: 'quarantined', created_at: '2026-10-06T12:06:00Z' },
+    ] },
+    research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+  } }, 24, {}, cutoff);
+  assert.equal(report.counts.completed, 0);
+  assert.deepEqual(report.blockers.map(row => [row.mission_id, row.status]), [['review', 'waiting']]);
 });
 
 test('Shift Report assigns completed investigations to their completion window', () => {

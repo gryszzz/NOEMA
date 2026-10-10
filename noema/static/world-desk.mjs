@@ -16,6 +16,11 @@ export const DESK_STAGES = Object.freeze([
 ]);
 
 const ACTIVE_MISSION_STATES = new Set(['claimed', 'running', 'waiting']);
+const MISSION_STATE_EVENT_TYPES = new Set([
+  'opportunity_discovered', 'opportunity_rediscovered', 'mission_superseded', 'evidence_refreshed',
+  'claimed', 'resource_queue', 'handoff_requested', 'handoff_accepted', 'handoff_running',
+  'lesson_applied', 'work_started', 'critic_evaluation', 'work_failed',
+]);
 
 function normalized(value) {
   return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -368,7 +373,8 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     const missionEvents = asRows(snapshot, 'mission_events').filter(event => beforeCutoff(event.created_at));
     const missions = asRows(snapshot, 'missions').filter(mission => beforeCutoff(mission.created_at)).map(mission => {
       if (beforeCutoff(mission.updated_at ?? mission.created_at)) return mission;
-      const lastEvent = missionEvents.filter(event => event.mission_id === mission.mission_id && event.status)
+      const lastEvent = missionEvents.filter(event => event.mission_id === mission.mission_id
+        && MISSION_STATE_EVENT_TYPES.has(String(event.event_type ?? '').toLowerCase()) && event.status)
         .sort((a, b) => (parseTime(a.created_at) ?? 0) - (parseTime(b.created_at) ?? 0)).at(-1);
       return { ...mission, status: lastEvent?.status ?? 'unknown', updated_at: lastEvent?.created_at ?? mission.created_at };
     });
