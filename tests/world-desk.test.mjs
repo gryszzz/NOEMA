@@ -137,12 +137,15 @@ test('Kill Board links only persisted passes, explicit critic rejects, and termi
     research_runs: { rows: [
       { id: 3, specialist: 'critic', kind: 'review', result: JSON.stringify({ critic_review: { result_accepted: false, issues: ['source stale'] } }) },
       { id: 4, specialist: 'critic', kind: 'review', result: '{malformed' },
+      { id: 5, mission_id: 'sidecar', specialist: 'critic', kind: 'review', result: '{}',
+        critic_review: { verdict: 'REJECT', issues: ['sidecar evidence mismatch'] } },
     ] },
   } });
-  assert.equal(kills.length, 4);
+  assert.equal(kills.length, 5);
   assert.ok(kills.some(item => item.reason === 'After-cost edge below threshold'));
   assert.ok(kills.some(item => item.reason === 'ambiguous rules'));
   assert.ok(kills.some(item => item.reason === 'source stale'));
+  assert.ok(kills.some(item => item.reason === 'sidecar evidence mismatch'));
   assert.ok(kills.some(item => item.missionId === 'q'));
   assert.equal(hasKillBoardCoverage({ sections: {
     decisions: { status: 'empty' }, missions: { status: 'recorded' }, research_runs: { status: 'empty' },
@@ -276,6 +279,45 @@ test('Shift Report sums distinct model-session and worker costs without duplicat
   assert.equal(report.compute_cost_records, 4);
   assert.equal(report.compute_cost_unknown, false);
   assert.equal(report.counts.investigations, 2);
+});
+
+test('Shift Report rejects blank costs and qualifies incomplete cost linkage', () => {
+  const missingRuns = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', rows: [] }, research_runs: { status: 'unavailable', rows: [] },
+    sessions: { status: 'recorded', rows: [{ session_id: 's1', completed_at: '2026-10-06T11:00:00Z',
+      estimated_model_cost_usd: '', compute_cost_usd: '  ' }] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+    mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.equal(missingRuns.compute_cost_usd, null);
+  assert.equal(missingRuns.compute_cost_records, 0);
+  assert.equal(missingRuns.compute_cost_unknown, true);
+
+  const cappedLinks = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', has_more: true, rows: [] },
+    research_runs: { status: 'recorded', rows: [{ id: 1, mission_id: 'm1', completed_at: '2026-10-06T11:00:00Z', compute_cost_usd: 0.05 }] },
+    sessions: { status: 'recorded', rows: [{ session_id: 's1', completed_at: '2026-10-06T11:00:00Z',
+      estimated_model_cost_usd: 0.4, compute_cost_usd: 0.1 }] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+    mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.equal(cappedLinks.compute_cost_usd, 0.45);
+  assert.equal(cappedLinks.compute_cost_unknown, true);
+});
+
+test('Shift Report attributes terminal missions to completion time', () => {
+  const report = deriveShiftReport({ as_of: '2026-10-06T12:00:00Z', sections: {
+    missions: { status: 'recorded', rows: [
+      { mission_id: 'old', status: 'completed', completed_at: '2026-10-04T11:00:00Z', updated_at: '2026-10-06T11:00:00Z' },
+      { mission_id: 'new', status: 'failed', completed_at: '2026-10-06T11:00:00Z', updated_at: '2026-10-06T11:05:00Z' },
+    ] },
+    research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+    mission_events: { status: 'empty', rows: [] },
+  } });
+  assert.equal(report.counts.missions, 1);
+  assert.equal(report.counts.completed, 0);
+  assert.equal(report.counts.failures, 1);
 });
 
 test('Shift Report assigns completed investigations to their completion window', () => {

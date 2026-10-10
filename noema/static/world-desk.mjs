@@ -192,6 +192,26 @@ function parseResult(value) {
   }
 }
 
+function persistedCriticReview(row = {}) {
+  const resultReview = parseResult(row.result).critic_review;
+  const sidecarReview = parseResult(row.critic_review);
+  const review = {
+    ...(resultReview && typeof resultReview === 'object' ? resultReview : {}),
+    ...(sidecarReview?.critic_review && typeof sidecarReview.critic_review === 'object'
+      ? sidecarReview.critic_review : sidecarReview),
+  };
+  if (typeof review.result_accepted !== 'boolean') {
+    if (typeof review.accepted === 'boolean') review.result_accepted = review.accepted;
+    else {
+      const verdict = String(review.verdict ?? review.status ?? '').trim().toUpperCase();
+      if (['REJECT', 'REJECTED', 'FAIL', 'FAILED', 'QUARANTINED'].includes(verdict))
+        review.result_accepted = false;
+      else if (['PASS', 'ACCEPT', 'ACCEPTED'].includes(verdict)) review.result_accepted = true;
+    }
+  }
+  return Object.keys(review).length ? review : null;
+}
+
 export function deriveRuleRack(snapshot = {}, sources = {}) {
   if (sources.historicalReplay) {
     return ['Research runtime', 'Heavy workload slots', 'Model budget', 'Research evidence', 'Prediction execution', 'Treasury authority']
@@ -272,7 +292,7 @@ export function deriveKillBoard(snapshot = {}, limit = 12, cutoff = Infinity) {
       missionId: row.mission_id, decisionId: null });
   }
   for (const row of asRows(snapshot, 'research_runs')) {
-    const review = parseResult(row.result).critic_review;
+    const review = persistedCriticReview(row);
     if (!review || review.result_accepted !== false) continue;
     let at = row.completed_at ?? row.created_at;
     if (Number.isFinite(cutoff)) {
@@ -318,7 +338,7 @@ function hasCriticReplayCoverage(snapshot = {}) {
   const events = asRows(snapshot, 'mission_events');
   const handoffs = asRows(snapshot, 'handoffs');
   return asRows(snapshot, 'research_runs').every(row => {
-    const review = parseResult(row.result).critic_review;
+    const review = persistedCriticReview(row);
     if (!review || review.result_accepted !== false) return true;
     return events.some(event => event.mission_id === row.mission_id
       && String(event.event_type ?? '').toLowerCase() === 'critic_evaluation'
@@ -368,7 +388,15 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
   const since = now - windowMs;
   const within = (section, timeField = 'created_at') => asRows(snapshot, section)
     .filter(row => { const time = parseTime(row[timeField]); return time != null && time >= since && time <= now; });
-  const missions = within('missions', 'updated_at');
+  const terminalMissionStates = new Set(['completed', 'passed', 'failed', 'rejected', 'terminated',
+    'quarantined', 'cancelled', 'canceled']);
+  const missions = asRows(snapshot, 'missions').filter(row => {
+    const terminal = terminalMissionStates.has(String(row.status ?? '').toLowerCase());
+    const time = parseTime(terminal
+      ? row.completed_at ?? row.updated_at ?? row.created_at
+      : row.updated_at ?? row.created_at);
+    return time != null && time >= since && time <= now;
+  });
   const completedWithin = section => asRows(snapshot, section).filter(row => {
     const time = parseTime(row.completed_at ?? row.created_at);
     return time != null && time >= since && time <= now;
@@ -387,8 +415,11 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     completed: missionAvailable ? missions.filter(row => ['completed', 'passed'].includes(String(row.status).toLowerCase())).length : null,
     failures: missionAvailable ? missions.filter(row => ['failed', 'rejected', 'terminated', 'quarantined', 'cancelled', 'canceled'].includes(String(row.status).toLowerCase())).length : null,
     events: eventsAvailable ? events.length : null };
-  const runCostValues = runs.map(row => row.compute_cost_usd == null ? null : Number(row.compute_cost_usd))
-    .filter(value => value != null && Number.isFinite(value) && value >= 0);
+  const validCost = value => value != null
+    && !(typeof value === 'string' && value.trim() === '')
+    && Number.isFinite(Number(value)) && Number(value) >= 0;
+  const runCostValues = runs.filter(row => validCost(row.compute_cost_usd))
+    .map(row => Number(row.compute_cost_usd));
   const missionsById = new Map(asRows(snapshot, 'missions').map(row => [String(row.mission_id), row]));
   const sessionIdsByRun = new Map();
   for (const run of runs) {
@@ -410,12 +441,17 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     if (row.session_id != null) seenSessionCosts.add(String(row.session_id));
     sessionCostRows.push(row);
   }
-  const validCost = value => value != null && Number.isFinite(Number(value)) && Number(value) >= 0;
+  const sessionComputeLinkageComplete = sectionRecorded('missions')
+    && snapshot.sections?.missions?.has_more !== true
+    && runsAvailable && snapshot.sections?.research_runs?.has_more !== true;
   const sessionModelCostValues = sessionCostRows.filter(row => validCost(row.estimated_model_cost_usd))
     .map(row => Number(row.estimated_model_cost_usd));
   const sessionComputeCostRows = sessionCostRows.filter(row => {
+    if (row.session_id == null) return false;
     const linkedRuns = runs.filter(run => sessionIdsByRun.get(String(run.id))?.has(String(row.session_id)));
-    return !linkedRuns.some(run => validCost(run.compute_cost_usd));
+    if (linkedRuns.some(run => validCost(run.compute_cost_usd))) return false;
+    if (linkedRuns.some(run => !validCost(run.compute_cost_usd))) return true;
+    return sessionComputeLinkageComplete;
   });
   const sessionComputeCostValues = sessionComputeCostRows.filter(row => validCost(row.compute_cost_usd))
     .map(row => Number(row.compute_cost_usd));
@@ -427,6 +463,10 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     || (!validCost(row.compute_cost_usd)
       && !runs.some(run => validCost(run.compute_cost_usd)
         && sessionIdsByRun.get(String(run.id))?.has(String(row.session_id)))));
+  const ambiguousSessionCompute = sessionCostRows.some(row => validCost(row.compute_cost_usd)
+    && (row.session_id == null
+      || (!runs.some(run => sessionIdsByRun.get(String(run.id))?.has(String(row.session_id)))
+        && !sessionComputeLinkageComplete)));
   const costValues = [...runCostValues, ...sessionModelCostValues, ...sessionComputeCostValues];
   const cost = costValues.length ? costValues.reduce((sum, value) => sum + value, 0) : null;
   const contributors = [...new Set(runs.map(row => row.specialist).filter(Boolean))];
@@ -444,7 +484,11 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     counts,
     compute_cost_usd: cost,
     compute_cost_records: costValues.length,
-    compute_cost_unknown: runCostUnknown || !sectionRecorded('sessions') || sessionCostUnknown,
+    compute_cost_unknown: runCostUnknown || !runsAvailable
+      || snapshot.sections?.research_runs?.has_more === true
+      || !sectionRecorded('sessions') || snapshot.sections?.sessions?.has_more === true
+      || !sectionRecorded('missions') || snapshot.sections?.missions?.has_more === true
+      || sessionCostUnknown || ambiguousSessionCompute,
     contributors,
     blockers: blocked?.map(row => ({ mission_id: row.mission_id, objective: row.objective ?? row.mission_id, status: row.status })) ?? null,
     economic_contribution: 'Unknown · realized net value is not inferred from activity or paper results',
