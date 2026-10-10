@@ -345,6 +345,21 @@ test('Shift Report replay ignores handoff outcomes as mission state transitions'
   } }, 24, {}, cutoff);
   assert.equal(report.counts.completed, 0);
   assert.deepEqual(report.blockers.map(row => [row.mission_id, row.status]), [['review', 'waiting']]);
+
+  const completed = deriveShiftReport({ as_of: '2026-10-06T12:06:00Z', sections: {
+    missions: { status: 'recorded', rows: [{ mission_id: 'completed', status: 'completed',
+      created_at: '2026-10-06T12:00:00Z', completed_at: '2026-10-06T12:03:00Z', updated_at: '2026-10-06T12:06:00Z' }] },
+    mission_events: { status: 'recorded', rows: [
+      { mission_id: 'completed', event_type: 'critic_evaluation', status: 'completed', created_at: '2026-10-06T12:03:00Z' },
+      { mission_id: 'completed', event_type: 'handoff_requested', status: 'waiting', created_at: '2026-10-06T12:04:00Z' },
+      { mission_id: 'completed', event_type: 'handoff_accepted', status: 'accepted', created_at: '2026-10-06T12:04:30Z' },
+      { mission_id: 'completed', event_type: 'handoff_running', status: 'running', created_at: '2026-10-06T12:04:45Z' },
+    ] },
+    research_runs: { status: 'empty', rows: [] }, sessions: { status: 'empty', rows: [] },
+    decisions: { status: 'empty', rows: [] }, activity: { status: 'empty', rows: [] },
+  } }, 24, {}, cutoff);
+  assert.equal(completed.counts.completed, 1);
+  assert.deepEqual(completed.blockers, []);
 });
 
 test('Shift Report assigns completed investigations to their completion window', () => {

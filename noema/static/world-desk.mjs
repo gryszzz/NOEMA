@@ -21,6 +21,9 @@ const MISSION_STATE_EVENT_TYPES = new Set([
   'claimed', 'resource_queue', 'handoff_requested', 'handoff_accepted', 'handoff_running',
   'lesson_applied', 'work_started', 'critic_evaluation', 'work_failed',
 ]);
+const TERMINAL_MISSION_STATES = new Set([
+  'passed', 'completed', 'failed', 'interrupted', 'quarantined', 'superseded', 'cancelled', 'canceled',
+]);
 
 function normalized(value) {
   return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -373,10 +376,25 @@ export function deriveShiftReport(snapshot = {}, hours = 24, freshness = {}, cut
     const missionEvents = asRows(snapshot, 'mission_events').filter(event => beforeCutoff(event.created_at));
     const missions = asRows(snapshot, 'missions').filter(mission => beforeCutoff(mission.created_at)).map(mission => {
       if (beforeCutoff(mission.updated_at ?? mission.created_at)) return mission;
-      const lastEvent = missionEvents.filter(event => event.mission_id === mission.mission_id
+      const stateEvents = missionEvents.filter(event => event.mission_id === mission.mission_id
         && MISSION_STATE_EVENT_TYPES.has(String(event.event_type ?? '').toLowerCase()) && event.status)
-        .sort((a, b) => (parseTime(a.created_at) ?? 0) - (parseTime(b.created_at) ?? 0)).at(-1);
-      return { ...mission, status: lastEvent?.status ?? 'unknown', updated_at: lastEvent?.created_at ?? mission.created_at };
+        .sort((a, b) => (parseTime(a.created_at) ?? 0) - (parseTime(b.created_at) ?? 0));
+      let status = 'discovered';
+      let updatedAt = mission.created_at;
+      for (const event of stateEvents) {
+        const eventType = String(event.event_type ?? '').toLowerCase();
+        if (TERMINAL_MISSION_STATES.has(status)) {
+          if (status === 'superseded' && eventType === 'opportunity_rediscovered'
+              && String(event.status).toLowerCase() === 'discovered') {
+            status = 'discovered';
+            updatedAt = event.created_at;
+          }
+          continue;
+        }
+        status = String(event.status).toLowerCase();
+        updatedAt = event.created_at;
+      }
+      return { ...mission, status, updated_at: updatedAt };
     });
     const filteredSections = Object.fromEntries(Object.entries(sections).map(([name, section]) => {
       const timeField = name === 'missions' ? 'created_at'
