@@ -44,6 +44,11 @@ def test_room_v6_missing_db_and_leaderboard_passthrough(tmp_path):
     out = build_room_v6(str(tmp_path / "none.db"), fetch=False,
                         command_center={"accuracy_leaderboard": rows})
     assert out["lanes"] == [] and out["accuracy_leaderboard"] == rows
+    report = {"agents": [{"agent": "tev_judge", "agent_id": "tev_judge", "brier": 0.2,
+                          "calibration_error": 0.04, "weight": 0.1, "benched": False}]}
+    unwrapped = build_room_v6(str(tmp_path / "none.db"), fetch=False,
+                              command_center={"accuracy": report})
+    assert unwrapped["accuracy_leaderboard"] == report["agents"]
 
 
 def test_signer_armed_only_when_flag_is_one(monkeypatch):
