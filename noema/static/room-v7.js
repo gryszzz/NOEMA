@@ -73,8 +73,15 @@ T.checksFor=(it)=>{const st=String(it.stage||""),rs=String(it.reason||"");let up
  if(st==="chief_veto"){upto=5;fail=5}else if(/approve|entry|entered|buy/.test(st)){upto=6}else if(st==="holders"){upto=4}else if(st==="filters"){upto=3}
  else{fail=CHECKS.findIndex(c=>c[1].test(rs));if(fail<0)fail=0;upto=fail}
  return CHECKS.map((c,i)=>({name:c[0],state:i<upto?"p":i===fail?"f":"s"}))};
+/* provider returned no candles: draw this pool's real metrics instead of an empty box */
+T.metricRows=(it)=>[["liq",+it.liquidity_usd,v=>Math.min(1,Math.log10(1+v)/6)],["vol1h",+it.volume_h1_usd,v=>Math.min(1,Math.log10(1+v)/6)],
+ ["5m %",+it.price_change_m5,v=>Math.min(1,Math.abs(v)/25)],["age h",+it.pool_age_hours,v=>Math.min(1,v/48)],["trades1h",+it.trades_h1,v=>Math.min(1,Math.log10(1+v)/4)]].filter(r=>isFinite(r[1]));
+function metricBars(x,W,H,it){const R=T.metricRows(it);x.font="9px monospace";x.fillStyle="#5f8aa3";x.fillText("no candles from provider · live pool metrics",4,10);
+ if(!R.length)return;const bh=Math.max(5,Math.min(12,(H-16)/R.length-3));let k=0;
+ const step=()=>{k=Math.min(1,k+.08);R.forEach((r,i)=>{const y=14+i*(bh+3),w=(W-64)*r[2](r[1])*k;x.clearRect(56,y,W-56,bh);x.fillStyle="#5f8aa3";x.fillText(r[0],4,y+bh-1);
+  x.fillStyle=r[0]==="5m %"?(r[1]<0?"#ff3b6b":"#39ff9c"):"#27e7ff";x.fillRect(56,y,Math.max(1,w),bh)});if(k<1)requestAnimationFrame(step)};step()}
 function miniChart(cv,c){const W=cv.clientWidth,H=cv.clientHeight,dpr=window.devicePixelRatio||1;if(!W||!H)return;cv.width=W*dpr;cv.height=H*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);
- if(!c||c.length<2){x.fillStyle="#5f8aa3";x.font="10px monospace";x.fillText("no candles returned for this pool",4,14);return}
+ if(!c||c.length<2){metricBars(x,W,H,cv._it||{});return}
  const hi=Math.max(...c),lo=Math.min(...c),r=(hi-lo)||1,up=c.at(-1)>=c[0];let k=1;x.lineWidth=1.6;x.strokeStyle=up?"#39ff9c":"#ff3b6b";
  const P=i=>[i/(c.length-1)*W,H-3-(c[i]-lo)/r*(H-6)];
  const step=()=>{if(!cv.isConnected)return;for(let s=0;s<3&&k<c.length;s++,k++){x.beginPath();x.moveTo(...P(k-1));x.lineTo(...P(k));x.stroke()}if(k<c.length)requestAnimationFrame(step)};step()}
@@ -86,7 +93,7 @@ function scanNext(){if(V.paused)return;const f=(V.d||{}).funnel||{},L=f.scan||[]
  lane.querySelectorAll(".v7c").forEach(o=>{o.classList.add(o.dataset.fail==="1"?"drop":"fly");setTimeout(()=>o.remove(),800)});
  const px=it.price_usd==null?"—":(+it.price_usd<1?(+it.price_usd).toPrecision(4):N(it.price_usd));
  lane.insertAdjacentHTML("beforeend",`<div class="v7c" data-fail="${fail?1:0}"><div><div class="sy">${E(it.symbol||"?")}<small>${E(it.source||"")} · ${E((it.mint||"").slice(0,4))}…</small></div><div class="mt"><span>px <b>${px}</b></span><span>liq <b>${U(it.liquidity_usd)}</b></span><span>vol1h <b>${U(it.volume_h1_usd)}</b></span><span>5m <b class="${it.price_change_m5<0?"bad":"ok"}">${N(it.price_change_m5)}%</b></span><span>age <b>${N(it.pool_age_hours,1)}h</b></span>${it.trades_h1!=null?`<span>trades1h <b>${E(it.trades_h1)}</b></span>`:""}${it.probability!=null?`<span>judge p <b>${N(it.probability)}</b></span>`:""}</div></div><canvas></canvas><div class="ck">${ck.map(c=>`<div data-s="${c.state}"><i>·</i>${E(c.name)}</div>`).join("")}</div><div class="stp ${fail?"rej":"pass"}">${fail?"REJECTED":"PASSED"}<small>${E(it.reason||it.stage||"")}</small></div></div>`);
- const card=lane.lastElementChild;requestAnimationFrame(()=>{card.classList.add("in");miniChart(card.querySelector("canvas"),it.closes)});
+ const card=lane.lastElementChild;requestAnimationFrame(()=>{card.classList.add("in");const cv=card.querySelector("canvas");cv._it=it;miniChart(cv,it.closes)});
  const rows=[...card.querySelectorAll(".ck div")];rows.forEach((r,k)=>setTimeout(()=>{if(!card.isConnected)return;r.classList.add("on",r.dataset.s);r.querySelector("i").textContent=r.dataset.s==="p"?"✔":r.dataset.s==="f"?"✖":"–"},450+k*170));
  setTimeout(()=>{if(!card.isConnected)return;card.querySelector(".stp").classList.add("on");if(!fail){const j=byId("v7-judge");j.classList.remove("hit");void j.offsetWidth;j.classList.add("hit");link("ag-judge",card)}},450+rows.length*170+120)}
 function link(fromId,toEl){const a=byId(fromId),svg=byId("v7-links");if(!a||!svg||!toEl)return;const r1=a.getBoundingClientRect(),r2=toEl.getBoundingClientRect();

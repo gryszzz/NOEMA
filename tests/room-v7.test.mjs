@@ -58,3 +58,9 @@ test('laptop dock engages on MacBook-sized screens only', () => {
   assert.equal(D.isLaptop(1728, 1117), true);
   assert.equal(D.isLaptop(2560, 1440), false);
 });
+
+test('pools without candles chart their real metrics', () => {
+  const rows = V.metricRows({ liquidity_usd: 25000, volume_h1_usd: 332, price_change_m5: -1.2, pool_age_hours: 338 });
+  assert.equal(rows.map((r) => r[0]).join(','), 'liq,vol1h,5m %,age h');
+  assert.equal(V.metricRows({}).length, 0);
+});

@@ -97,3 +97,52 @@ def test_laptop_dock_assets_are_included(tmp_path, monkeypatch):
     html = client.get("/trading-room").text
     for asset in ("/static/room-v7-dock.js", "/static/room-v7-dock.css"):
         assert asset in html and client.get(asset).status_code == 200
+
+
+def _crawl_db(tmp_path):
+    p = _db(tmp_path, "c.db")
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE news_fetch_state (url TEXT, status TEXT, etag TEXT, last_modified TEXT, fetched_at TEXT)")
+    c.execute("INSERT INTO news_fetch_state VALUES ('https://feeds.bbci.co.uk/news/rss.xml','200',NULL,NULL,"
+              "'2026-10-21T20:00:05+00:00')")
+    c.execute("CREATE TABLE culture_source_state (name TEXT, domain TEXT, url TEXT, status TEXT, items INT, fetched_at TEXT)")
+    c.execute("INSERT INTO culture_source_state VALUES ('pumpfun_new','crypto','https://frontend-api.pump.fun/x','200',20,"
+              "'2026-10-21T20:00:04+00:00')")
+    c.execute("CREATE TABLE x_ingest_runs (id INTEGER PRIMARY KEY, at TEXT, posts_seen INT, posts_new INT, linked INT)")
+    c.execute("INSERT INTO x_ingest_runs (at, posts_seen, posts_new, linked) VALUES ('2026-10-21T20:00:03+00:00',9,7,2)")
+    c.execute("CREATE TABLE market_scan_state (source TEXT, cursor TEXT, updated_at TEXT)")
+    c.execute("INSERT INTO market_scan_state VALUES ('kalshi:production:markets','c','2026-10-21T20:00:02+00:00')")
+    c.execute("CREATE TABLE news_feed_schedule (name TEXT, next_due TEXT, failures INT, last_status TEXT, "
+              "last_fetch_at TEXT, last_new INT)")
+    c.execute("INSERT INTO news_feed_schedule VALUES ('BBC','2026-10-21T20:05:00+00:00',0,'200','x',0)")
+    c.commit()
+    c.close()
+    return p
+
+
+def test_crawl_feed_lists_only_recorded_fetches(tmp_path):
+    out = build_room_v7(_crawl_db(tmp_path), fetch=False)["crawl"]
+    kinds = [h["kind"] for h in out["hits"]]
+    assert kinds[:4] == ["news", "pumpfun", "x", "prediction"]  # newest first
+    assert out["hits"][0]["url"] == "https://feeds.bbci.co.uk/news/rss.xml"
+    assert out["hits"][2]["items"] == 9 and "2 linked" in out["hits"][2]["detail"]
+    assert {h["kind"] for h in out["hits"]} >= {"pool"}  # scanned pools from the latest sweep
+    assert out["next"]["news"].startswith("2026-10-21T20:05") and out["next"]["x"].startswith("2026-10-21T20:30")
+    assert out["counters"]["sweeps_24h"] >= 0
+
+
+def test_crawl_feed_empty_without_tables(tmp_path):
+    out = build_room_v7(_db(tmp_path, "e.db"), fetch=False)["crawl"]
+    assert [h for h in out["hits"] if h["kind"] != "pool"] == [] and out["next"] == {}
+
+
+def test_room_assets_are_versioned_and_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOEMA_DB_PATH", _db(tmp_path, "v.db"))
+    from noema.dashboard_app import app, versioned_assets
+    client = TestClient(app)
+    r = client.get("/trading-room")
+    for asset in ("room-v7.js", "room-v7.css", "crawler-hero.js", "crawler-hero.css"):
+        assert f"/static/{asset}?v=" in r.text
+        assert client.get(f"/static/{asset}").headers["cache-control"].startswith("no-cache")
+    assert r.headers["cache-control"].startswith("no-cache")
+    assert versioned_assets('<script src="/static/nope.js"></script>') == '<script src="/static/nope.js"></script>'

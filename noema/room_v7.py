@@ -7,6 +7,7 @@ shows an explicit empty state.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import sqlite3
@@ -298,6 +299,95 @@ def headline(chief: dict[str, Any], fun: dict[str, Any], events: list[dict[str, 
     return " · ".join(p for p in parts if p) or "Waiting on the first real crawler sweep."
 
 
+# ---------------------------------------------------------------- crawler hero feed
+def _iso(v: Any) -> str | None:
+    if not v:
+        return None
+    try:
+        d = datetime.fromisoformat(str(v))
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=UTC)).isoformat()
+
+
+def _host(url: str) -> str:
+    u = str(url or "")
+    return u.split("://", 1)[-1].split("/", 1)[0]
+
+
+def crawl_feed(conn: sqlite3.Connection, fun: dict[str, Any] | None = None, limit: int = 60) -> dict[str, Any]:
+    """Every real fetch the crawlers recorded, newest first, plus counters and next-due times.
+
+    Sources: news_fetch_state (news GETs), culture_source_state (DexScreener, pump.fun, Reddit,
+    StockTwits, Kalshi/Polymarket culture), x_ingest_runs (X reads), market_scan_state (Kalshi and
+    Polymarket market sweeps), trench_desk_events desk_cycle (trench pool sweeps) and
+    trench_provider_health. Nothing is invented: an empty table yields no rows.
+    """
+    fun = fun or {}
+    hits: list[dict[str, Any]] = []
+    for url, status, at in _rows(conn, "SELECT url, status, fetched_at FROM news_fetch_state "
+                                      "ORDER BY fetched_at DESC LIMIT 40"):
+        hits.append({"at": _iso(at), "kind": "news", "source": _host(url), "url": url,
+                     "status": str(status) if status is not None else None, "items": None})
+    for name, dom, url, status, items, at in _rows(
+            conn, "SELECT name, domain, url, status, items, fetched_at FROM culture_source_state"):
+        kind = "pumpfun" if "pump" in str(name).lower() else (
+            "prediction" if dom == "prediction" else "culture")
+        hits.append({"at": _iso(at), "kind": kind, "source": name, "url": url,
+                     "status": str(status) if status is not None else None, "items": items})
+    for at, seen, new, linked in _rows(conn, "SELECT at, posts_seen, posts_new, linked FROM x_ingest_runs "
+                                            "ORDER BY id DESC LIMIT 5"):
+        hits.append({"at": _iso(at), "kind": "x", "source": "X read (political · crypto · stocks)",
+                     "url": "x-inbox: Grok Bot X read tools", "status": "ok", "items": seen,
+                     "detail": f"{new} new · {linked} linked to markets"})
+    for src, at in _rows(conn, "SELECT source, updated_at FROM market_scan_state"):
+        venue = str(src).split(":")[0]
+        url = ("https://api.elections.kalshi.com/trade-api/v2/markets" if venue.startswith("kalshi")
+               else "https://api.polymarket.us/v1/markets" if "polymarket" in venue else str(src))
+        hits.append({"at": _iso(at), "kind": "prediction", "source": src, "url": url,
+                     "status": "ok", "items": None})
+    for prov, state, at, err in _rows(conn, "SELECT provider, state, last_attempt_at, last_error_class "
+                                           "FROM trench_provider_health"):
+        hits.append({"at": _iso(at), "kind": "rpc", "source": prov, "url": prov,
+                     "status": state if state == "healthy" else f"{state}: {err or '?'}", "items": None})
+    for it in (fun.get("scan") or [])[:12]:
+        src = str(it.get("source") or "pool")
+        url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{it.get('mint')}" \
+            if "gecko" in src else f"https://api.dexscreener.com/latest/dex/tokens/{it.get('mint')}"
+        hits.append({"at": _iso(fun.get("ts")), "kind": "pool", "source": f"{src} · {it.get('symbol')}",
+                     "url": url, "status": str(it.get("stage") or ""), "items": None})
+    hits = [h for h in hits if h["at"]]
+    hits.sort(key=lambda h: h["at"], reverse=True)
+    now = datetime.now(UTC)
+    hour = (now - timedelta(hours=1)).isoformat()
+    day = (now - timedelta(hours=24)).isoformat()
+    sweeps_24h = _rows(conn, "SELECT COUNT(*) FROM trench_desk_events WHERE event='desk_cycle' AND ts>=?", (day,))
+    pools_24h = _rows(conn, "SELECT payload_json FROM trench_desk_events WHERE event='desk_cycle' AND ts>=?", (day,))
+    ser = fun.get("series") or []
+    gaps = []
+    for a, b in itertools.pairwise(ser):
+        try:
+            gaps.append((datetime.fromisoformat(b["ts"]) - datetime.fromisoformat(a["ts"])).total_seconds())
+        except (TypeError, ValueError, KeyError):
+            continue
+    nxt: dict[str, Any] = {}
+    if fun.get("ts") and gaps:
+        nxt["trench"] = (datetime.fromisoformat(fun["ts"]) + timedelta(seconds=statistics.median(gaps))).isoformat()
+    due = _rows(conn, "SELECT MIN(next_due) FROM news_feed_schedule")
+    if due and due[0][0]:
+        nxt["news"] = _iso(due[0][0])
+    xl = _rows(conn, "SELECT MAX(at) FROM x_ingest_runs")
+    if xl and xl[0][0]:
+        nxt["x"] = (datetime.fromisoformat(_iso(xl[0][0])) + timedelta(minutes=30)).isoformat()
+    return {"hits": hits[:limit],
+            "counters": {"fetches_1h": sum(1 for h in hits if h["at"] >= hour),
+                         "sources": len({h["source"] for h in hits if h["kind"] != "pool"}),
+                         "sweeps_24h": sweeps_24h[0][0] if sweeps_24h else 0,
+                         "pools_24h": sum(int(_j(p).get("pools_seen") or 0) for (p,) in pools_24h),
+                         "sweep_interval_s": round(statistics.median(gaps)) if gaps else None},
+            "next": nxt}
+
+
 def build_room_v7(db_path: str, *, since_id: int = 0, fetch: bool = True,
                   env: dict[str, str] | None = None) -> dict[str, Any]:
     t0 = time.time()
@@ -307,6 +397,7 @@ def build_room_v7(db_path: str, *, since_id: int = 0, fetch: bool = True,
                            "chief": {"last": None, "waiting_on": "no database yet"},
                            "equity": {"real": [], "paper": [], "guard": None},
                            "news": {"articles_per_min": None, "sources": []},
+                           "crawl": {"hits": [], "counters": {}, "next": {}},
                            "stripe": stripe_panel(env) if fetch else {"status": "not_fetched"}}
     if Path(db_path).exists():
         conn = _ro(db_path)
@@ -316,6 +407,7 @@ def build_room_v7(db_path: str, *, since_id: int = 0, fetch: bool = True,
             out["chief"] = chief_state(conn, out["funnel"])
             out["equity"] = equity_curve(conn)
             out["news"] = news_rate(conn)
+            out["crawl"] = crawl_feed(conn, out["funnel"])
         finally:
             conn.close()
     out["regime"] = regime(out["funnel"], px)

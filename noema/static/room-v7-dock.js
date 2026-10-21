@@ -4,7 +4,7 @@
  * renderers keep updating them by id; on a larger screen they are put back. */
 (()=>{"use strict";
 const q=s=>document.querySelector(s),byId=id=>document.getElementById(id);
-const TABS=[["news","NEWS",()=>q(".center-top>.wire")],["x","X WIRE",()=>q(".center-top>.xw")],
+const TABS=[["news","NEWS",()=>q(".wire")],["x","X WIRE",()=>q(".xw")],
  ["culture","CULTURE · ALPHA",()=>q(".culture-row")],["pm","PREDICTION",()=>byId("pm")&&byId("pm").closest(".pnl")],
  ["money","TREASURY · SAFETY",()=>q(".right")],["acc","ACCURACY · HEALTH",()=>byId("acc")&&byId("acc").closest(".pnl")],
  ["strat","STRATEGIES",()=>byId("strat-pnl")]];
