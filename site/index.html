@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="description" content="TEV · NOEMA — a self-hosted, fail-closed multi-agent trading terminal for Kalshi, Polymarket US, Solana and EVM. Crawler trading rooms, a news crawler, and accuracy-scored forecasting. Paper mode; results not yet proven." />
+    <meta name="description" content="TEV Bot Trading Terminal — a self-hosted, fail-closed multi-agent trading terminal for Kalshi, Polymarket US, Solana and EVM. Crawler trading rooms, a news crawler, and accuracy-scored forecasting. Paper mode; results not yet proven." />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'" />
     <meta name="theme-color" content="#05060d" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="TEV · NOEMA Trading Terminal" />
+    <meta property="og:title" content="TEV Bot Trading Terminal" />
     <meta property="og:description" content="Fail-closed multi-agent trading terminal: crawler trading rooms, news crawler, accuracy-scored forecasting. Paper mode — not yet proven." />
     <meta property="og:url" content="https://gryszzz.github.io/TEV-Bot-Trading-Terminal/" />
     <meta property="og:image" content="https://gryszzz.github.io/TEV-Bot-Trading-Terminal/og.png" />
@@ -15,7 +15,7 @@
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://gryszzz.github.io/TEV-Bot-Trading-Terminal/og.png" />
-    <title>TEV · NOEMA Trading Terminal</title>
+    <title>TEV Bot Trading Terminal</title>
     <link rel="icon" href="./favicon.ico" sizes="any" />
     <link rel="icon" href="./img/tev-logo.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./tev-180.png" />
@@ -26,7 +26,7 @@
     <canvas id="grid" aria-hidden="true"></canvas>
     <a class="skip" href="#main">Skip to content</a>
     <header class="masthead">
-      <a href="#top" class="brand" aria-label="TEV home"><img src="./img/tev-logo.svg" alt="" width="34" height="34" /><strong>TEV</strong><span>NOEMA TRADING TERMINAL</span></a>
+      <a href="#top" class="brand" aria-label="TEV home"><img src="./img/tev-logo.svg" alt="" width="34" height="34" /><strong>TEV</strong><span>BOT TRADING TERMINAL</span></a>
       <nav aria-label="Primary">
         <a href="#capabilities">Capabilities</a><a href="#safety">Safety</a><a href="#gallery">Room</a><a href="#architecture">Architecture</a><a href="#roadmap">Roadmap</a><a class="cta" href="https://github.com/gryszzz/TEV-Bot-Trading-Terminal">GitHub ↗</a>
       </nav>
@@ -35,9 +35,9 @@
       <section class="hero" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
           <div class="status-strip"><span class="pill ok"><i></i>PAPER MODE</span><span class="pill">AUTONOMY · SHADOW</span><span class="pill bad">LIVE FLAGS · ALL OFF</span></div>
-          <h1 id="hero-title"><span class="glitch" data-text="TEV">TEV</span><small>Observe. Infer. Verify. Act.</small></h1>
-          <p class="lede">A self-hosted, multi-agent trading terminal built on <strong>NOEMA</strong>. Crawlers sweep Kalshi, Polymarket US and on-chain markets; specialist agents forecast; every forecast is scored; and nothing touches real money unless a fail-closed gateway, a capital guard and the owner all say yes.</p>
-          <p class="honest">Honest status: TEV runs in paper mode. No NOEMA model beats the market baseline yet, and no profit has been demonstrated.</p>
+          <h1 id="hero-title"><span class="glitch" data-text="TEV">TEV</span><small>Bot Trading Terminal</small></h1>
+          <p class="lede"><strong>TEV Bot Trading Terminal</strong> is a self-hosted, multi-agent trading terminal running on the NOEMA agent runtime. Crawlers sweep Kalshi, Polymarket US and on-chain markets; specialist agents forecast; every forecast is scored; and nothing touches real money unless a fail-closed gateway, a capital guard and the owner all say yes.</p>
+          <p class="honest">Honest status: TEV runs in paper mode. No agent beats the market baseline yet, and no profit has been demonstrated.</p>
           <div class="actions"><a class="btn primary" href="https://github.com/gryszzz/TEV-Bot-Trading-Terminal">View the repo ↗</a><a class="btn" href="#gallery">See the trading room</a></div>
         </div>
         <figure class="hero-art"><img src="./img/tev-logo.svg" alt="TEV logo" width="320" height="320" /><div class="ring"></div><div class="ring r2"></div></figure>
@@ -49,12 +49,13 @@
         <p class="eyebrow">01 / WHAT IT DOES</p>
         <h2>Rooms of crawlers. Desks of agents. One judge.</h2>
         <div class="cards">
-          <article class="card c1"><h3>Crawler trading rooms</h3><p>Live sweeps of Solana DEX pools (GeckoTerminal, DexScreener, pump.fun new pairs), Kalshi and Polymarket US. Candidates flow through filters → holders → judge → entry in a visible funnel, with per-source health.</p></article>
-          <article class="card c2"><h3>News &amp; evidence crawler</h3><p>Primary sources first: BBC, NPR, the Fed, SEC press, CourtListener, GDELT, government data releases, Congress and the Federal Register. robots.txt respected, crawled text treated as untrusted with prompt-injection redaction, articles matched to open markets by category and resolution criteria.</p></article>
-          <article class="card c3"><h3>Multi-agent forecasting</h3><p>Specialist agents (baselines, risk, fills, tape, floor, vet) propose; TEV JUDGE self-checks and skips when its samples disagree; CHIEF can veto. Every resolved forecast feeds a ledger of Brier score, log loss, calibration and EV per agent.</p></article>
-          <article class="card c4"><h3>Accuracy-weighted influence</h3><p>CHIEF weights agents by sample size × measured skill. Agents that stay out of bounds after 30 resolved forecasts are benched. Post-trade reviews write lessons back.</p></article>
-          <article class="card c5"><h3>Four desks</h3><ul class="desks"><li><b>Kalshi</b> regulated event contracts</li><li><b>Polymarket US</b> prediction markets</li><li><b>Solana</b> Jupiter swaps via a separate signer</li><li><b>EVM</b> KyberSwap on Ethereum, Base, Polygon</li></ul></article>
-          <article class="card c6"><h3>Self-hosted</h3><p>Runs on your own box with a private, password-protected TEV dashboard and a native Mac app. No cloud custody; keys live only in a separate signer process, never in logs or model context.</p></article>
+          <article class="card c1"><h3>TEV v6 trading room</h3><p>A live neon room: agent wall, crawler bay with a filters → holders → judge → entry funnel, decision stream, prediction-market board, news wire, treasury, autonomy &amp; safety panel and per-source system health.</p></article>
+          <article class="card c2"><h3>News crawler v2</h3><p>29 configured feeds, primary sources first: White House, Federal Register, Congress.gov, GovInfo, Fed, SEC, DOJ, CDC, NOAA Hurricane Center, ECB, Bank of England, CourtListener, plus BBC, NPR, Guardian, Al Jazeera, CNBC, Politico, The Hill and GDELT. Targeted searches for the soonest-closing markets, 5-minute cadence, robots.txt respected, crawled text treated as untrusted.</p><p class="metric">Matching precision: 15/16 hand-labelled links (≈94%), up from 25%. A small sample.</p></article>
+          <article class="card c3"><h3>Accuracy engine</h3><p>Every forecast goes into a ledger before its outcome. Resolved forecasts are scored per agent: Brier score, log loss, calibration and EV. CHIEF weights each agent by sample size × measured skill, agents still out of bounds after 30 resolved forecasts are benched, and TEV JUDGE skips when its own samples disagree.</p></article>
+          <article class="card c4"><h3>Capital guard + equity feed</h3><p>75% rising floor, 10% daily stop, 3 / 5 / 8% edge-scaled sizing with quarter Kelly. A read-only equity feed totals Kalshi, Polymarket US, Solana and EVM balances every 5 minutes. Any failed source marks the reading stale and blocks trading, and deposits raise the floor instead of counting as profit.</p></article>
+          <article class="card c5"><h3>Desks &amp; venues</h3><ul class="desks"><li><b>Kalshi</b> markets + account, gated live orders</li><li><b>Polymarket US</b> markets + gated live adapter (off)</li><li><b>Solana</b> trench crawler, paper desks; Jupiter signer merged, ships disabled</li><li><b>EVM</b> KyberSwap signer for ETH/Base/Polygon, merged, ships disabled</li></ul></article>
+          <article class="card c6"><h3>TEV Mac app</h3><p>A native macOS app with the TEV logo opens the private, password-protected dashboard from your Dock. Self-hosted: keys live only in a separate signer process, never in logs or model context.</p></article>
+          <article class="card c7 soon"><h3>X / social signal feed <em>coming</em></h3><p>In progress. The SOCIAL seat is a research-only placeholder today and does not influence trades.</p></article>
         </div>
       </section>
 
@@ -135,19 +136,20 @@
         <p class="eyebrow">06 / ROADMAP</p>
         <h2>Prove it on paper, then earn the right to trade.</h2>
         <ol class="roadmap">
-          <li class="done"><b>Shipped</b>TEV v6 trading room, news crawler v2, accuracy engine, capital guard, read-only equity feed, Solana &amp; EVM signers (disabled), Mac app.</li>
-          <li class="now"><b>Now</b>Build a scored paper track record: 30 resolved forecasts per desk, focused on news-driven Kalshi and Polymarket markets.</li>
-          <li><b>Next</b>Beat the market baseline on calibration. Only then: small owner-approved funding with the floor, daily stop and SOL/ETH/USDC starter allowlist.</li>
-          <li><b>Later</b>Scale sizing tiers (5%, 8%) only on 100+ / 200+ resolved forecasts that beat the market. Memecoin desks stay paper until they show positive EV after costs.</li>
+          <li class="done"><b>Shipped</b>TEV v6 trading room · accuracy engine · news crawler v2 · capital guard · read-only equity feed · Solana &amp; EVM swap signers (ship disabled) · TEV Mac app.</li>
+          <li class="now"><b>Now</b>Build a scored paper track record, focused on news-driven Kalshi and Polymarket US markets, toward 30 resolved forecasts per agent.</li>
+          <li><b>Coming</b>X / social signal feed, treated as untrusted evidence like the news crawler.</li>
+          <li><b>Next</b>Beat the market baseline on calibration. Only then: small owner-approved funding with the floor, daily stop and a SOL/ETH/USDC starter allowlist.</li>
+          <li><b>Later</b>Scale to 5% and 8% sizing only after 100+ / 200+ resolved forecasts that beat the market. Memecoin desks stay paper until they show positive EV after costs.</li>
         </ol>
       </section>
 
       <section class="section start">
-        <img src="./img/tev-banner.svg" alt="TEV // NOEMA trading terminal banner" width="1600" height="420" loading="lazy" />
+        <img src="./img/tev-banner.svg" alt="TEV Bot Trading Terminal banner" width="1600" height="420" loading="lazy" />
         <div class="actions"><a class="btn primary" href="https://github.com/gryszzz/TEV-Bot-Trading-Terminal">github.com/gryszzz/TEV-Bot-Trading-Terminal ↗</a><a class="btn" href="https://github.com/gryszzz/TEV-Bot-Trading-Terminal/blob/main/docs/capital-guard.md">Capital guard docs</a></div>
         <p class="annotation">Not financial advice. Trading prediction markets and tokens can lose money. TEV makes no performance claims.</p>
       </section>
     </main>
-    <footer>TEV · NOEMA — self-hosted, fail-closed, paper-first.</footer>
+    <footer>TEV Bot Trading Terminal · self-hosted, fail-closed, paper-first.</footer>
   </body>
 </html>
