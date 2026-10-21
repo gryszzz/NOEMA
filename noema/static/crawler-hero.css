@@ -1,0 +1,84 @@
+/* TEV CRAWLER hero bay + big-screen layout. Loaded last. */
+.center-top>.bay.ch-retired{display:none!important}
+#ch{display:flex;flex-direction:column;gap:6px;padding:6px;min-height:0;flex:1 1 auto;grid-column:1/-1}
+.ch-hud{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.ch-title{display:flex;align-items:baseline;gap:12px;min-width:0;flex:1 1 320px}
+.ch-title b{font-size:30px;letter-spacing:10px;font-weight:900;color:#fff;text-shadow:0 0 14px #27e7ff,0 0 32px rgba(39,231,255,.55)}
+#ch-state{font-size:12px;letter-spacing:1px;padding:2px 8px;border:1px solid;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#ch-state.live{color:#39ff9c;border-color:#39ff9c;animation:chblink 1.2s infinite}
+#ch-state.idle{color:#ffd23f;border-color:#6a5a1a}
+@keyframes chblink{50%{box-shadow:0 0 12px rgba(57,255,156,.6)}}
+.ch-ctr{display:grid;grid-template-columns:repeat(8,minmax(0,auto));gap:4px}
+.ch-ctr div{border:1px solid #1d5a7a;background:#03101a;padding:2px 8px;text-align:center;min-width:0}
+.ch-ctr span{display:block;font-size:8.5px;letter-spacing:1.5px;color:var(--d);white-space:nowrap}
+.ch-ctr b{font-size:16px;color:#fff;text-shadow:0 0 8px var(--c)}
+.ch-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(150px,.7fr) minmax(0,1.5fr) minmax(0,1.5fr);gap:6px}
+.ch-radar{position:relative;border:1px solid #1d5a7a;background:radial-gradient(circle,#04261a,#02070d 70%);min-height:0;display:flex;flex-direction:column}
+.ch-radar canvas{flex:1;min-height:0;width:100%}
+.ch-legend{display:flex;flex-wrap:wrap;gap:2px 8px;padding:3px 5px;font-size:8.5px;letter-spacing:1px}
+.ch-legend span{color:var(--c)}.ch-legend span:before{content:"●";margin-right:3px}
+.ch-stage{position:relative;min-height:0;display:flex}
+.ch-stage>#v7-scan{flex:1;min-height:0}
+.ch-stage .v7c{grid-template-columns:minmax(0,1fr) 140px!important;right:78px!important}
+.ch-stage .v7c .sy{font-size:26px}
+.ch-stage .v7c .stp{right:150px!important;font-size:26px}
+.ch-feed{border:1px solid #1d5a7a;background:#020a10;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.ch-fh{display:flex;gap:8px;padding:3px 6px;font-size:10px;color:var(--d);border-bottom:1px solid var(--ln)}.ch-fh b{color:var(--c);letter-spacing:2px}
+.ch-rows{flex:1;min-height:0;overflow:auto;font-size:10.5px}
+.ch-r{display:grid;grid-template-columns:44px 74px minmax(0,.8fr) minmax(0,1.6fr) auto;gap:6px;padding:2px 6px;border-bottom:1px solid #071823;align-items:center;white-space:nowrap}
+.ch-r>*{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ch-r time{color:var(--d);text-align:right}
+.ch-r i{font-style:normal;color:var(--c);border:1px solid var(--c);font-size:8.5px;letter-spacing:1px;text-align:center;padding:0 3px}
+.ch-r .src{color:#fff}.ch-r .u{color:var(--g)}.ch-r em{font-style:normal;color:var(--d)}.ch-r em.bad{color:var(--r)}
+.ch-r.new{animation:chnew 1.6s ease-out}
+@keyframes chnew{0%{background:rgba(57,255,156,.35);transform:translateX(-30px);opacity:0}25%{transform:none;opacity:1}100%{background:transparent}}
+.ch-srcs{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:4px}
+.ch-srcs div{border:1px solid var(--ln);padding:2px 6px;display:flex;gap:5px;align-items:center;font-size:9.5px;min-width:0;white-space:nowrap;overflow:hidden}
+.ch-srcs b{letter-spacing:1px;overflow:hidden;text-overflow:ellipsis}.ch-srcs span{color:var(--d);margin-left:auto}
+.ch-srcs i{width:7px;height:7px;border-radius:50%;flex:none;background:#333}
+.ch-srcs .on i{background:#39ff9c;box-shadow:0 0 8px #39ff9c;animation:chblink 1.2s infinite}.ch-srcs .on{border-color:#1d6a4a}
+.ch-srcs .stale i{background:#ffd23f}.ch-srcs .none{opacity:.5}
+/* the hero owns the whole centre-top panel */
+.center-top{display:flex!important;flex-direction:column}
+.center-top>#chain{flex:0 0 auto}
+/* full-size layout (any screen the laptop dock does not take): 4 columns so nothing is hidden */
+body:not(.v7-laptop) .app{grid-template-columns:minmax(260px,.85fr) minmax(0,2.3fr) minmax(300px,1fr) minmax(300px,1fr)!important;
+ grid-template-rows:44px 24px 30px minmax(0,1.9fr) minmax(0,1fr) minmax(0,.8fr)!important}
+body:not(.v7-laptop) .app>header,body:not(.v7-laptop) #v7-tape,body:not(.v7-laptop) #v7-pulse{grid-column:1/-1!important}
+body:not(.v7-laptop) .center-top{grid-column:2!important;grid-row:4!important}
+body:not(.v7-laptop) .center-bot{grid-column:2!important;grid-row:5!important}
+body:not(.v7-laptop) #ch-wires{grid-column:3;grid-row:4/6;display:flex;flex-direction:column;gap:6px;min-height:0}
+body:not(.v7-laptop) #ch-wires>*{flex:1 1 0;min-height:0;overflow:auto;border:1px solid var(--ln);background:var(--p);padding:4px}
+body:not(.v7-laptop) #ch-wires .cards,body:not(.v7-laptop) #ch-wires .xcards{grid-template-columns:1fr!important;height:auto!important;max-height:none!important}
+body:not(.v7-laptop) #ch-wires .cards>*,body:not(.v7-laptop) #ch-wires .xcards>*{display:flex!important}
+body:not(.v7-laptop) .right{grid-column:4!important;grid-row:4/7!important;overflow-y:auto}
+body:not(.v7-laptop) .culture-row{grid-column:2/4!important;grid-row:6!important}
+body.v7-laptop #ch-wires{display:none}
+/* laptop: give the hero more of the centre column */
+body.v7-laptop .app{grid-template-rows:44px 24px 30px minmax(0,1.7fr) minmax(0,1fr)!important}
+body.v7-laptop .ch-ctr{grid-template-columns:repeat(4,minmax(0,auto))}
+body.v7-laptop .ch-title b{font-size:22px;letter-spacing:6px}
+body.v7-laptop .ch-main{grid-template-columns:minmax(120px,.55fr) minmax(0,1.5fr) minmax(0,1.3fr)}
+body.v7-laptop .ch-srcs{grid-template-columns:repeat(5,minmax(0,1fr))}
+body.v7-laptop .ch-r{grid-template-columns:38px 62px minmax(0,1fr) auto}
+body.v7-laptop .ch-r .u{display:none}
+/* overlays and tooltips never leave the viewport */
+#v7-keys>div{max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto}
+/* laptop tuning: hero gets ~70% of the centre column */
+body.v7-laptop .app{grid-template-rows:44px 24px 30px minmax(0,2.6fr) minmax(0,1fr)!important}
+body.v7-laptop .ch-hud{flex-wrap:wrap}
+body.v7-laptop .ch-title{flex:1 1 100%}
+body.v7-laptop .ch-ctr{flex:1 1 100%;grid-template-columns:repeat(8,minmax(0,1fr))}
+body.v7-laptop .ch-ctr b{font-size:14px}
+body.v7-laptop .ch-main{grid-template-columns:minmax(110px,.5fr) minmax(0,1.6fr) minmax(0,1.1fr)}
+body.v7-laptop .ch-stage .v7c{grid-template-columns:minmax(0,1fr) 112px!important;right:70px!important}
+body.v7-laptop .ch-stage .v7c .stp{right:120px!important;font-size:20px}
+body.v7-laptop .ch-stage .v7c .sy{font-size:20px}
+body.v7-laptop .center-top .v7f .rj{max-height:40px;overflow:hidden}
+.ch-stage .v7c{grid-template-rows:auto minmax(0,1fr)!important;overflow:hidden}
+.ch-stage .v7c>div:first-child{min-width:0;overflow:hidden}
+.ch-stage .v7c .mt{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:1px 8px}
+.ch-stage .v7c .mt span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-stage .v7c .sy{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-stage .judge{width:52px!important;right:4px!important}
+body.v7-laptop .ch-stage .v7c{right:60px!important}

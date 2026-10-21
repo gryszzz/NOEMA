@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -1120,9 +1121,35 @@ async def room_v7(since: int = 0) -> dict[str, Any]:
     return await asyncio.to_thread(build_room_v7, _db_path(), since_id=max(0, since))
 
 
+_STATIC_DIR = Path(__file__).with_name("static")
+_ASSET_REF = re.compile(r'(/static/[\w./-]+\.(?:js|css|mjs))(?:\?v=[\w]+)?"')
+
+
+def versioned_assets(html: str, static_dir: Path = _STATIC_DIR) -> str:
+    """Append ?v=<content hash> to every /static js/css reference so a WKWebView or browser
+    cache can never keep serving an old room script after a deploy."""
+    def sub(m: Any) -> str:
+        f = static_dir / m.group(1)[len("/static/"):]
+        try:
+            v = hashlib.sha256(f.read_bytes()).hexdigest()[:10]
+        except OSError:
+            return m.group(0)
+        return f'{m.group(1)}?v={v}"'
+    return _ASSET_REF.sub(sub, html)
+
+
+@app.middleware("http")
+async def _no_stale_room_assets(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith(("/static/", "/trading-room")) or path == "/api/room-v7":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 @app.get("/trading-room", response_class=HTMLResponse)
 async def trading_room_page() -> str:
-    return (Path(__file__).with_name("static") / "trading-room-v6.html").read_text()
+    return versioned_assets((_STATIC_DIR / "trading-room-v6.html").read_text())
 
 
 @app.get("/trading-room-v5", response_class=HTMLResponse)

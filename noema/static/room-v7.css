@@ -104,3 +104,6 @@
 .center-top .wire .cards>:nth-child(n+3),.center-top .xcards>:nth-child(n+3){display:none}
 .center-top .xfx{display:none}
 }
+/* card flips in like a terminal tile when a new real pool is scanned */
+.v7c{transform:translateX(-110%) rotateY(70deg)}.v7c.in{transform:translateX(0) rotateY(0)}
+#v7-scan{perspective:900px}
