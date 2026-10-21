@@ -1,7 +1,7 @@
 /* TEV room v7 overlay: modular add-on to trading-room-v6.html. Real data only. */
-.app{grid-template-rows:44px 24px 30px minmax(0,1.6fr) minmax(0,1fr)!important}
+.app{grid-template-rows:44px 24px 30px minmax(0,1.6fr) minmax(0,1fr) minmax(0,.95fr)!important}
 #v7-tape{grid-row:2}#v7-pulse{grid-row:3}
-.left{grid-row:4/6!important}.center-top{grid-row:4!important}.center-bot{grid-row:5!important}
+.left{grid-row:4/7!important}.culture-row{grid-row:6!important}.center-top{grid-row:4!important}.center-bot{grid-row:5!important}
 .right{grid-row:4/6!important;display:flex!important;flex-direction:column;overflow-y:auto}
 .right>.pnl{flex:0 0 auto}
 @media (max-width:1100px){#v7-tape,#v7-pulse{min-height:26px}}
@@ -95,3 +95,12 @@
 .center-top .xcards{max-height:96px;overflow:hidden}.center-top .xfx{max-height:60px;overflow:hidden}
 .center-top .wire .cards{max-height:120px;overflow:hidden}
 #chain.chain{flex:0 0 auto}
+/* fit news + X wires side by side under the scan lane and funnel */
+@media (min-width:1101px){
+.center-top{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(140px,1fr) auto minmax(0,1.15fr)}
+.center-top>h2,.center-top>.bay,.center-top>#chain{grid-column:1/-1}
+.center-top>.wire,.center-top>.xw{min-height:0;overflow:hidden}
+.center-top .wire .cards,.center-top .xcards{grid-template-columns:1fr!important;max-height:none}
+.center-top .wire .cards>:nth-child(n+3),.center-top .xcards>:nth-child(n+3){display:none}
+.center-top .xfx{display:none}
+}

@@ -80,3 +80,11 @@ def test_room_v7_route_and_assets(tmp_path, monkeypatch):
     assert r.status_code == 200 and r.json()["funnel"]["latest"]["crawled"] == 10
     assert client.get("/static/room-v7.js").status_code == 200
     assert "/static/room-v7.js" in client.get("/trading-room").text
+
+
+def test_v7_grid_accounts_for_every_v6_row():
+    from pathlib import Path
+    css = (Path(__file__).parents[1] / "noema" / "static" / "room-v7.css").read_text()
+    html = (Path(__file__).parents[1] / "noema" / "static" / "trading-room-v6.html").read_text()
+    if "culture-row" in html:
+        assert ".culture-row{grid-row:6!important}" in css and ".left{grid-row:4/7!important}" in css
