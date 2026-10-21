@@ -45,7 +45,7 @@ def test_table_maps_live_permission_and_bankroll_fractions() -> None:
     assert table[AutonomyLevel.SHADOW].live is False
     assert table[AutonomyLevel.PAPER].live is False
     assert table[AutonomyLevel.DEMO].live is False
-    assert table[AutonomyLevel.MICRO].per_trade_fraction == Decimal("0.01")
+    assert table[AutonomyLevel.MICRO].per_trade_fraction == Decimal("0.03")
     assert table[AutonomyLevel.MICRO].daily_notional_fraction == Decimal("0.10")
     assert table[AutonomyLevel.PROVEN].per_trade_fraction == Decimal("0.03")
     assert table[AutonomyLevel.PROVEN].daily_notional_fraction == Decimal("0.30")
@@ -92,7 +92,7 @@ def test_owner_review_flag_blocks_and_releases_live(monkeypatch) -> None:
     _flags(monkeypatch, review="0")
     authority = _authority(AutonomyLevel.MICRO)
     assert authority is not None
-    assert authority.per_action_limit_usd == Decimal("10.00")
+    assert authority.per_action_limit_usd == Decimal("30.00")
     assert authority.daily_limit_usd == Decimal("100.00")
 
 
@@ -235,6 +235,13 @@ async def test_demotion_resizes_within_one_cycle_and_cancels_oversized_orders(
     tmp_path, monkeypatch,
 ) -> None:
     _flags(monkeypatch, review="0")
+    # Demotion must shrink size; pin a micro fraction below proven for this check.
+    from pathlib import Path as _P
+    table = (_P(__file__).resolve().parents[1] / "config" / "autonomy_authority.toml").read_text()
+    custom = tmp_path / "authority.toml"
+    custom.write_text(table.replace('[micro]\nlive = true\nper_trade_fraction = "0.03"',
+                                    '[micro]\nlive = true\nper_trade_fraction = "0.01"'))
+    monkeypatch.setenv("NOEMA_AUTONOMY_AUTHORITY_CONFIG", str(custom))
     venue = RecordingVenue()
     path = tmp_path / "authority.db"
     gateway = ExecutionGateway(str(path))

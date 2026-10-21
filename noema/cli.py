@@ -370,6 +370,15 @@ def main() -> None:
 
     accuracy_show = sub.add_parser("accuracy-show")
     accuracy_show.add_argument("--db", default="data/noema.db")
+    guard_show = sub.add_parser("capital-guard-show")
+    guard_show.add_argument("--db", default="data/noema.db")
+    guard_record = sub.add_parser("capital-guard-record")
+    guard_record.add_argument("--db", default="data/noema.db")
+    guard_record.add_argument("--equity", required=True)
+    guard_record.add_argument("--deposit", default="0")
+    guard_reset = sub.add_parser("capital-guard-reset")
+    guard_reset.add_argument("--db", default="data/noema.db")
+    guard_reset.add_argument("--confirm", required=True)
     accuracy_backtest = sub.add_parser("accuracy-backtest")
     accuracy_backtest.add_argument("--db", default="data/accuracy-backtest.db")
     accuracy_backtest.add_argument("--cache", default="data/accuracy-cache")
@@ -504,6 +513,21 @@ def main() -> None:
         _knowledge_show(args.db)
     elif args.command == "accuracy-show":
         print(json.dumps(build_accuracy_report(args.db), sort_keys=True))
+    elif args.command in {"capital-guard-show", "capital-guard-record", "capital-guard-reset"}:
+        from .capital_guard import CapitalGuard
+
+        guard = CapitalGuard(args.db)
+        if args.command == "capital-guard-record":
+            guard.record_equity(args.equity, deposit_usd=args.deposit)
+        elif args.command == "capital-guard-reset":
+            guard.owner_reset(confirm=args.confirm)
+        state = guard.state()
+        print(json.dumps(None if state is None else {
+            "equity": str(state.equity), "peak_equity": str(state.peak_equity),
+            "floor": str(state.floor), "day_start_equity": str(state.day_start_equity),
+            "tripped": state.tripped, "trip_reason": state.trip_reason,
+            "updated_at": state.updated_at.isoformat(),
+        }, sort_keys=True))
     elif args.command == "accuracy-backtest":
         print(json.dumps(asyncio.run(run_accuracy_backtest(args.db, args.cache)), sort_keys=True))
     elif args.command == "knowledge-refresh":

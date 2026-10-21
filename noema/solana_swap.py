@@ -614,6 +614,15 @@ def perform_jupiter_swap(request: dict[str, Any], keypair: Any, *,
             or configured != EXPECTED_SOLANA_SIGNER_ADDRESS):
         raise RuntimeError("configured solana wallet does not match signer keypair")
     per_trade, daily_cap = resolve_usd_caps()
+    from .capital_guard import CapitalGuard
+
+    guard = CapitalGuard()
+    guard_reasons = guard.block_reasons()
+    if guard_reasons:
+        raise RuntimeError("capital guard refused the swap: " + "; ".join(guard_reasons))
+    per_trade = min(per_trade, guard.max_trade_usd(tier=None))
+    if per_trade <= 0:
+        raise RuntimeError("capital guard refused the swap: no per-trade headroom")
     price = _env_decimal("NOEMA_SOLANA_PRICE_USD")
     if price is None:
         raise RuntimeError("solana price is not configured")

@@ -433,7 +433,16 @@ class ExecutionGateway:
             reasons.append("wallet master halt is active")
         if not getattr(intent, "mission_id", None) or not tuple(getattr(intent, "evidence_ids", ()) or ()):
             reasons.append("dex swap requires a mission and evidence references")
+        reasons.extend(self._capital_guard_reasons(getattr(intent, "notional_usd", None)))
         return reasons
+
+    def _capital_guard_reasons(self, notional: Any) -> list[str]:
+        from .capital_guard import CapitalGuard
+
+        try:
+            return CapitalGuard(self.db_path).block_reasons(notional)
+        except Exception:  # noqa: BLE001 - any guard failure must fail closed
+            return ["capital guard could not be evaluated"]
 
     def submit_dex_swap(self, *, intent: Any, handler: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """Synchronous dex_swap tier used by trench desks. The handler performs the swap."""
@@ -505,6 +514,7 @@ class ExecutionGateway:
             reasons.append("owner live-order setting is disabled")
         if os.getenv("NOEMA_MASTER_HALT", "0") == "1":
             reasons.append("owner master halt is active")
+        reasons.extend(self._capital_guard_reasons(proposal.notional_usd))
         authority = self._resolve_authority(proposal.mission_id)
         cap = self._owner_daily_notional_cap(authority)
         if cap is None or cap <= 0:

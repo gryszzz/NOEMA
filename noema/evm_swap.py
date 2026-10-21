@@ -90,6 +90,15 @@ def perform_evm_swap(request: dict[str, Any], account: Any, *,
     address = _require_signer(account)
     price = _native_price(chain.name)
     per_trade, daily_cap = resolve_usd_caps()
+    from .capital_guard import CapitalGuard
+
+    guard = CapitalGuard()
+    guard_reasons = guard.block_reasons()
+    if guard_reasons:
+        raise RuntimeError("capital guard refused the swap: " + "; ".join(guard_reasons))
+    per_trade = min(per_trade, guard.max_trade_usd(tier=None))
+    if per_trade <= 0:
+        raise RuntimeError("capital guard refused the swap: no per-trade headroom")
     rpc_url = _rpc_url(chain)
     aggregator = _endpoint(
         os.getenv("NOEMA_KYBERSWAP_API_URL", ""), DEFAULT_AGGREGATOR_URL,
