@@ -316,3 +316,11 @@ def test_api_route_and_panel_module(tmp_path, monkeypatch):
     assert r.status_code == 200 and r.json()["role"].startswith("evidence only")
     js = Path("noema/static/x-edge-panel.js").read_text(encoding="utf-8")
     assert "TEVXEdge" in js and "innerHTML" not in js and "/api/x-signal" in js
+
+
+def test_room_x_module_wired_and_safe():
+    from pathlib import Path
+    page = Path("noema/static/trading-room-v6.html").read_text(encoding="utf-8")
+    assert "/static/room-v7-x.js" in page and "/static/room-v7-x.css" in page
+    js = Path("noema/static/room-v7-x.js").read_text(encoding="utf-8")
+    assert "innerHTML" not in js and "/api/x-signal" in js and "noopener" in js
