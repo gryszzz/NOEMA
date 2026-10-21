@@ -840,6 +840,7 @@ def run_cycle(conn: sqlite3.Connection, *, client: Any = None, now: datetime | N
     sigs += news_latency_signals(conn, quotes, now)
     sigs += fav_longshot_signals(quotes, bt, rows, now)
     prices: dict[str, float] = {}
+    conn.commit()  # never hold the shared DB write lock across network calls
     if fetch:
         import httpx
         own = client is None
@@ -894,6 +895,7 @@ def _smart_money_fetch(conn: sqlite3.Connection, c: Any, now: datetime, prices: 
             tr = c.get(f"{GT}/networks/{net}/pools/{at.get('address')}/trades")
             time.sleep(pause)
             added += ingest_trades(conn, chain, addr, (tr.json().get("data") or []) if tr.status_code == 200 else [])
+            conn.commit()
         except Exception:  # noqa: BLE001 - one bad token never stops the cycle
             errors += 1
     conn.execute("DELETE FROM wallet_trades WHERE at < ?", ((now - timedelta(days=30)).isoformat(),))
@@ -909,6 +911,7 @@ def _majors(conn: sqlite3.Connection, c: Any, now: datetime, sigs: list[dict[str
             closes = _coinbase_closes(c, f"{sym}-USD")
         except Exception:  # noqa: BLE001
             closes = []
+        conn.commit()
         sig = regime_signal(closes)
         if not sig:
             out[sym] = "no_data"
@@ -984,7 +987,8 @@ def main() -> None:  # pragma: no cover - process entry
     db = os.getenv("NOEMA_DB_PATH", "data/noema.db")
     last_bt = 0.0
     while True:
-        conn = sqlite3.connect(db, timeout=30)
+        conn = sqlite3.connect(db, timeout=60)
+        conn.execute("PRAGMA busy_timeout=60000")
         try:
             heavy = time.time() - last_bt > 3600
             rep = run_cycle(conn, backtest=heavy)
