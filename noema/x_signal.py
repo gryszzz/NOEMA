@@ -385,6 +385,9 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
     cfg = config or load_config()
     classes = account_classes(cfg)
     conn = sqlite3.connect(db_path, timeout=30)
+    # files are archived only after the DB commit: a crash / restart mid-ingest leaves them in the
+    # inbox for the next run instead of losing them (post ids dedupe any partial replay)
+    moves: list[tuple[Path, Path]] = []
     try:
         ensure_x_schema(conn)
         index = index or MarketIndex(watched_markets(conn))
@@ -396,12 +399,12 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
             if why == "counts" and doc is not None:
                 from .x_edge import store_counts
                 stats["count_buckets"] = stats.get("count_buckets", 0) + store_counts(conn, doc["counts"], now)
-                _move(f, archive_p / now.strftime("%Y%m%d"))
+                moves.append((f, archive_p / now.strftime("%Y%m%d")))
                 continue
             if doc is None:
                 stats["rejected"] += 1
                 stats["reasons"][why] = stats["reasons"].get(why, 0) + 1
-                _move(f, archive_p / "rejected")
+                moves.append((f, archive_p / "rejected"))
                 continue
             batches.append((f, doc))
         # coordination signals across the whole batch
@@ -462,7 +465,7 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
                     t = touched.setdefault((m["venue"], m["market_id"]), {
                         "title": m["title"], "topic": topic, "forecast_id": m.get("forecast_id")})
                     t.setdefault("posts", []).append((weight * m["relevance"], sent, pump))
-            _move(f, archive_p / now.strftime("%Y%m%d"))
+            moves.append((f, archive_p / now.strftime("%Y%m%d")))
         prices = latest_prices(conn, set(touched))
         for (venue, mid), t in touched.items():
             ws = t["posts"]
@@ -486,6 +489,8 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
         conn.commit()
     finally:
         conn.close()
+    for f, dest in moves:
+        _move(f, dest)
     return stats
 
 

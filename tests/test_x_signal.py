@@ -130,3 +130,20 @@ def test_missing_inbox_and_wire_without_tables(tmp_path):
     db = _db(tmp_path)
     assert xs.ingest_inbox(db, tmp_path / "nope")["note"] == "inbox missing"
     assert xs.x_wire(db)["status"] == "no data"
+
+
+def test_files_stay_in_inbox_if_ingest_fails(tmp_path, monkeypatch):
+    db, inbox = _db(tmp_path), tmp_path / "inbox"
+    _drop(inbox, "a.json", "politics", [_post(1)])
+
+    def boom(*a, **k):
+        raise RuntimeError("crash mid-ingest")
+    monkeypatch.setattr(xs, "_topic_snapshots", boom)
+    try:
+        xs.ingest_inbox(db, inbox, config=CFG, now=NOW)
+    except RuntimeError:
+        pass
+    assert (inbox / "a.json").exists()
+    monkeypatch.undo()
+    s = xs.ingest_inbox(db, inbox, config=CFG, now=NOW)
+    assert s["posts_new"] == 1 and not (inbox / "a.json").exists()
