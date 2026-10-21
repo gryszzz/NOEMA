@@ -9,7 +9,7 @@ import json
 import os
 import sqlite3
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +129,7 @@ def _autonomy(conn: sqlite3.Connection, desks_pnl: float | None) -> dict[str, An
     days = 0.0
     if first:
         try:
-            st = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+            st = datetime.fromisoformat(str(first))
             st = st if st.tzinfo else st.replace(tzinfo=UTC)
             days = round((datetime.now(UTC) - st).total_seconds() / 86400, 2)
         except ValueError:

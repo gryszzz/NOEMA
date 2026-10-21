@@ -25,6 +25,7 @@ from .account_capital import value_native_wallets
 from .agent_dashboard import build_agent_overview
 from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview, build_provider_health
+from .command_center import build_command_center
 from .config import kalshi_production_read_only_config
 from .console_disk_inventory import build_console_disk_inventory
 from .console_replication import (
@@ -53,15 +54,14 @@ from .prediction_venues import (
     cached_prediction_venue_status,
 )
 from .research_state import research_trial_update_is_newer
+from .room_v4 import build_room_v4
 from .sqlite_diagnostics import sqlite_error_fields
 from .storage_recovery import recover_storage
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
+from .trading_room import build_trading_room
 from .trench_dashboard import build_trench_overview
 from .trench_desks import desk_overview
-from .trading_room import build_trading_room
-from .command_center import build_command_center
-from .room_v4 import build_room_v4
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 

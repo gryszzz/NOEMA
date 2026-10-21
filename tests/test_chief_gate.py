@@ -12,7 +12,9 @@ def test_chief_gate_thresholds():
 
 def test_pool_ohlcv_parses():
     import asyncio
+
     import httpx
+
     from noema.solana_research import GeckoTerminalPoolClient, SlidingWindowRateLimiter
 
     def handler(req):
