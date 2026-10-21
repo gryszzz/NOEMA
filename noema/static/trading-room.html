@@ -220,6 +220,8 @@ function renderCC(d){
     <div class="kv"><span>outcomes known</span><b>${(L.outcomes_known||0).toLocaleString()}</b></div>
     <div class="kv"><span>resolved forecast pairs</span><b>${L.resolved_pairs??0}</b></div>
     ${Object.entries(L.brier||{}).map(([k,v])=>`<div class="kv"><span>Brier ${esc(k)}</span><b>${v.brier} <span style="color:var(--dim)">n=${v.n}</span></b></div>`).join("")||E("no scored forecasts yet")}
+    <div class="kv" style="margin-top:6px"><span>accuracy leaderboard</span><b>${(d.accuracy?.agents||[]).length}</b></div>
+    ${(d.accuracy?.agents||[]).slice(0,8).map(a=>`<div class="kv"><span>${esc(a.agent_id)}${a.benched?" · benched":""}</span><b>${a.brier==null?"—":a.brier} <span style="color:var(--dim)">w=${a.weight} n=${a.sample_size}</span></b></div>`).join("")}
    </div><div><canvas id="calib" height="110"></canvas><div class="empty">calibration: observed vs forecast (n=${(L.calibration||[]).reduce((a,b)=>a+b.n,0)}${(L.resolved_pairs||0)<30?", too few to judge":""})</div></div></div>
    ${tbl((L.recent_resolutions||[]).slice(0,5),[["RESOLVED",r=>esc(r.title||r.market_id)],["MODEL",r=>esc(r.model)],["P",r=>pct(r.p),"n"],["OUT",r=>r.outcome_yes?'<span class="up">YES</span>':'<span class="dn">NO</span>']])}`;
   calib(L.calibration||[]);

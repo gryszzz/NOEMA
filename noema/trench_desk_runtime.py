@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .accuracy_config import AccuracyConfig
+from .accuracy_influence import apply_influence, influences_for
+from .accuracy_ledger import record_forecast, resolve_token_marks
 from .solana_research import (
     DexScreenerTrenchPriceClient,
     GeckoTerminalPoolClient,
@@ -201,6 +204,17 @@ async def run_desk_cycle(
     summary["judgement"] = judge_status
     judged_picks = [j for j in judgements if j.trade]
     picks, chief_log = chief_gate(judged_picks)
+    accuracy = AccuracyConfig.from_env()
+    if accuracy.influence_enabled:
+        weight_conn = sqlite3.connect(db_path, timeout=30)
+        try:
+            weights = influences_for(weight_conn, accuracy)
+        finally:
+            weight_conn.close()
+        picks, chief_log = apply_influence(
+            picks, chief_log, weights, min_probability=CHIEF_MIN_PROBABILITY,
+            base_rate=accuracy.base_rate,
+        )
     summary["chief"] = {"approved": [c["symbol"] for c in chief_log if c["approved"]],
                         "vetoed": [c["symbol"] for c in chief_log if not c["approved"]],
                         "min_probability": CHIEF_MIN_PROBABILITY, "min_confidence": CHIEF_MIN_CONFIDENCE}
@@ -220,6 +234,7 @@ async def run_desk_cycle(
     summary["feed"] = sorted(feed.values(), key=lambda r: (
         ["desk", "chief_veto", "holders", "filters", "rejected"].index(r["stage"]), -r["liquidity_usd"]))[:60]
     by_mint = {c["mint"]: c for c in passed}
+    _record_chief_forecasts(db_path, chief_log, by_mint)
 
     store = TrenchDeskStore(db_path)
     try:
@@ -246,6 +261,15 @@ async def run_desk_cycle(
             if mint not in marks and mint in by_mint:
                 c = by_mint[mint]
                 marks[mint] = Mark(c["price_usd"], c["liquidity_usd"], "geckoterminal")
+        resolve_conn = sqlite3.connect(db_path, timeout=30)
+        try:
+            resolve_token_marks(
+                resolve_conn, {mint: mark.price_usd for mint, mark in marks.items()},
+                now=now, db_path=db_path, config=accuracy,
+            )
+            resolve_conn.commit()
+        finally:
+            resolve_conn.close()
         entries = fired = 0
         for index, desk in enumerate(store.active_desks()):
             engine.manage_positions(desk["desk_id"], marks, now=now)
@@ -294,6 +318,43 @@ def chief_gate(picks: list[Any]) -> tuple[list[Any], list[dict[str, Any]]]:
         if ok:
             approved.append(j)
     return approved, log
+
+
+def _record_chief_forecasts(
+    db_path: str, chief_log: list[dict[str, Any]], by_mint: dict[str, dict[str, Any]],
+) -> None:
+    if not chief_log:
+        return
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        for entry in chief_log:
+            mint = entry.get("mint")
+            probability = entry.get("shrunk_probability", entry.get("probability"))
+            if not isinstance(mint, str) or not isinstance(probability, (int, float)):
+                continue
+            if entry.get("shadow"):
+                decision = "shadow"
+            elif entry.get("approved"):
+                decision = "trade"
+            else:
+                decision = "veto"
+            raw = by_mint.get(mint) or {}
+            price = raw.get("price_usd")
+            confidence = entry.get("confidence")
+            record_forecast(
+                conn, agent_id="chief", venue="solana", market_id=mint,
+                symbol=raw.get("symbol"), predicted_probability=float(probability),
+                confidence=confidence if isinstance(confidence, (int, float)) else None,
+                market_price=float(price) if isinstance(price, (int, float)) else None,
+                reasoning={
+                    "reason": entry.get("reason"), "weight": entry.get("weight"),
+                    "approved": bool(entry.get("approved")),
+                },
+                decision=decision, horizon="1h", metadata={"kind": "token_up"},
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _record_equity_snapshot(db_path: str) -> None:

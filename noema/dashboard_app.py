@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 
 from .account_capital import value_native_wallets
+from .accuracy_api import build_accuracy_report
 from .agent_dashboard import build_agent_overview
 from .autonomy_authority import console_trading_status
 from .bill_tracker import BillTracker
@@ -1021,6 +1022,12 @@ async def ladder() -> dict[str, Any]:
 @app.get("/api/trench-desks")
 async def trench_desks() -> dict[str, Any]:
     return desk_overview(_db_path())
+
+
+@app.get("/api/accuracy")
+async def accuracy() -> dict[str, Any]:
+    """Read-only per-agent Brier, calibration, weight, and bench status."""
+    return await asyncio.to_thread(build_accuracy_report, _db_path())
 
 
 @app.get("/trench-desks", response_class=HTMLResponse)
