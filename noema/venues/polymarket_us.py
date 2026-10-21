@@ -1,8 +1,8 @@
 """Public Polymarket US market-data adapter using the official SDK.
 
-This adapter is intentionally read-only. Authenticated portfolio and trading
-calls are a separate capability and remain unavailable until owner credentials,
-account reconciliation, and deterministic execution policy are configured.
+This adapter is intentionally read-only and never submits orders. Authenticated
+trading lives in ``noema.venues.polymarket_us_trading`` and stays disabled
+unless owner credentials and the existing live-order gates are both present.
 """
 
 from __future__ import annotations

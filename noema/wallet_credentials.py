@@ -159,17 +159,39 @@ def kalshi_key_id_present() -> bool:
     ) != "unavailable"
 
 
+def _polymarket_us_secret_file() -> Path | None:
+    """Return an explicit secret-file path without reading it.
+
+    A configured path wins over ``POLYMARKET_US_SECRET_KEY`` even when the file
+    is missing, so a mounted-file setup cannot silently fall back to another secret.
+    """
+    configured = os.getenv("POLYMARKET_US_SECRET_FILE")
+    if configured is None or not configured.strip():
+        return None
+    return Path(configured.strip()).expanduser()
+
+
+def _polymarket_us_secret_source() -> str:
+    secret_file = _polymarket_us_secret_file()
+    if secret_file is not None:
+        return (
+            "secret_file" if private_key_file_status(secret_file) == "readable"
+            else "secret_file_missing"
+        )
+    return credential_source(
+        "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
+        keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
+    )
+
+
 def polymarket_us_credentials_present() -> tuple[bool, bool]:
-    """Return credential presence without reading Keychain secret material."""
+    """Return credential presence without reading Keychain or secret-file bytes."""
     return (
         credential_source(
             "POLYMARKET_US_KEY_ID", keychain_service=POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
             keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
         ) != "unavailable",
-        credential_source(
-            "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
-            keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
-        ) != "unavailable",
+        _polymarket_us_secret_source() not in {"unavailable", "secret_file_missing"},
     )
 
 
@@ -180,10 +202,7 @@ def polymarket_us_credential_sources() -> dict[str, str]:
             "POLYMARKET_US_KEY_ID", keychain_service=POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
             keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
         ),
-        "secret_key": credential_source(
-            "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
-            keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT,
-        ),
+        "secret_key": _polymarket_us_secret_source(),
     }
 
 
@@ -220,19 +239,34 @@ def load_kalshi_key_id_in_api_boundary() -> str:
     return str(credential.value)
 
 
+def _load_polymarket_us_secret_in_api_boundary() -> str | None:
+    """Read the secret inside the API boundary. Callers must not log the result."""
+    secret_file = _polymarket_us_secret_file()
+    if secret_file is not None:
+        try:
+            secret_text = secret_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            raise RuntimeError("Polymarket US account credentials are unavailable") from None
+        return secret_text or None
+    secret = _resolve_secret(
+        "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
+        keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT, label="Polymarket US API",
+    )
+    if secret is None:
+        return None
+    return str(secret.value)
+
+
 def load_polymarket_us_credentials_in_api_boundary() -> tuple[str, str]:
     """Load credentials only for authenticated Polymarket US requests."""
     key_id = _resolve_secret(
         "POLYMARKET_US_KEY_ID", keychain_service=POLYMARKET_US_KEY_ID_KEYCHAIN_SERVICE,
         keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT, label="Polymarket US API",
     )
-    secret = _resolve_secret(
-        "POLYMARKET_US_SECRET_KEY", keychain_service=POLYMARKET_US_SECRET_KEY_KEYCHAIN_SERVICE,
-        keychain_account=POLYMARKET_US_KEYCHAIN_ACCOUNT, label="Polymarket US API",
-    )
+    secret = _load_polymarket_us_secret_in_api_boundary()
     if key_id is None or secret is None:
         raise RuntimeError("Polymarket US account credentials are unavailable")
-    return str(key_id.value), str(secret.value)
+    return str(key_id.value), secret
 
 
 def _credential_present(service: str, account: str) -> bool:

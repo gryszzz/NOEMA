@@ -54,7 +54,13 @@ state and reservation untouched. Kalshi order submission now uses a stable
 proposal-derived client order ID, and its adapter can look up that exact ID in
 authenticated order pages. A missing Kalshi order is inconclusive because the
 current and historical API views have different retention; it does not prove
-rejection. Polymarket US and wallet-chain reconciliation are not implemented.
+rejection. Polymarket US live routing uses the same stable client order ID.
+The retail create-order API does not accept that field, so the trading adapter
+stores it locally and then reads the venue order. A missing saved venue order
+id is inconclusive and is not resubmitted. Wallet-chain reconciliation is not
+implemented. A known pre-acceptance refusal (`VenueRejected`) is recorded as
+`rejected`. A transport failure (`VenueUnavailable` or any other exception)
+stays `unknown` and keeps its reservation.
 Live preflight now rejects adapters that do not declare authoritative
 reconciliation and accept the stable client order identity.
 
@@ -95,3 +101,11 @@ trading is a separate adapter behind the same venue interface. Wallet sends are 
 as treasury actions and remain blocked unless the separate owner flag and
 existing wallet policy both allow them. This integration used provider-response
 fixtures and sent no live order or chain transaction.
+
+Polymarket US
+now has a trading adapter, and the gateway will call it only when
+`NOEMA_LIVE_VENUES` contains `polymarket_us` and the adapter reports live
+execution, verified book and fee facts, and a current balance, position, and
+open-order read. Those verification flags stay false until
+`prepare_live_execution` succeeds. The default engine also has no prediction
+mission-authority resolver configured.

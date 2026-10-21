@@ -7,6 +7,8 @@ from pathlib import Path
 from .wallet_credentials import (
     kalshi_key_id_present,
     load_kalshi_key_id_in_api_boundary,
+    polymarket_us_credential_sources,
+    polymarket_us_credentials_present,
     private_key_file_status,
     resolve_kalshi_private_key,
 )
@@ -85,6 +87,34 @@ class KalshiConfig:
             private_key_pem=private_key_pem,
             private_key_pem_b64=private_key_pem_b64,
             private_key_source=private_key_source,
+            allow_live_orders=allow_live,
+            master_halt=master_halt,
+        )
+
+
+@dataclass(frozen=True)
+class PolymarketUSTradingConfig:
+    """Live-order switches for Polymarket US. Secret bytes are not stored here."""
+
+    key_id_present: bool = False
+    secret_present: bool = False
+    secret_source: str = "unavailable"
+    allow_live_orders: bool = False
+    master_halt: bool = False
+
+    @property
+    def credentials_configured(self) -> bool:
+        return self.key_id_present and self.secret_present
+
+    @classmethod
+    def from_env(cls) -> PolymarketUSTradingConfig:
+        key_present, secret_present = polymarket_us_credentials_present()
+        allow_live = os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") == "1"
+        master_halt = os.getenv("NOEMA_MASTER_HALT", "0") == "1"
+        return cls(
+            key_id_present=key_present,
+            secret_present=secret_present,
+            secret_source=polymarket_us_credential_sources()["secret_key"],
             allow_live_orders=allow_live,
             master_halt=master_halt,
         )
