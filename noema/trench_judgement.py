@@ -28,11 +28,12 @@ JUDGEMENT_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["mint", "trade", "probability_up_1h"],
+                "required": ["mint", "trade", "probability_up_1h", "confidence"],
                 "properties": {
                     "mint": {"type": "string"},
                     "trade": {"type": "boolean"},
                     "probability_up_1h": {"type": "number"},
+                    "confidence": {"type": "number"},
                 },
             },
         }
@@ -48,6 +49,7 @@ class Judgement:
     trade: bool
     probability: float
     source: str  # "model" or "rules"
+    confidence: float | None = None  # model's self-reported confidence in [0, 1]; None for rules
 
 
 def _ensure_table(conn: sqlite3.Connection) -> None:
@@ -154,7 +156,7 @@ async def _model_judgement(
             "You are a paper-trading research judge for Solana memecoin pools. Every candidate "
             "already passed deterministic safety rules. For each mint, answer whether a short "
             "paper position is worth taking now and give the probability the price is higher "
-            "in one hour. Use only the numeric fields provided. Social chatter is not provided "
+            "in one hour, plus your confidence (0-1) in that judgement. Use only the numeric fields provided. Social chatter is not provided "
             "and must not be assumed."
         ),
         "input": prompt,
@@ -174,7 +176,9 @@ async def _model_judgement(
         mint = item.get("mint")
         probability = float(item.get("probability_up_1h", 0))
         if mint in allowed and 0 <= probability <= 1:
-            out.append(Judgement(mint, bool(item.get("trade")), probability, "model"))
+            conf = item.get("confidence")
+            conf = float(conf) if isinstance(conf, (int, float)) and 0 <= conf <= 1 else None
+            out.append(Judgement(mint, bool(item.get("trade")), probability, "model", conf))
     if not out:
         raise ValueError("model returned no usable judgements")
     return sorted(out, key=lambda j: (j.trade, j.probability), reverse=True)

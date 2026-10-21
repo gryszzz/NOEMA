@@ -140,6 +140,10 @@ class _Dex:
 
 
 def test_full_cycle_records_paper_entries(tmp_path, monkeypatch):
+    import noema.trench_desk_runtime as rt
+    real_gate = rt.chief_gate
+    # rules-only picks carry no confidence, so CHIEF vetoes them; approve here to exercise entries
+    monkeypatch.setattr(rt, "chief_gate", lambda picks: (picks, real_gate(picks)[1]))
     for flag in ("NOEMA_EXECUTION_GATEWAY_ENABLED", "NOEMA_ALLOW_LIVE_ORDERS",
                  "NOEMA_TREASURY_ACTIONS_ENABLED", "NOEMA_SOLANA_SIGNER_ENABLED",
                  "NOEMA_DESK_JUDGEMENT_ENABLED"):
