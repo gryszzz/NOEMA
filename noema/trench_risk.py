@@ -244,13 +244,15 @@ def evaluate_desk_entry(
     price_change_h1: float | None,
     control: TokenControlState | None = None,
     policy: DeskEntryPolicy | None = None,
+    top10_fraction: float | None = None,
 ) -> tuple[bool, tuple[str, ...], dict[str, float | None]]:
     """Deterministic gate for paper-desk entries. Social chatter is never an input."""
 
     policy = policy or DeskEntryPolicy()
     reasons: list[str] = []
-    top10 = (top10_holder_fraction(holder_shares, exclude_largest=policy.exclude_largest_holder)
-             if holder_shares else None)
+    top10 = top10_fraction
+    if top10 is None and holder_shares:
+        top10 = top10_holder_fraction(holder_shares, exclude_largest=policy.exclude_largest_holder)
     accel = spike_acceleration(price_change_m5, price_change_h1)
     if liquidity_usd < policy.min_liquidity_usd:
         reasons.append("liquidity below desk floor")

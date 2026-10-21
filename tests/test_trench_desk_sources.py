@@ -88,3 +88,12 @@ def test_pumpfun_newest_parses_public_listing():
 def test_chatter_is_research_only_stub():
     result = asyncio.run(XChatterSource(enabled=True).chatter("WEFT", "MINT1"))
     assert result["status"] == "unavailable" and result["mentions"] is None
+
+
+def test_gecko_token_top10_fraction():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"attributes": {"holders": {
+            "distribution_percentage": {"top_10": "18.5"}}}}})
+
+    client = GeckoTerminalPoolClient(transport=httpx.MockTransport(handler))
+    assert asyncio.run(client.token_top10_fraction("MINT1")) == pytest.approx(0.185)

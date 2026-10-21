@@ -51,3 +51,10 @@ def test_helpers():
     assert spike_acceleration(None, 3) is None
     assert spike_acceleration(-2, 10) == 0.0
     assert spike_acceleration(5, 12) == 5.0
+
+
+def test_aggregated_top10_override():
+    ok, reasons, metrics = evaluate_desk_entry(**{**GOOD, "holder_shares": None},
+                                               top10_fraction=0.7)
+    assert not ok and "top-10 holders above concentration limit" in reasons
+    assert metrics["top10_holder_fraction"] == 0.7

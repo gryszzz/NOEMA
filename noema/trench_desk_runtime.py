@@ -129,13 +129,22 @@ async def run_desk_cycle(
 
     passed: list[dict[str, Any]] = []
     for pool, age in pre[: config.holder_enrichment_limit]:
+        # GeckoTerminal aggregates holder distribution; the free public Solana RPC
+        # throttles getTokenLargestAccounts (HTTP 429), so it is the fallback.
+        top10: float | None = None
+        shares: tuple[float, ...] = ()
         try:
-            shares = await solana.top_account_supply_shares(pool.mint)
-        except (ProviderFailure, ValueError, RuntimeError) as exc:
-            summary["provider_failures"].append(f"holders:{type(exc).__name__}")
-            shares = ()
+            top10 = await gecko.token_top10_fraction(pool.mint)
+        except (ProviderFailure, AttributeError) as exc:
+            summary["provider_failures"].append(f"holders_gecko:{exc}")
+        if top10 is None:
+            try:
+                shares = await solana.top_account_supply_shares(pool.mint)
+            except (ProviderFailure, ValueError, RuntimeError) as exc:
+                summary["provider_failures"].append(f"holders_rpc:{exc}")
         ok, reasons, metrics = evaluate_desk_entry(
             liquidity_usd=pool.liquidity_usd, pool_age_seconds=age, holder_shares=shares,
+            top10_fraction=top10,
             price_change_m5=pool.price_change_m5, price_change_h1=pool.price_change_h1,
             policy=policy,
         )

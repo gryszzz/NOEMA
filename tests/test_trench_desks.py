@@ -115,6 +115,9 @@ def test_runtime_refuses_live_flags(monkeypatch):
 
 
 class _Gecko:
+    async def token_top10_fraction(self, mint):
+        return None
+
     async def trending_pools(self):
         created = datetime.now(UTC) - timedelta(hours=5)
         return [

@@ -769,6 +769,34 @@ class GeckoTerminalPoolClient:
             raise ProviderFailure("geckoterminal", path, "invalid_response")
         return [pool for item in data if (pool := parse_gecko_pool(item)) is not None]
 
+    async def token_top10_fraction(self, mint: str) -> float | None:
+        """Aggregated top-10 holder share (0..1) from GeckoTerminal token info."""
+
+        await self.limiter.acquire()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
+                response = await client.get(
+                    f"{self.base_url}/networks/{self.network}/tokens/{mint}/info",
+                    headers={"accept": "application/json"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            error_class, _ = _http_error_class(exc.response.status_code)
+            raise ProviderFailure("geckoterminal", "token_info", error_class,
+                                  http_status=exc.response.status_code) from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderFailure("geckoterminal", "token_info", "transport_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise ProviderFailure("geckoterminal", "token_info", "malformed_json") from exc
+        attrs = ((payload or {}).get("data") or {}).get("attributes") or {}
+        holders = attrs.get("holders") if isinstance(attrs, dict) else None
+        dist = holders.get("distribution_percentage") if isinstance(holders, dict) else None
+        top10 = _optional_float(dist.get("top_10")) if isinstance(dist, dict) else None
+        if top10 is None or not 0 <= top10 <= 100:
+            return None
+        return top10 / 100.0
+
     async def new_pools(self) -> list[PoolCandidate]:
         return await self._pools("new_pools?page=1")
 
