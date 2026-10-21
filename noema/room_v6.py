@@ -146,6 +146,18 @@ def provider_health(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                                                  "ORDER BY provider")]
 
 
+def _accuracy_rows(command_center: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Prefer an explicit list, then the accuracy-engine report's agents."""
+    explicit = command_center.get("accuracy_leaderboard")
+    if isinstance(explicit, list):
+        return explicit
+    report = command_center.get("accuracy")
+    if isinstance(report, dict) and isinstance(report.get("agents"), list):
+        return report["agents"]
+    ledger_board = (command_center.get("ledger") or {}).get("leaderboard")
+    return ledger_board if isinstance(ledger_board, list) else None
+
+
 def build_room_v6(db_path: str, *, fetch: bool = True,
                   command_center: dict[str, Any] | None = None) -> dict[str, Any]:
     now = datetime.now(UTC)
@@ -159,8 +171,7 @@ def build_room_v6(db_path: str, *, fetch: bool = True,
         "news_crawler": "not run yet",
     }
     cc = command_center or {}
-    acc = cc.get("accuracy_leaderboard") or cc.get("accuracy") or (cc.get("ledger") or {}).get("leaderboard")
-    out["accuracy_leaderboard"] = acc if isinstance(acc, list) else None
+    out["accuracy_leaderboard"] = _accuracy_rows(cc)
     out["brier_by_model"] = (cc.get("ledger") or {}).get("brier")
     if Path(db_path).exists():
         conn = _ro(db_path)
