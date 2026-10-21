@@ -35,7 +35,8 @@ function scaffold(){const top=q(".center-top");if(!top||byId("ch"))return!!byId(
  <div class="ch-srcs" id="ch-srcs"></div></div>`;
  (h2||top.firstChild).insertAdjacentHTML(h2?"afterend":"beforebegin",html);return true}
 function wires(){const app=q(".app");if(!app)return;let w=byId("ch-wires");if(!w){app.insertAdjacentHTML("beforeend",'<div id="ch-wires"></div>');w=byId("ch-wires")}
- if(document.body.classList.contains("v7-laptop"))return;for(const s of [".wire",".xw"]){const el=q(s);if(el&&!el.closest("#v7-dock")&&el.parentElement!==w)w.appendChild(el)}
+ const sp=byId("strat-pnl");if(document.body.classList.contains("v7-laptop")){const pane=q('#v7-dock .v7-pane[data-i="2"]');if(sp&&pane&&sp.parentElement!==pane)pane.appendChild(sp);return}
+ if(sp&&sp.parentElement!==w)w.appendChild(sp);for(const s of [".wire",".xw"]){const el=q(s);if(el&&!el.closest("#v7-dock")&&el.parentElement!==w)w.appendChild(el)}
  const hp=byId("health")&&byId("health").closest(".pnl");if(hp&&!hp.closest("#v7-dock")&&hp.parentElement!==w)w.appendChild(hp)}
 function adoptScan(){const s=byId("v7-scan"),st=byId("ch-stage");if(s&&st&&s.parentElement!==st)st.appendChild(s)}
 function counters(d,now){const c=(d.crawl||{}).counters||{},f=d.funnel||{},lt=f.latest||{},st=H.state(d,now);
