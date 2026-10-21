@@ -943,6 +943,12 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
             stats["x"] = ingest_inbox(db_path)
         except Exception as exc:  # noqa: BLE001 - X drops must never stop the news crawl
             stats["x"] = {"error": type(exc).__name__}
+        if os.getenv("NOEMA_X_EDGE_ENABLED", "1") == "1":
+            from .x_edge import maybe_run_edge
+            try:
+                stats["x_edge"] = maybe_run_edge(db_path, new_posts=int((stats.get("x") or {}).get("posts_new") or 0))
+            except Exception as exc:  # noqa: BLE001 - the edge engine must never stop the news crawl
+                stats["x_edge"] = {"error": type(exc).__name__}
     return stats
 
 

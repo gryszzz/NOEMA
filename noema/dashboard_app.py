@@ -1078,6 +1078,15 @@ async def room_v6() -> dict[str, Any]:
     return payload
 
 
+@app.get("/api/x-signal")
+async def x_signal_api() -> dict[str, Any]:
+    """Read-only X edge board: smart-money leaderboard, narrative radar, not-priced-in alerts,
+    shill warnings, KOL contract checks, crowd extremes. Evidence only; never a trade trigger.
+    UI module: /static/x-edge-panel.js (window.TEVXEdge.mount(el))."""
+    from .x_edge import x_signal_board
+    return await asyncio.to_thread(x_signal_board, _db_path())
+
+
 _TEV_BRAND = Path(__file__).with_name("static") / "brand" / "tev"
 
 

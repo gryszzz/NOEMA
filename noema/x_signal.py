@@ -40,6 +40,7 @@ from typing import Any
 from .news_crawler import MarketIndex, categorize, sanitize, watched_markets
 
 SCHEMA_ID = "tev.x_inbox.v1"
+COUNTS_SCHEMA_ID = "tev.x_counts.v1"  # X recent-counts drops for burst detection (x_edge)
 TOPICS = ("politics", "crypto", "stocks_macro")
 DEFAULT_INBOX = "/workspace/noema-run/x-inbox"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "x_sources.json"
@@ -173,6 +174,8 @@ def read_inbox_file(path: Path) -> tuple[dict[str, Any] | None, str]:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, UnicodeDecodeError):
         return None, "unreadable"
+    if isinstance(doc, dict) and doc.get("schema") == COUNTS_SCHEMA_ID and isinstance(doc.get("raw"), dict):
+        return {"counts": doc}, "counts"
     if not isinstance(doc, dict) or doc.get("schema") != SCHEMA_ID:
         return None, "bad_schema"
     topic = doc.get("topic")
@@ -214,6 +217,11 @@ def author_class(post: dict[str, Any], classes: dict[str, str]) -> str:
     if post["author_verified_type"] in ("government", "business"):
         return "official"
     return "unknown"
+
+
+def author_multiplier(conn: sqlite3.Connection, handle: str) -> float:
+    from .x_edge import author_multiplier as _mult
+    return _mult(conn, handle)
 
 
 def credibility(post: dict[str, Any], classes: dict[str, str]) -> tuple[float, list[str]]:
@@ -296,6 +304,8 @@ def _fingerprint(text: str) -> str:
 
 # ---------- matching ----------
 
+_MAJOR_NAMES = {"BTC": re.compile(r"\bbitcoin\b", re.IGNORECASE), "ETH": re.compile(r"\bethereum\b", re.IGNORECASE),
+                "SOL": re.compile(r"\bsolana\b", re.IGNORECASE)}
 MAJOR_TOKENS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "USDC": "usd-coin"}
 
 
@@ -321,7 +331,8 @@ def match_post(post: dict[str, Any], topic: str, index: MarketIndex, symbols: di
         # prediction markets use the news crawler's criteria matcher (entities + resolution criteria)
         out += [dict(m, kind="market") for m in index.match(text, top=3)]
     if topic == "crypto":
-        for tag in {t[1:].upper() for t in _CASHTAG.findall(text)}:
+        named = {s for s, pat in _MAJOR_NAMES.items() if pat.search(text)}
+        for tag in {t[1:].upper() for t in _CASHTAG.findall(text)} | named:
             if tag in symbols:
                 out.append({"venue": "token", "market_id": tag, "title": f"${tag}", "relevance": 0.6,
                             "category": "crypto", "kind": "token", "forecast_id": None, "mint": symbols[tag]})
@@ -361,6 +372,8 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
     now = now or datetime.now(UTC)
     if record_ledger is None:
         record_ledger = os.getenv("NOEMA_X_LEDGER_ENABLED", "1") == "1"
+    # with the edge engine on, x_social forecasts come from LLM stance (x_edge), not the lexicon below
+    edge_on = os.getenv("NOEMA_X_EDGE_ENABLED", "1") == "1"
     stats: dict[str, Any] = {"files": 0, "rejected": 0, "posts_seen": 0, "posts_new": 0, "duplicates": 0,
                              "filtered": 0, "linked": 0, "markets": 0, "ledger_forecasts": 0, "reasons": {}}
     if not inbox_p.is_dir():
@@ -380,6 +393,11 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
         for f in files:
             doc, why = read_inbox_file(f)
             stats["files"] += 1
+            if why == "counts" and doc is not None:
+                from .x_edge import store_counts
+                stats["count_buckets"] = stats.get("count_buckets", 0) + store_counts(conn, doc["counts"], now)
+                _move(f, archive_p / now.strftime("%Y%m%d"))
+                continue
             if doc is None:
                 stats["rejected"] += 1
                 stats["reasons"][why] = stats["reasons"].get(why, 0) + 1
@@ -414,8 +432,9 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
                 pump, pflags = pump_risk(p, topic, len(fp_authors[fp]) if len(fp) > 20 else 0, swarm)
                 vel, rec = velocity(p, now), recency(p, topic, now)
                 sent = sentiment(p["text"])
-                weight = round(cred * (0.4 + 0.6 * vel) * rec * (1 - pump), 4)
-                flags = cflags + pflags
+                mult = author_multiplier(conn, p["author_handle"])  # smart-money ledger (x_edge)
+                weight = round(min(1.0, cred * mult) * (0.4 + 0.6 * vel) * rec * (1 - pump), 4)
+                flags = cflags + pflags + (["smart_money"] if mult > 1 else ["demoted_author"] if mult < 1 else [])
                 if weight < 0.01:
                     flags.append("discounted")
                 conn.execute(
@@ -455,7 +474,7 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
                          "pump_risk, price, forecast_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                          (now.isoformat(), venue, mid, t["title"], t["topic"], len(ws), round(tw, 4), sent, pr,
                           price, t["forecast_id"]))
-            if record_ledger and price is not None and venue != "token":
+            if record_ledger and not edge_on and price is not None and venue != "token":
                 stats["ledger_forecasts"] += _record_x_forecast(conn, venue, mid, price, sent, tw, len(ws), now)
         stats["markets"] = len(touched)
         _topic_snapshots(conn, now)
