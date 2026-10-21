@@ -26,6 +26,7 @@ from .agent_dashboard import build_agent_overview
 from .autonomy_authority import console_trading_status
 from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview, build_provider_health
+from .command_center import build_command_center
 from .config import kalshi_production_read_only_config
 from .console_disk_inventory import build_console_disk_inventory
 from .console_replication import (
@@ -54,11 +55,14 @@ from .prediction_venues import (
     cached_prediction_venue_status,
 )
 from .research_state import research_trial_update_is_newer
+from .room_v4 import build_room_v4
 from .sqlite_diagnostics import sqlite_error_fields
 from .storage_recovery import recover_storage
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
+from .trading_room import build_trading_room
 from .trench_dashboard import build_trench_overview
+from .trench_desks import desk_overview
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 
@@ -1011,6 +1015,58 @@ async def doctor() -> dict[str, Any]:
 @app.get("/api/ladder")
 async def ladder() -> dict[str, Any]:
     return build_ladder_report(_db_path())
+
+
+@app.get("/api/trench-desks")
+async def trench_desks() -> dict[str, Any]:
+    return desk_overview(_db_path())
+
+
+@app.get("/trench-desks", response_class=HTMLResponse)
+async def trench_desks_page() -> str:
+    return (Path(__file__).with_name("static") / "trench-desks.html").read_text()
+
+
+@app.get("/api/trading-room")
+async def trading_room() -> dict[str, Any]:
+    """Read-only aggregate for the trading room view (no orders, no secrets)."""
+    try:
+        venues = await asyncio.wait_for(build_prediction_venue_status(), timeout=8)
+    except Exception:  # noqa: BLE001 - venue panel degrades, room still renders
+        venues = None
+    try:
+        wallets = await asyncio.wait_for(wallet_status(), timeout=8)
+    except Exception:  # noqa: BLE001
+        wallets = None
+    return await asyncio.to_thread(build_trading_room, _db_path(), venues=venues, wallets=wallets)
+
+
+@app.get("/api/command-center")
+async def command_center() -> dict[str, Any]:
+    """Read-only v3 room aggregate: markets, ledger, coordinator, autonomy, budget, health."""
+    pnl = desk_overview(_db_path()).get("total_pnl_after_costs_usd")
+    return await asyncio.to_thread(build_command_center, _db_path(), desks_pnl=pnl)
+
+
+@app.get("/api/room-v4")
+async def room_v4() -> dict[str, Any]:
+    """Read-only v4 extras: real GeckoTerminal candles for held tokens, CHIEF/SOCIAL log."""
+    return await asyncio.to_thread(build_room_v4, _db_path())
+
+
+@app.get("/trading-room", response_class=HTMLResponse)
+async def trading_room_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room-v5.html").read_text()
+
+
+@app.get("/trading-room-v4", response_class=HTMLResponse)
+async def trading_room_v4_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room-v4.html").read_text()
+
+
+@app.get("/command-center", response_class=HTMLResponse)
+async def command_center_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room.html").read_text()
 
 
 @app.get("/api/compare")
