@@ -40,95 +40,17 @@ HOST_SPACING_SECONDS = 2.0
 MIN_RELEVANCE = 0.5
 
 FEEDS: tuple[tuple[str, str, str], ...] = (
-    # --- primary / official sources (these often *resolve* prediction markets) ---
-    ("Federal Reserve", "rss", "https://www.federalreserve.gov/feeds/press_all.xml"),
-    ("SEC press", "rss", "https://www.sec.gov/news/pressreleases.rss"),
-    ("CourtListener SCOTUS", "rss", "https://www.courtlistener.com/feed/court/scotus/"),
-    ("White House", "rss", "https://www.whitehouse.gov/news/feed/"),
-    ("Federal Register: presidential", "rss",
-     "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Btype%5D%5B%5D=PRESDOCU"),
-    ("Federal Register: significant", "rss",
-     "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bsignificant%5D=1"),
-    ("GovInfo bills", "rss", "https://www.govinfo.gov/rss/bills.xml"),
-    ("GovInfo public laws", "rss", "https://www.govinfo.gov/rss/plaw.xml"),
-    ("Congress.gov most-viewed bills", "rss", "https://www.congress.gov/rss/most-viewed-bills.xml"),
-    ("DOJ press", "rss", "https://www.justice.gov/news/rss?type=press_release&m=1"),
-    ("CDC newsroom", "rss", "https://tools.cdc.gov/api/v2/resources/media/132608.rss"),
-    ("NHC Atlantic", "rss", "https://www.nhc.noaa.gov/index-at.xml"),
-    ("NHC East Pacific", "rss", "https://www.nhc.noaa.gov/index-ep.xml"),
-    ("ECB press", "rss", "https://www.ecb.europa.eu/rss/press.html"),
-    ("Bank of England", "rss", "https://www.bankofengland.co.uk/rss/news"),
-    ("NWS alerts", "nws", "https://api.weather.gov/alerts/active?status=actual&severity=Severe,Extreme"),
-    # --- major outlets whose robots.txt allows their public RSS ---
     ("BBC World", "rss", "https://feeds.bbci.co.uk/news/world/rss.xml"),
     ("BBC Business", "rss", "https://feeds.bbci.co.uk/news/business/rss.xml"),
     ("BBC US & Canada", "rss", "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"),
     ("NPR News", "rss", "https://feeds.npr.org/1001/rss.xml"),
     ("NPR Politics", "rss", "https://feeds.npr.org/1014/rss.xml"),
-    ("Guardian World", "rss", "https://www.theguardian.com/world/rss"),
-    ("Guardian US Politics", "rss", "https://www.theguardian.com/us-news/us-politics/rss"),
-    ("Guardian Business", "rss", "https://www.theguardian.com/business/rss"),
-    ("Al Jazeera", "rss", "https://www.aljazeera.com/xml/rss/all.xml"),
-    ("CNBC Top News", "rss", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
-    ("CNBC Economy", "rss", "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
-    ("Politico", "rss", "https://rss.politico.com/politics-news.xml"),
-    ("The Hill", "rss", "https://thehill.com/news/feed/"),
+    ("Federal Reserve", "rss", "https://www.federalreserve.gov/feeds/press_all.xml"),
+    ("BEA", "rss", "https://apps.bea.gov/rss/rss.xml"),
+    ("SEC press", "rss", "https://www.sec.gov/news/pressreleases.rss"),
+    ("CourtListener SCOTUS", "rss", "https://www.courtlistener.com/feed/court/scotus/"),
+    ("NWS alerts", "nws", "https://api.weather.gov/alerts/active?status=actual&severity=Severe,Extreme"),
 )
-# Probed 2026-10-21 and left out: BEA RSS (robots.txt disallows), BLS feeds (403), Treasury press
-# feed (404/timeout), SEC EDGAR (403), Google News RSS (robots), NOAA news RSS (404), FRED/ALFRED
-# (no keyless feed; enabled below only when NOEMA_FRED_API_KEY is set), no free AP/Reuters RSS,
-# no standard free state election-results feed.
-
-# name -> (min seconds between fetches, reliability weight 0..1). Breaking/official feeds poll
-# every 5 minutes; slower official dockets every 30. Failures back off exponentially per feed.
-PRIMARY_RELIABILITY = 1.0
-FEED_META: dict[str, tuple[float, float]] = {
-    "Federal Reserve": (300, 1.0), "SEC press": (600, 1.0), "CourtListener SCOTUS": (600, 0.95),
-    "White House": (300, 1.0), "Federal Register: presidential": (900, 1.0),
-    "Federal Register: significant": (1800, 1.0), "GovInfo bills": (1800, 1.0),
-    "GovInfo public laws": (1800, 1.0), "Congress.gov most-viewed bills": (1800, 0.9),
-    "DOJ press": (600, 1.0), "CDC newsroom": (1800, 1.0), "NHC Atlantic": (300, 1.0),
-    "NHC East Pacific": (300, 1.0), "ECB press": (900, 1.0), "Bank of England": (900, 1.0),
-    "NWS alerts": (300, 1.0), "FRED releases": (3600, 1.0),
-    "BBC World": (300, 0.85), "BBC Business": (600, 0.85), "BBC US & Canada": (300, 0.85),
-    "NPR News": (300, 0.85), "NPR Politics": (300, 0.85), "Guardian World": (300, 0.8),
-    "Guardian US Politics": (300, 0.8), "Guardian Business": (600, 0.8), "Al Jazeera": (300, 0.75),
-    "CNBC Top News": (300, 0.8), "CNBC Economy": (600, 0.8), "Politico": (300, 0.8),
-    "The Hill": (300, 0.75),
-}
-DEFAULT_FEED_META = (900.0, 0.7)
-GDELT_RELIABILITY = 0.6
-FEED_MAX_BACKOFF = 6 * 3600.0
-HALF_LIFE_HOURS = {"weather": 6.0, "economics": 24.0, "politics": 36.0, "legal": 48.0,
-                   "geopolitics": 24.0, "other": 24.0}
-
-
-def reliability(source: str) -> float:
-    if source.startswith("GDELT:"):
-        return GDELT_RELIABILITY
-    if source.startswith("Federal Register search"):
-        return PRIMARY_RELIABILITY
-    return FEED_META.get(source, DEFAULT_FEED_META)[1]
-
-
-def recency_decay(published_at: str | datetime | None, category: str | None = None,
-                  now: datetime | None = None) -> float:
-    """exp half-life decay by category; unknown dates count as fresh-ish (0.5)."""
-    if published_at is None:
-        return 0.5
-    try:
-        d = published_at if isinstance(published_at, datetime) else datetime.fromisoformat(str(published_at))
-    except ValueError:
-        return 0.5
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=UTC)
-    age_h = max(0.0, ((now or datetime.now(UTC)) - d).total_seconds() / 3600)
-    return round(0.5 ** (age_h / HALF_LIFE_HOURS.get(category or "other", 24.0)), 4)
-
-
-def evidence_weight(relevance: float, source: str, published_at: Any, category: str | None = None,
-                    now: datetime | None = None) -> float:
-    return round(float(relevance or 0) * reliability(source) * recency_decay(published_at, category, now), 4)
 # AP and Reuters have no free public RSS; Google News RSS restricted to their domains covers them.
 # GDELT doc API queries (Google News RSS is disallowed by its robots.txt, so it is not used;
 # AP/Reuters have no free public RSS, so their stories only arrive via GDELT).
@@ -160,25 +82,6 @@ def tokens(text: str) -> list[str]:
             if t not in STOP and not t.isdigit()]
 
 
-_TRACKING = re.compile(r"^(utm_\w+|cmpid|cmp|ocid|ref|src|at_\w+|fbclid|gclid|mc_\w+|ito|CMP)$")
-
-
-def canonical_url(url: str) -> str:
-    """Strip tracking params/fragments so the same story from two feeds dedupes."""
-    from urllib.parse import parse_qsl, urlencode, urlunsplit
-    p = urlsplit(url.strip())
-    q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACKING.match(k)]
-    path = p.path.rstrip("/") or "/"
-    return urlunsplit(("https" if p.scheme in ("http", "https") else p.scheme, p.netloc.lower(), path,
-                       urlencode(q), ""))
-
-
-def headline_key(headline: str) -> str:
-    """Order-insensitive fingerprint of a headline's content words (near-duplicate syndication)."""
-    words = sorted(set(tokens(headline)))
-    return hashlib.sha256(" ".join(words).encode()).hexdigest()[:20] if len(words) >= 4 else ""
-
-
 @dataclass
 class Article:
     source: str
@@ -191,10 +94,6 @@ class Article:
     @property
     def evidence_id(self) -> str:
         return "news:" + hashlib.sha256(self.url.encode()).hexdigest()[:24]
-
-    def __post_init__(self) -> None:
-        if self.url.startswith(("http://", "https://")):
-            self.url = canonical_url(self.url)
 
 
 def _when(value: str | None) -> datetime:
@@ -356,57 +255,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
-ENTITY_STOP = frozenset(["Will", "What", "When", "Who", "Which", "How", "Yes", "No", "The", "This", "That", "Over", "Under", "Above", "Below", "Total", "Points", "Game", "Match", "Wins", "Win", "Winner", "Before", "After", "Between", "Market", "Champion", "Championship", "Season", "Round", "Quarter", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Protected", "Million", "Billion", "Team", "City", "United", "Contract", "Issuance", "Party", "Special", "Official", "Officially", "Settle", "Settles", "If", "Otherwise", "Eastern", "Time", "Pm", "Am", "Est", "Edt", "Source", "Sources", "Resolution", "Rules", "Any", "All", "Per", "For", "And", "Not"])
-
-# Canonical aliases so "the Fed"/"FOMC"/"Powell" all meet a "Federal Reserve" market, etc.
-ALIASES: dict[str, re.Pattern[str]] = {
-    "@fed": re.compile(r"\b(Fed|FOMC|Federal Reserve|Powell|federal funds)\b"),
-    "@scotus": re.compile(r"\b(Supreme Court|SCOTUS|Justices)\b"),
-    "@btc": re.compile(r"\b(Bitcoin|BTC)\b", re.IGNORECASE),
-    "@eth": re.compile(r"\b(Ethereum|ETH)\b"),
-    "@cpi": re.compile(r"\b(CPI|consumer price index|inflation)\b", re.IGNORECASE),
-    "@gdp": re.compile(r"\b(GDP|gross domestic product)\b", re.IGNORECASE),
-    "@jobs": re.compile(r"\b(nonfarm payrolls?|jobs report|unemployment rate)\b", re.IGNORECASE),
-    "@shutdown": re.compile(r"\bgovernment shutdown\b", re.IGNORECASE),
-}
-
-# Resolution-criteria classes: what has to *happen* for the market to resolve. When a market's
-# title/rules name one of these, an article must describe the same kind of event to link
-# (a "Witkoff departure" market is not evidenced by a story that merely mentions Witkoff).
-ACTIONS: dict[str, re.Pattern[str]] = {k: re.compile(v, re.IGNORECASE) for k, v in {
-    "departure": r"\b(resign\w*|departure|depart(s|ed)?|steps? down|stepped down|fired|ousted|oust|"
-                 r"removed from|leaves? (office|post|role)|exit(s|ed)? (as|from)|quit(s)?|replaced)\b",
-    "meeting": r"\b(meets?|met with|meeting|summit|talks|in[- ]person|sit[- ]down|visit(s|ed)?)\b",
-    "election": r"\b(election|elected|nominee|primary|race|polls?|polling|votes?|voters|ballots?|"
-                r"candidate|campaign\w*|midterms?|runoff)\b",
-    "rates": r"\b(rate (cut|hike|decision)s?|interest rates?|fomc|basis points?|federal funds|"
-             r"(holds?|keeps?|cuts?|raises?) rates|rates? unchanged)\b",
-    "inflation": r"\b(cpi|inflation|consumer prices?|pce)\b",
-    "jobs": r"\b(payrolls?|jobs report|unemployment|jobless)\b",
-    "gdp": r"\b(gdp|gross domestic product|recession|economic growth)\b",
-    "legislation": r"\b(bill|signs? into law|signed into law|veto\w*|pass(es|ed)? the (house|senate)|"
-                   r"shutdown|appropriations?|legislation|enacted|executive order)\b",
-    "ruling": r"\b(rul(es|ed|ing)|opinion|verdict|justices?|appeals? court|injunction|overturn\w*|upheld)\b",
-    "indictment": r"\b(indict\w*|charged|charges|arrest\w*|convict\w*|sentenc\w*|plea|trial|pardon\w*)\b",
-    "nomination": r"\b(nominat(e|es|ed|ion)|confirm(s|ed|ation)|appoint\w*|tapped|picks?)\b",
-    "conflict": r"\b(ceasefire|cease-fire|truce|invasion|invade\w*|air ?strikes?|attack\w*|war|"
-                r"troops|peace (deal|agreement|plan)|hostages?)\b",
-    "storm": r"\b(hurricane|tropical (storm|depression)|landfall|cyclone)\b",
-    "weather": r"\b(temperature|degrees|rainfall|snowfall|inches of (rain|snow)|record high|heat wave)\b",
-    "tariff": r"\b(tariffs?|trade deal|duties|trade war)\b",
-    "crypto": r"\b(bitcoin|btc|ethereum|crypto\w*|stablecoins?)\b",
-}.items()}
-
-
-def actions(text: str) -> set[str]:
-    return {k for k, pat in ACTIONS.items() if pat.search(text)}
+ENTITY_STOP = frozenset(["Will", "What", "When", "Who", "Which", "How", "Yes", "No", "The", "This", "That", "Over", "Under", "Above", "Below", "Total", "Points", "Game", "Match", "Wins", "Win", "Winner", "Before", "After", "Between", "Market", "Champion", "Championship", "Season", "Round", "Quarter", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Protected", "Million", "Billion", "Team", "City", "United"])
 
 
 def entities(text: str) -> set[str]:
     """Proper-noun-ish words (capitalised, 3+ letters, not boilerplate)."""
-    words = {w.rstrip(".'") for w in re.findall(r"\b[A-Z][a-zA-Z'&.-]{2,}\b", text)}
-    words = {w for w in words if len(w) >= 3 and w not in ENTITY_STOP}
-    return words | {k for k, pat in ALIASES.items() if pat.search(text)}
+    return {w for w in re.findall(r"\b[A-Z][a-zA-Z'&.-]{2,}\b", text) if w not in ENTITY_STOP}
 
 
 CATEGORY_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -512,7 +366,6 @@ class MarketIndex:
         self.rule_ents = [entities(ctx) - es for (_, _, ctx, _), es in zip(markets, self.ents, strict=True)]
         self.docs = [set(tokens(ctx)) for _, _, ctx, _ in markets]
         self.cats = [market_category(ctx) for _, _, ctx, _ in markets]
-        self.acts = [actions(ctx) for _, _, ctx, _ in markets]
         df = Counter(e for es in self.ents for e in es)
         self.edf = df
         self.inv: dict[str, list[int]] = {}
@@ -524,7 +377,6 @@ class MarketIndex:
               include_sports: bool = False) -> list[dict[str, Any]]:
         art_ents = entities(text)
         art_cats = categorize(text, source)
-        art_acts = actions(text)
         words = set(tokens(text))
         cand = Counter()
         for e in art_ents:
@@ -546,21 +398,17 @@ class MarketIndex:
             if not ctx_hit and len(kw) < 2:  # name alone is not evidence about *this* market
                 continue
             hit = hit | ctx_hit
-            if not (hit - PLACES - set(ALIASES)):
-                continue  # a lone place-name (or generic alias) overlap is not evidence
-            need = self.acts[i]
-            act_hit = need & art_acts
-            if need and not act_hit:
-                continue  # resolution criteria: article must describe the event the market resolves on
-            score = 0.45 * len(hit & es) / len(es) + 0.2 * min(1.0, len(ctx_hit) / 2) \
-                + 0.2 * min(1.0, len(kw) / 4) + (0.15 if act_hit else 0.0)
+            if not (hit - PLACES):
+                continue  # a lone place-name overlap is not evidence
+            score = 0.5 * len(hit & es) / len(es) + 0.25 * min(1.0, len(ctx_hit) / 2) \
+                + 0.25 * min(1.0, len(kw) / 4)
             if cat == "other":
                 score *= 0.8
             if score >= MIN_RELEVANCE:
                 venue, mid, _, fid = self.markets[i]
                 out.append({"venue": venue, "market_id": mid, "title": _market_label(self.titles[i], self.markets[i][2]),
                             "forecast_id": fid, "relevance": round(min(1.0, score), 3), "category": cat,
-                            "terms": sorted(hit) + sorted(kw)[:6], "criteria": sorted(act_hit)})
+                            "terms": sorted(hit) + sorted(kw)[:6]})
         out.sort(key=lambda m: -m["relevance"])
         seen, uniq = set(), []
         for m in out:  # one link per market title (Kalshi strikes share titles)
