@@ -6,7 +6,7 @@
 :root{--bg:#03060b;--p:#071019;--ln:#12324a;--c:#27e7ff;--g:#39ff9c;--r:#ff3b6b;--y:#ffd23f;--m:#b67bff;--t:#bfe9ff;--d:#5f8aa3}
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--t);font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden}
 body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
-.app{display:grid;height:100vh;gap:6px;padding:6px;grid-template-columns:minmax(260px,1fr) minmax(0,2.25fr) minmax(280px,1.1fr);grid-template-rows:44px minmax(0,1.6fr) minmax(0,1fr)}
+.app{display:grid;height:100vh;gap:6px;padding:6px;grid-template-columns:minmax(260px,1fr) minmax(0,2.25fr) minmax(280px,1.1fr);grid-template-rows:44px minmax(0,1.6fr) minmax(0,1fr) minmax(0,.95fr)}
 header{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 12px;border:1px solid var(--ln);background:linear-gradient(90deg,#06202e,#030a12 40%,#140a22)}
 .logo{font-weight:900;font-size:24px;letter-spacing:6px;color:var(--c);text-shadow:0 0 12px var(--c),0 0 28px #0af}
 .logo small{font-size:10px;letter-spacing:2px;color:var(--d);margin-left:8px;text-shadow:none}
@@ -19,8 +19,15 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 12px;
 .body::-webkit-scrollbar{width:4px}.body::-webkit-scrollbar-thumb{background:var(--ln)}
 .empty{color:var(--d);border:1px dashed var(--ln);padding:8px;margin:4px 0;font-size:11px}
 /* columns */
-.left{grid-row:2/4;display:flex;flex-direction:column;gap:6px;min-height:0}
+.left{grid-row:2/5;display:flex;flex-direction:column;gap:6px;min-height:0}
 .center-top{grid-column:2;grid-row:2}.center-bot{grid-column:2;grid-row:3;display:grid;grid-template-columns:1.4fr 1fr;gap:6px;min-height:0}
+.culture-row{grid-column:2/4;grid-row:4;display:grid;grid-template-columns:1.25fr 1fr;gap:6px;min-height:0}
+.cr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.cr h3{margin:0 0 3px;font-size:10px;letter-spacing:2px;color:var(--m)}
+.cr .it{display:grid;grid-template-columns:minmax(0,1fr) 54px 34px;gap:4px;align-items:center;font-size:10.5px;margin:1px 0}
+.cr .it span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cr .it .bar{margin:0}
+.cr .v{font-size:9.5px;text-align:right}.csrc{display:flex;flex-wrap:wrap;gap:3px;font-size:9.5px;margin-top:4px}
+.csrc b{font-weight:400;padding:0 5px;border:1px solid #2a3340;border-radius:8px;color:var(--d)}.csrc b.ok{border-color:#1f6f4a;color:#5fe3a1}.csrc b.bad{border-color:#6f2a1f;color:#ff8a70}
+.sc{display:inline-block;width:9px;height:9px;margin-right:1px;border-radius:1px;background:#3a1420;border:1px solid var(--r)}.sc.y{background:#0f3a26;border-color:var(--g)}
 .right{grid-column:3;grid-row:2/4;display:grid;grid-template-rows:auto auto 1fr auto;gap:6px;min-height:0}
 /* crawler bay */
 .bay{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:6px;padding:6px;flex:1;min-height:0}
@@ -141,6 +148,10 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
  <section class="pnl"><h2>ACCURACY LEADERBOARD</h2><div class="body" id="acc"></div></section>
  <section class="pnl"><h2>SYSTEM HEALTH</h2><div class="body" id="health" style="max-height:190px"></div></section>
 </div>
+<div class="culture-row">
+ <section class="pnl"><h2><span class="dot on"></span>CULTURE RADAR<span class="tag" id="cr-tag">crypto · stocks · prediction buzz</span></h2><div class="body" id="culture"></div></section>
+ <section class="pnl"><h2>ALPHA CANDIDATES<span class="tag" id="al-tag">paper · screens</span></h2><div class="body" id="alpha"></div></section>
+</div>
 </div>
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -149,7 +160,7 @@ const f2=(x,d=2)=>x==null||x===""||isNaN(+x)?"—":(+x).toFixed(d), usd=x=>x==nu
 const hm=t=>{if(!t)return"—";const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));return isNaN(d)?t:d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})};
 const ago=t=>{const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));const s=(Date.now()-d)/1e3;return isNaN(s)?"—":s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago"};
 async function j(u){try{const r=await fetch(u,{cache:"no-store"});return r.ok?await r.json():null}catch(e){return null}}
-function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes,wire,xwire]){try{f()}catch(e){console.error(e)}}}
+function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes,wire,xwire,culture,alpha]){try{f()}catch(e){console.error(e)}}}
 async function load(){let n=0;
  const go=(u,k)=>j(u).then(d=>{if(d){S[k]=d;n++}render();if(k==="tr"&&S.fi===0)flipNext()});
  await Promise.all([go("/api/trading-room","tr"),go("/api/command-center","cc"),go("/api/room-v4","v4"),go("/api/room-v6","v6"),go("/api/accuracy","accuracy")]);
@@ -293,6 +304,21 @@ function acc(){const v6=S.v6||{},el=$("acc");
  if(Array.isArray(L)&&L.length){el.innerHTML=`<table><tr><th>agent</th><th>brier</th><th>calib</th><th>weight</th><th>status</th></tr>${L.map(r=>`<tr><td>${esc(r.agent||r.agent_id||r.name||r.model)}</td><td>${f2(r.brier,3)}</td><td>${f2(r.calibration_error??r.calibration,3)}</td><td>${f2(r.weight)}</td><td class="${r.benched?"bad":"ok"}">${r.benched?"BENCHED":"active"}</td></tr>`).join("")}</table>`;return}
  const b=v6.brier_by_model||((S.cc||{}).ledger||{}).brier||{};
  el.innerHTML='<div class="empty">No accuracy-engine forecasts yet.</div>'+(Object.keys(b).length?`<table><tr><th>model</th><th>brier</th><th>n</th></tr>${Object.entries(b).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${f2(v.brier,3)}</td><td>${v.n}</td></tr>`).join("")}</table>`:"");}
+/* ---------- culture radar / alpha ---------- */
+function culture(){const c=(S.v6||{}).culture,el=$("culture");if(!el)return;
+ if(!c){el.innerHTML='<div class="empty">Culture crawler has not reported yet.</div>';return}
+ const col=(t,rows,lab)=>{const mx=Math.max(1,...rows.map(r=>+r.score||0));return `<div><h3>${t}</h3>${rows.length?rows.slice(0,8).map(r=>{const v=+r.buzz_velocity||0,sn=r.sentiment;return `<div class="it" title="${esc(r.title||r.entity)} · sources: ${esc(r.sources)}"><span>${esc(lab(r))}</span><div class="bar"><i style="width:${Math.max(4,100*(+r.score||0)/mx)}%"></i></div><span class="v ${v>0?"ok":v<0?"bad":"dim"}">${v>0?"▲":v<0?"▼":"·"}${f2(Math.abs(v),1)}</span></div>`}).join(""):'<div class="empty">none yet</div>'}</div>`};
+ const tk=r=>r.symbol||(r.entity||"").split(":").pop().slice(0,6)+"…";
+ el.innerHTML=`<div class="cr">${col("TOKENS",c.tokens||[],r=>`${tk(r)} · ${(r.chain||"").slice(0,3)}`)}${col("TICKERS",c.tickers||[],r=>`$${r.symbol} ${r.domain==="crypto"?"₿":""}`)}${col("MARKETS",c.markets||[],r=>`${(r.entity||"").startsWith("kalshi")?"KAL":"PM"} ${r.title||r.symbol} ${r.price!=null?Math.round(r.price*100)+"¢":""}`)}</div>`+
+  `<div class="csrc">${(c.sources||[]).map(s=>`<b class="${s.status==="200"?"ok":"bad"}" title="${esc(s.domain)} · ${esc(s.items)} items · ${esc(s.fetched_at)}">${esc(s.name)} ${esc(s.items)}</b>`).join("")}${(c.blocked||[]).map(b=>`<b class="bad" title="${esc(b.reason)}">✕ ${esc(b.name)}</b>`).join("")}</div>`;
+ $("cr-tag").textContent=`${(c.sources||[]).filter(s=>s.status==="200").length} live · ${(c.blocked||[]).length} blocked`;}
+function alpha(){const a=(S.v6||{}).alpha,el=$("alpha");if(!el)return;
+ if(!a){el.innerHTML='<div class="empty">Alpha discovery has not run yet.</div>';return}
+ const names=["liquidity","volume_24h","age","not_collapsing","mint_authority_revoked","freeze_authority_revoked","lp_locked_or_burned","top10_concentration","sell_tax_honeypot","dev_wallet"];
+ const b=a.book||{},open=(a.positions||[]).filter(p=>p.status==="open");
+ $("al-tag").textContent=`PAPER · ${a.live_supported?"live-capable":"no live path"} · book ${usd(b.cash_usd)} cash · floor ${usd(b.floor)}${b.halted?" · HALTED":""}`;
+ el.innerHTML=`<div class="dim" style="font-size:10px;margin-bottom:3px">screens: ${names.map((n,i)=>`${i+1}=${n.replace(/_/g," ")}`).join(" · ")}</div><table><tr><th>token</th><th>class</th><th>liq</th><th>1h</th><th>score</th><th>screens</th></tr>${(a.candidates||[]).slice(0,12).map(r=>`<tr title="${esc(r.address)}${r.failed.length?" · failed: "+esc(r.failed.join(", ")):""}"><td class="${r.passed?"ok":"dim"}">${esc(r.symbol||r.address.slice(0,6))}</td><td>${esc(r.cap_class)}</td><td>${usd(Math.round(r.liquidity||0))}</td><td class="${r.h1>0?"ok":"bad"}">${f2(r.h1,1)}%</td><td>${f2(r.score,2)}</td><td>${names.map(n=>n in r.screens?`<span class="sc ${r.screens[n]?"y":""}"></span>`:'<span class="sc" style="opacity:.25"></span>').join("")}</td></tr>`).join("")}</table>`+
+ `<div style="margin-top:4px;font-size:10.5px"><b class="warn">OPEN PAPER</b> ${open.length?open.map(p=>{const r=p.last_price&&p.entry_price?p.last_price/p.entry_price-1:0;return `${esc(p.symbol)} <span class="${r>=0?"ok":"bad"}">${(r*100).toFixed(1)}%</span> TP${p.tp_hits}`}).join(" · "):"none"} <span class="dim">· exits: TP +30/+75/+150%, trail 20%, stop −15%, 24h time stop</span></div>`;}
 function health(){const v6=S.v6||{},h=(S.cc||{}).health||{};const up=v6.uptime_seconds;
  $("health").innerHTML=`<div class="kv"><span>agent heartbeat</span><span class="${h.health==="healthy"?"ok":"warn"}">${esc(h.health||"—")} · ${h.heartbeat_age_s??"—"}s · cycle ${h.cycle_id??"—"}</span><span>dashboard uptime</span><span>${up==null?"—":Math.floor(up/3600)+"h "+Math.floor(up%3600/60)+"m"}</span><span>GeckoTerminal</span><span>${(v6.rate_limits||{}).geckoterminal_per_min??"—"} req/min shared limiter</span><span>news crawler</span><span class="warn">${esc(v6.news_crawler||"—")}</span></div>
  <table>${(v6.providers||[]).map(p=>`<tr><td>${esc(p.provider)}</td><td class="${p.state==="healthy"?"ok":"warn"}">${esc(p.state)}</td><td class="dim">${p.consecutive_failures} fails · ${esc(p.last_error_class||"")}</td></tr>`).join("")||'<tr><td class="dim">no provider health rows</td></tr>'}</table>`;}

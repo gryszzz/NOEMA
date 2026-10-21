@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Culture radar and alpha discovery (paper)
+
+- A new read-only culture crawler covers crypto, stocks and prediction markets: DexScreener, Jupiter, pump.fun, ApeWisdom (Reddit), StockTwits, Kalshi movers, and Polymarket volume, new markets and leaderboard. It respects robots.txt and rate limits, and treats every input as untrusted. Each entity gets a culture signal (buzz velocity, sentiment, novelty), and the `culture` agent's forecasts go into the accuracy ledger.
+- Alpha discovery finds mid/small-cap and new tokens and runs them through hard safety screens (RugCheck/GoPlus, LP lock, authorities, top-10 holders, taxes, dev wallet). Sizing follows the capital guard, and memecoins get a smaller exposure cap. Exits use a take-profit ladder, a trailing stop and a time stop. It runs paper-only, with a proposed allowlist that needs owner review. See docs/culture-and-alpha.md.
+- The v6 room adds a CULTURE RADAR panel and an ALPHA CANDIDATES board.
+
 ### Live Solana and EVM swap signers
 
 - Solana trench desks can swap through Jupiter inside the isolated signer process. The key is `NOEMA_SOLANA_SIGNER_SECRET`, read only there. The only signing address is `J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv`.

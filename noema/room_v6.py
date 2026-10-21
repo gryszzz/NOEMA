@@ -216,11 +216,17 @@ def build_room_v6(db_path: str, *, fetch: bool = True,
     out["accuracy_leaderboard"] = _accuracy_rows(cc)
     out["brier_by_model"] = (cc.get("ledger") or {}).get("brier")
     out["capital"] = capital_panel(db_path)
+    out["culture"], out["alpha"] = None, None
     if Path(db_path).exists():
         conn = _ro(db_path)
         try:
             out["lanes"] = crawler_lanes(conn)
             out["providers"] = provider_health(conn)
+            from .alpha_discovery import alpha_board
+            from .culture_crawler import culture_radar
+
+            out["culture"] = culture_radar(db_path)
+            out["alpha"] = alpha_board(db_path)
             ev = next((lane for lane in out["lanes"] if lane["lane"] == "evidence"), {})
             if ev.get("articles"):
                 out["news_crawler"] = (f"{ev['articles']} articles, {ev['matched_articles']} matched "
