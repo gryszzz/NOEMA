@@ -1,0 +1,15 @@
+#!/bin/bash
+# TEV launcher: opens the NOEMA trading room in a chromeless app window (read-only view).
+RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+URL="$(head -n1 "$HOME/.tev-url" 2>/dev/null || true)"
+[ -n "$URL" ] || URL="$(head -n1 "$RES/tev-url.txt" | tr -d '[:space:]')"
+if [[ "$URL" == *YOUR-TAILNET* ]]; then
+  osascript -e 'display dialog "TEV needs your dashboard URL.\n\nEdit TEV.app/Contents/Resources/tev-url.txt (right-click TEV > Show Package Contents) or put the URL in ~/.tev-url." buttons {"OK"} default button 1 with title "TEV"' >/dev/null
+  exit 0
+fi
+for B in "Google Chrome" "Brave Browser" "Microsoft Edge" "Chromium"; do
+  if [ -d "/Applications/$B.app" ] || [ -d "$HOME/Applications/$B.app" ]; then
+    exec open -na "$B" --args --app="$URL" --user-data-dir="$HOME/Library/Application Support/TEV/$B" --window-size=1600,1000
+  fi
+done
+exec open -a Safari "$URL"

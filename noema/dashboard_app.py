@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .account_capital import value_native_wallets
@@ -1063,6 +1063,24 @@ async def room_v6() -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - leaderboard degrades to empty state
         cc = None
     return await asyncio.to_thread(build_room_v6, _db_path(), command_center=cc)
+
+
+_TEV_BRAND = Path(__file__).with_name("static") / "brand" / "tev"
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def tev_manifest() -> FileResponse:
+    return FileResponse(_TEV_BRAND / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def tev_favicon() -> FileResponse:
+    return FileResponse(_TEV_BRAND / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+async def tev_apple_touch_icon() -> FileResponse:
+    return FileResponse(_TEV_BRAND / "tev-180.png", media_type="image/png")
 
 
 @app.get("/trading-room", response_class=HTMLResponse)
