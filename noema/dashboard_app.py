@@ -56,6 +56,7 @@ from .prediction_venues import (
 )
 from .research_state import research_trial_update_is_newer
 from .room_v4 import build_room_v4
+from .room_v6 import build_room_v6
 from .sqlite_diagnostics import sqlite_error_fields
 from .storage_recovery import recover_storage
 from .stripe_economy import stripe_economy_overview
@@ -1054,8 +1055,23 @@ async def room_v4() -> dict[str, Any]:
     return await asyncio.to_thread(build_room_v4, _db_path())
 
 
+@app.get("/api/room-v6")
+async def room_v6() -> dict[str, Any]:
+    """Read-only v6 extras: crawler lanes, EVM balances, signer flags, provider health."""
+    try:
+        cc = await asyncio.wait_for(asyncio.to_thread(build_command_center, _db_path()), timeout=8)
+    except Exception:  # noqa: BLE001 - leaderboard degrades to empty state
+        cc = None
+    return await asyncio.to_thread(build_room_v6, _db_path(), command_center=cc)
+
+
 @app.get("/trading-room", response_class=HTMLResponse)
 async def trading_room_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room-v6.html").read_text()
+
+
+@app.get("/trading-room-v5", response_class=HTMLResponse)
+async def trading_room_v5_page() -> str:
     return (Path(__file__).with_name("static") / "trading-room-v5.html").read_text()
 
 
