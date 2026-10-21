@@ -568,6 +568,8 @@ def test_gateway_dex_swap_blocks_when_unarmed(tmp_path, monkeypatch):
 def test_live_desk_records_chain_amounts_and_hides_secret(tmp_path, monkeypatch):
     import noema.trench_desk_runtime as rt
 
+    # Influence would shadow every unproven agent; covered separately.
+    monkeypatch.setenv("NOEMA_ACCURACY_INFLUENCE_ENABLED", "0")
     real_gate = rt.chief_gate
     # rules-only picks carry no confidence, so CHIEF vetoes them; approve here to exercise entries
     monkeypatch.setattr(rt, "chief_gate", lambda picks: (picks, real_gate(picks)[1]))
@@ -666,6 +668,8 @@ def test_live_desk_records_chain_amounts_and_hides_secret(tmp_path, monkeypatch)
 def test_partial_flags_and_halt_do_not_paper_fill_or_go_live(tmp_path, monkeypatch):
     import noema.trench_desk_runtime as rt
 
+    # Influence would shadow every unproven agent; covered separately.
+    monkeypatch.setenv("NOEMA_ACCURACY_INFLUENCE_ENABLED", "0")
     real_gate = rt.chief_gate
     monkeypatch.setattr(rt, "chief_gate", lambda picks: (picks, real_gate(picks)[1]))
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_ENABLED", "1")

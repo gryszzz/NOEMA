@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .solana_live_gate import DeskSwapRejected, master_halt_active, solana_desk_live_enabled
 from .accuracy_config import AccuracyConfig
 from .accuracy_influence import apply_influence, influences_for
 from .accuracy_ledger import record_forecast, resolve_token_marks
+from .solana_live_gate import DeskSwapRejected, master_halt_active, solana_desk_live_enabled
 from .solana_research import (
     DexScreenerTrenchPriceClient,
     GeckoTerminalPoolClient,
@@ -29,6 +29,9 @@ from .solana_research import (
 from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore, desk_overview
 from .trench_judgement import judge_candidates
 from .trench_risk import DeskEntryPolicy, evaluate_desk_entry
+
+LIVE_FLAGS = ("NOEMA_EXECUTION_GATEWAY_ENABLED", "NOEMA_ALLOW_LIVE_ORDERS",
+              "NOEMA_TREASURY_ACTIONS_ENABLED", "NOEMA_SOLANA_SIGNER_ENABLED")
 
 
 @dataclass(frozen=True)
