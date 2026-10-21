@@ -109,6 +109,9 @@ def _arm(monkeypatch, tmp_path, account, *, trade="100", daily="100"):
     monkeypatch.setenv("NOEMA_EVM_CONFIRM_ATTEMPTS", "1")
     monkeypatch.setenv("NOEMA_EVM_CONFIRM_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("NOEMA_KYBERSWAP_API_KEY", "kyber-key-should-not-leak")
+    monkeypatch.delenv("NOEMA_AUTONOMY_AUTHORITY_PATH", raising=False)
+    monkeypatch.setenv("NOEMA_AUTONOMY_LEVEL", "micro")
+    monkeypatch.setenv("NOEMA_EVM_BANKROLL_USD", "1000000")
 
 
 def _service(account, *, confirm="confirmed", router=KYBER_ROUTER):

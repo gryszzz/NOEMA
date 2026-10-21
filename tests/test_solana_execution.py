@@ -137,9 +137,13 @@ class _Client:
 
 
 def _arm(monkeypatch, tmp_path, signer: Keypair, *, trade="100", daily="100", price="100"):
+    monkeypatch.setattr(
+        "noema.solana_swap.EXPECTED_SOLANA_SIGNER_ADDRESS", str(signer.pubkey()),
+    )
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_SECRET", json.dumps(list(bytes(signer))))
     monkeypatch.setenv("NOEMA_SOLANA_WALLET_ADDRESS", str(signer.pubkey()))
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_ENABLED", "1")
+    monkeypatch.setenv("NOEMA_SOLANA_OWNER_REVIEWED", "1")
     monkeypatch.setenv("NOEMA_ALLOW_LIVE_ORDERS", "1")
     monkeypatch.setenv("NOEMA_LIVE_VENUES", "solana")
     monkeypatch.setenv("NOEMA_MASTER_HALT", "0")
@@ -156,8 +160,8 @@ def _arm(monkeypatch, tmp_path, signer: Keypair, *, trade="100", daily="100", pr
     monkeypatch.setenv("NOEMA_SOLANA_FEE_RESERVE_LAMPORTS", "20000000")
     monkeypatch.setenv("NOEMA_JUPITER_API_KEY", "jupiter-key-should-not-leak")
     monkeypatch.delenv("NOEMA_AUTONOMY_AUTHORITY_PATH", raising=False)
-    monkeypatch.delenv("NOEMA_AUTONOMY_LEVEL", raising=False)
-    monkeypatch.delenv("NOEMA_SOLANA_BANKROLL_USD", raising=False)
+    monkeypatch.setenv("NOEMA_AUTONOMY_LEVEL", "micro")
+    monkeypatch.setenv("NOEMA_SOLANA_BANKROLL_USD", "1000000")
 
 
 def _service(signer: Keypair, mint: str, *, confirm="confirmed", swap_fee_payer: Keypair | None = None):
@@ -352,6 +356,13 @@ def test_signer_guards_are_independent_of_the_request(monkeypatch, tmp_path):
         }, signer, client=client)
 
     monkeypatch.setenv("NOEMA_SOLANA_WALLET_ADDRESS", str(signer.pubkey()))
+    monkeypatch.setenv("NOEMA_SOLANA_OWNER_REVIEWED", "0")
+    with pytest.raises(RuntimeError, match="owner review"):
+        perform_jupiter_swap({
+            "side": "buy", "mint": mint, "amount": 1_000_000, "max_slippage_bps": 100,
+            "min_out": 1, "idempotency_key": "review-1", "owner_reviewed": True,
+        }, signer, client=client)
+    monkeypatch.setenv("NOEMA_SOLANA_OWNER_REVIEWED", "1")
     monkeypatch.setenv("NOEMA_SOLANA_MAX_TRADE_USD", "100")
     monkeypatch.setenv("NOEMA_SOLANA_MAX_DAILY_USD", "100")
     monkeypatch.setenv("NOEMA_MASTER_HALT", "1")
@@ -477,6 +488,30 @@ def test_wrong_fee_payer_is_not_signed_onto_the_network(monkeypatch, tmp_path):
     assert state["sends"] == 0
 
 
+def test_expected_solana_address_is_the_owner_wallet():
+    from noema.solana_swap import EXPECTED_SOLANA_SIGNER_ADDRESS
+
+    assert EXPECTED_SOLANA_SIGNER_ADDRESS == "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
+
+
+def test_refuses_a_key_that_is_not_the_pinned_address(monkeypatch, tmp_path):
+    from noema.solana_swap import perform_jupiter_swap
+
+    signer = Keypair()
+    mint = str(Keypair().pubkey())
+    _arm(monkeypatch, tmp_path, signer)
+    monkeypatch.setattr(
+        "noema.solana_swap.EXPECTED_SOLANA_SIGNER_ADDRESS",
+        "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv",
+    )
+    monkeypatch.setenv("NOEMA_SOLANA_WALLET_ADDRESS", str(signer.pubkey()))
+    with pytest.raises(RuntimeError, match="does not match"):
+        perform_jupiter_swap({
+            "side": "buy", "mint": mint, "amount": 1_000_000, "max_slippage_bps": 50,
+            "min_out": 1, "idempotency_key": "addr-1",
+        }, signer, client=_service(signer, mint)[0])
+
+
 def test_parent_ipc_allowlist_excludes_the_secret(monkeypatch):
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_SECRET", "ipc-secret-LEAKME")
     monkeypatch.setenv("NOEMA_JUPITER_API_KEY", "ipc-jupiter-key")
@@ -531,9 +566,15 @@ def test_gateway_dex_swap_blocks_when_unarmed(tmp_path, monkeypatch):
 
 
 def test_live_desk_records_chain_amounts_and_hides_secret(tmp_path, monkeypatch):
+    import noema.trench_desk_runtime as rt
+
+    real_gate = rt.chief_gate
+    # rules-only picks carry no confidence, so CHIEF vetoes them; approve here to exercise entries
+    monkeypatch.setattr(rt, "chief_gate", lambda picks: (picks, real_gate(picks)[1]))
     secret = "desk-secret-LEAKME"
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_SECRET", secret)
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_ENABLED", "1")
+    monkeypatch.setenv("NOEMA_SOLANA_OWNER_REVIEWED", "1")
     monkeypatch.setenv("NOEMA_ALLOW_LIVE_ORDERS", "1")
     monkeypatch.setenv("NOEMA_LIVE_VENUES", "solana")
     monkeypatch.setenv("NOEMA_MASTER_HALT", "0")
@@ -623,6 +664,10 @@ def test_live_desk_records_chain_amounts_and_hides_secret(tmp_path, monkeypatch)
 
 
 def test_partial_flags_and_halt_do_not_paper_fill_or_go_live(tmp_path, monkeypatch):
+    import noema.trench_desk_runtime as rt
+
+    real_gate = rt.chief_gate
+    monkeypatch.setattr(rt, "chief_gate", lambda picks: (picks, real_gate(picks)[1]))
     monkeypatch.setenv("NOEMA_SOLANA_SIGNER_ENABLED", "1")
     assert solana_desk_live_enabled() is False
 
@@ -659,6 +704,9 @@ def test_partial_flags_and_halt_do_not_paper_fill_or_go_live(tmp_path, monkeypat
 
     monkeypatch.setenv("NOEMA_ALLOW_LIVE_ORDERS", "1")
     monkeypatch.setenv("NOEMA_LIVE_VENUES", "solana")
+    assert solana_desk_live_enabled() is False
+    monkeypatch.setenv("NOEMA_SOLANA_OWNER_REVIEWED", "1")
+    assert solana_desk_live_enabled() is True
     halted = str(tmp_path / "halted.db")
     halted_summary = __import__("asyncio").run(run_desk_cycle(
         halted, config=DeskRuntimeConfig(enabled=True, desk_count=1, paper_capital_usd=100),

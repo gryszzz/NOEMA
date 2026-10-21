@@ -417,6 +417,8 @@ class ExecutionGateway:
         reasons: list[str] = []
         if os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") != "1" or os.getenv("NOEMA_SOLANA_SIGNER_ENABLED", "0") != "1":
             reasons.append("solana live swaps are disabled")
+        if os.getenv("NOEMA_SOLANA_OWNER_REVIEWED", "0") != "1":
+            reasons.append("solana owner review is required")
         venue = getattr(intent, "venue", None)
         allowed = {
             item.strip() for item in os.getenv("NOEMA_LIVE_VENUES", "").split(",") if item.strip()

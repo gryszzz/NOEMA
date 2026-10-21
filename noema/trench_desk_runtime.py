@@ -1,8 +1,8 @@
 """One trench-desk cycle: discover pools, filter, judge, and run the desks.
 
 Paper fills are the default. Entries and exits go to the isolated Solana signer only
-when NOEMA_SOLANA_SIGNER_ENABLED, NOEMA_ALLOW_LIVE_ORDERS, and a solana live venue
-are all set. This module never reads the signer secret.
+when NOEMA_SOLANA_SIGNER_ENABLED, NOEMA_ALLOW_LIVE_ORDERS, NOEMA_SOLANA_OWNER_REVIEWED,
+and a solana live venue are all set. This module never reads the signer secret.
 """
 
 from __future__ import annotations

@@ -28,10 +28,14 @@ def solana_venue_selected() -> bool:
 
 
 def solana_desk_live_enabled() -> bool:
-    """True when desk entries and exits must go to the signer, not paper fills."""
+    """True when desk entries and exits must go to the signer, not paper fills.
+
+    Owner review is an environment flag. A request field cannot turn it on.
+    """
     return (
         os.getenv("NOEMA_SOLANA_SIGNER_ENABLED", "0") == "1"
         and os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") == "1"
+        and os.getenv("NOEMA_SOLANA_OWNER_REVIEWED", "0") == "1"
         and solana_venue_selected()
     )
 

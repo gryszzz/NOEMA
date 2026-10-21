@@ -932,6 +932,7 @@ def main() -> int:
             "solana signer secret is not a valid keypair",
             "configured solana wallet does not match signer keypair",
             "solana live swaps are disabled",
+            "solana owner review is required",
             "owner master halt is active",
             "solana master halt is active",
             "wallet master halt is active",

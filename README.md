@@ -34,7 +34,7 @@
 
 - [The mission](#the-mission) · [Reality-first status](#reality-first-status) · [TEV trading room](#tev-trading-room) · [TEV Mac app](#tev-mac-app)
 - [Venues](#venues) · [News crawler](#news--evidence-crawler) · [Trench desks](#trench-desks-paper-only) · [TEV JUDGE + CHIEF](#decision-pipeline-tev-judge--chief)
-- [Earned-autonomy ladder](#earned-autonomy-ladder) · [Fail-closed flags](#fail-closed-execution-flags) · [In progress](#in-progress)
+- [Earned-autonomy ladder](#earned-autonomy-ladder) · [Fail-closed flags](#fail-closed-execution-flags) · [Swap signers](#swap-signers) · [In progress](#in-progress)
 - [Architecture](#system-architecture) · [Self-hosting](#self-hosting) · [Start with one cycle](#start-with-one-cycle) · [Repository map](#repository-map)
 
 ## The mission
@@ -115,7 +115,7 @@ The logo source is a single vector file: [`noema/static/brand/tev/tev-logo.svg`]
 
 ## Trench desks (paper only)
 
-Five parallel paper desks — **VET, RISK, FILLS, TAPE, FLOOR** — each with its own bankroll slice. A desk holds a ~10% core leg and trades bounces with the rest; it is fired after **2 consecutive losses** and replaced by a mutated successor.
+Five parallel desks — **VET, RISK, FILLS, TAPE, FLOOR** — each with its own bankroll slice. A desk holds a ~10% core leg and trades bounces with the rest; it is fired after **2 consecutive losses** and replaced by a mutated successor. Fills stay paper unless every gate in `docs/solana-live-swaps.md` is set.
 
 | Entry filter (`trench_risk.py`) | Default |
 | --- | --- |
@@ -161,7 +161,14 @@ Every flag defaults to off; all must be set for any live order.
 | `NOEMA_MASTER_HALT` | `0` | `1` halts everything |
 | `NOEMA_LIVE_REQUIRES_OWNER_REVIEW` | `1` | Owner must review live actions |
 | `NOEMA_SOLANA_SIGNER_ENABLED` | `0` | Solana signing off |
+| `NOEMA_SOLANA_OWNER_REVIEWED` | `0` | Solana swap owner review; not settable over IPC |
+| `NOEMA_EVM_SIGNER_ENABLED` | `0` | EVM swap signing off |
+| `NOEMA_EVM_OWNER_REVIEWED` | `0` | EVM swap owner review; not settable over IPC |
 | `NOEMA_TREASURY_ACTIONS_ENABLED` | `0` | Treasury moves off |
+
+## Swap signers
+
+Solana (Jupiter) and EVM (KyberSwap on Ethereum, Base, and Polygon, with Robinhood Chain reserved) swaps run in a **separate signer process**. Keys are read only from `NOEMA_SOLANA_SIGNER_SECRET` and `NOEMA_EVM_SIGNER_SECRET` in that process. The signers refuse any key whose address is not `J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv` (Solana) or `0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8` (EVM). They ship **disabled**, simulate before send, and size caps from the autonomy ladder. Enablement checklists: `docs/solana-live-swaps.md` and `docs/evm-live-swaps.md`.
 
 ## In progress
 
@@ -169,7 +176,6 @@ Not in `main` yet — listed so the roadmap stays honest.
 
 | Work | Status |
 | --- | --- |
-| **Swap signers** ([#108](https://github.com/gryszzz/NOEMA/pull/108)) — Jupiter (Solana) + EVM aggregator signers in a separate process; sign only for NOEMA's own addresses, simulate first, ship **disabled** with a daily cap | 🟡 Draft PR |
 | **Accuracy engine** — per-agent forecast scoring, earned influence in CHIEF, backtests, self-consistency gating, trade post-mortems | 🟡 In progress |
 
 ## A living operating system
@@ -227,7 +233,7 @@ flowchart LR
     F -->|reject| P[PASS / kill]
     F -->|paper| Q[Paper action]
     F -->|ladder ≥ MICRO + all live flags| G[Execution gateway]
-    G -.->|in progress #108| S[Swap signers]
+    G -.->|signer flags + owner review| S[Swap signers]
     Q --> H[Outcomes + scoring]
     G --> H
     H --> AE[Calibration / accuracy engine*]

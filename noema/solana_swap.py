@@ -24,6 +24,9 @@ import httpx
 from .solana_live_gate import LIVE_VENUE_NAMES, solana_venue_selected
 
 WSOL_MINT = "So11111111111111111111111111111111111111112"
+# The only address this swap signer will sign for. A matching env value is
+# required as well; a different derived key is refused.
+EXPECTED_SOLANA_SIGNER_ADDRESS = "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
 TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 ALLOWED_EXTENSIONS = frozenset({"metadatapointer", "tokenmetadata"})
@@ -269,6 +272,8 @@ def _parse_request(request: dict[str, Any]) -> dict[str, Any]:
 def _require_gates() -> None:
     if os.getenv("NOEMA_SOLANA_SIGNER_ENABLED", "0") != "1" or os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") != "1":
         raise RuntimeError("solana live swaps are disabled")
+    if os.getenv("NOEMA_SOLANA_OWNER_REVIEWED", "0") != "1":
+        raise RuntimeError("solana owner review is required")
     venues = {
         item.strip() for item in os.getenv("NOEMA_LIVE_VENUES", "").split(",") if item.strip()
     }
@@ -604,8 +609,9 @@ def perform_jupiter_swap(request: dict[str, Any], keypair: Any, *,
     fields = _parse_request(request)
     _require_gates()
     address = str(keypair.pubkey())
-    expected = os.getenv("NOEMA_SOLANA_WALLET_ADDRESS", "").strip()
-    if not expected or expected != address:
+    configured = os.getenv("NOEMA_SOLANA_WALLET_ADDRESS", "").strip()
+    if (not configured or address != EXPECTED_SOLANA_SIGNER_ADDRESS
+            or configured != EXPECTED_SOLANA_SIGNER_ADDRESS):
         raise RuntimeError("configured solana wallet does not match signer keypair")
     per_trade, daily_cap = resolve_usd_caps()
     price = _env_decimal("NOEMA_SOLANA_PRICE_USD")
