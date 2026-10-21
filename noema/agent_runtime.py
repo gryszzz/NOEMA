@@ -1172,6 +1172,7 @@ async def run_agent(
     market_discovery_sampler: asyncio.Task[None] | None = None
     polymarket_stream: asyncio.Task[None] | None = None
     polymarket_rest_sampler: asyncio.Task[None] | None = None
+    equity_feed: asyncio.Task[None] | None = None
     changed_records = asyncio.Event()
     snapshot_lock = asyncio.Lock()
     runtime_loop = asyncio.get_running_loop()
@@ -1183,6 +1184,13 @@ async def run_agent(
         _changed_console_snapshot_loop(config.db_path, changed_records, snapshot_lock),
         name="noema-change-triggered-console-snapshot",
     )
+    if os.getenv("NOEMA_EQUITY_FEED_ENABLED", "1").strip() == "1":
+        from .equity_feed import feed_interval_seconds, run_equity_feed_loop
+
+        equity_feed = asyncio.create_task(
+            run_equity_feed_loop(config.db_path, _log), name="noema-equity-feed",
+        )
+        _log("equity_feed_started", enabled=True, interval_seconds=feed_interval_seconds(), read_only=True)
     trench_config = TrenchCollectorConfig.from_env()
     if trench_config.enabled:
         trench_sampler = asyncio.create_task(
@@ -1304,7 +1312,7 @@ async def run_agent(
     finally:
         for task in (
             trench_sampler, trench_desks, market_discovery_sampler, polymarket_stream,
-            polymarket_rest_sampler, changed_snapshot_task,
+            polymarket_rest_sampler, changed_snapshot_task, equity_feed,
         ):
             if task is None:
                 continue

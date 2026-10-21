@@ -54,6 +54,9 @@ canvas.cand{position:absolute;left:10px;right:10px;bottom:10px;top:104px;width:c
 @keyframes fadein{from{opacity:0;transform:translateX(-12px);color:#fff}}
 .wire{padding:0 6px 6px;display:flex;flex-direction:column;gap:4px}
 .wire .wh{display:flex;gap:10px;align-items:center;white-space:nowrap;overflow:hidden;font-size:11px;letter-spacing:2px;color:var(--c)}
+.wsrc{display:flex;flex-wrap:wrap;gap:4px;font-size:10px}.wsrc b{font-weight:400;padding:1px 6px;border:1px solid #2a3340;border-radius:8px;color:var(--d)}.wsrc b.ok{border-color:#1f6f4a;color:#5fe3a1}.wsrc b.bad{border-color:#6f2a1f;color:#ff8a70}.wsrc b.pri::before{content:"◆ ";color:#ffd166}
+.wtgt{font-size:10px;color:var(--d);display:flex;flex-direction:column;gap:2px}.wtgt div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wtgt i{font-style:normal;color:var(--c)}
+.nc .rl{font-size:9px;letter-spacing:1px;color:#ffd166;margin-left:6px}
 .wire .wh span{letter-spacing:0;color:var(--d);overflow:hidden;text-overflow:ellipsis}
 .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;height:148px}
 .nc{border:1px solid #1d5a7a;background:linear-gradient(180deg,#061a28,#030b12);padding:7px 9px;display:flex;flex-direction:column;gap:4px;overflow:hidden;animation:ncin .6s}
@@ -105,7 +108,7 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
   <div class="flip" id="flip"><div class="scan"></div><div class="radar"></div><div class="card" id="card"><div class="empty">Waiting for the first crawler cycle…</div></div></div>
   <div class="lanes" id="lanes"></div>
  </div>
- <div class="wire"><div class="wh"><span class="dot on" id="wire-dot"></span>NEWS / EVIDENCE WIRE <span id="wire-tag">loading…</span></div><div class="cards" id="wire"></div></div>
+ <div class="wire"><div class="wh"><span class="dot on" id="wire-dot"></span>NEWS / EVIDENCE WIRE <span id="wire-tag">loading…</span></div><div class="cards" id="wire"></div><div class="wsrc" id="wire-src"></div><div class="wtgt" id="wire-tgt"></div></div>
  <div class="chain" id="chain"></div>
 </section>
 
@@ -194,8 +197,12 @@ function wire(){const ev=((S.v6||{}).lanes||[]).find(l=>l.lane==="evidence"),el=
  const R=ev.recent||[];if(!R.length){el.innerHTML=`<div class="empty" style="grid-column:1/-1">${esc(ev.note||"No articles stored yet.")}</div>`;return}
  const m=R.filter(r=>r.market_id),u=R.filter(r=>!r.market_id);S.wi=(S.wi||0);const pick=[];
  const pool=m.length>=3?m:m.concat(u);for(let k=0;k<Math.min(3,pool.length);k++)pick.push(pool[(S.wi+k)%pool.length]);S.wi+=1;
- el.innerHTML=pick.map(r=>`<div class="nc"><div class="src"><b>${esc(r.source)}</b>${r.category?`<span class="cat">${esc(r.category)}</span>`:""}<span>${hm(r.ts)}</span></div><div class="hl">${esc(r.title)}</div><div class="mk ${r.market_id?"":"none"}">${r.market_id?"⇒ "+esc(r.market_id):"no watched market matched (kept as context)"}</div><div class="rel">relevance<div class="bar"><i style="width:${(r.relevance||0)*100}%"></i></div>${r.relevance?f2(r.relevance):"—"}</div><div class="u">${esc(r.url)}</div></div>`).join("");}
-setInterval(()=>{try{wire()}catch(e){console.error(e)}},4200);
+ el.innerHTML=pick.map(r=>`<div class="nc"><div class="src"><b>${esc(r.source)}</b>${r.category?`<span class="cat">${esc(r.category)}</span>`:""}${r.reliability!=null?`<span class="rl">${r.reliability>=1?"PRIMARY":"REL "+f2(r.reliability)}</span>`:""}<span>${hm(r.ts)}</span></div><div class="hl">${esc(r.title)}</div><div class="mk ${r.market_id?"":"none"}">${r.market_id?"⇒ "+esc(r.market_id):"no watched market matched (kept as context)"}</div><div class="rel">relevance<div class="bar"><i style="width:${(r.relevance||0)*100}%"></i></div>${r.relevance?f2(r.relevance):"—"}</div><div class="u">${esc(r.url)}</div></div>`).join("");}
+function wireSources(){const ev=((S.v6||{}).lanes||[]).find(l=>l.lane==="evidence");if(!ev)return;
+ const Sx=ev.sources||[];$("wire-src").innerHTML=Sx.length?Sx.map(x=>{const st=String(x.status||"");const ok=st==="200"||st==="304";
+  return `<b class="${ok?"ok":"bad"}${x.reliability>=1?" pri":""}" title="${esc(st)} · every ${Math.round((x.interval_s||0)/60)}m · reliability ${x.reliability}">${esc(x.name)}${ok?"":" ("+esc(st==="999"?"robots":st)+")"}</b>`}).join(""):"";
+ const T=ev.targets||[];$("wire-tgt").innerHTML=T.slice(0,4).map(t=>`<div><i>TARGET</i> ${esc(t.market||"")} ⟵ <i>${esc(t.backend)}</i> “${esc(t.query||"")}” · ${t.results??0} results · ${t.linked??0} linked</div>`).join("");}
+setInterval(()=>{try{wire();wireSources()}catch(e){console.error(e)}},4200);
 setInterval(flipNext,1900);setInterval(()=>["kalshi","polymarket"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);
 /* ---------- agents ---------- */
 function typeIn(el,txt){if(el.dataset.full===txt)return;el.dataset.full=txt;let i=0;clearInterval(el._t);el._t=setInterval(()=>{el.textContent=txt.slice(0,i+=2);if(i>=txt.length)clearInterval(el._t)},18);el.closest(".ag").classList.remove("flash");void el.offsetWidth;el.closest(".ag").classList.add("flash")}
@@ -239,10 +246,14 @@ function treas(){const t=S.tr||{},v6=S.v6||{},rows=[];
  $("treas").innerHTML=(rows.length?`<table>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td><b>${esc(r[1])}</b></td><td class="dim">${esc(r[2])}</td></tr>`).join("")}</table>`:'<div class="empty">No balances available.</div>')+`<div style="margin:4px 0">signers ${sg||'<span class="dim">unknown</span>'}</div><canvas id="eq" style="width:100%;height:60px"></canvas><div class="dim" style="font-size:10px">paper desk equity (${(t.equity_series||[]).length} snapshots)</div>`;
  const s=(t.equity_series||[]).map(e=>e.equity_usd).filter(x=>x!=null),cv=$("eq"),r=cv.getBoundingClientRect();cv.width=r.width;cv.height=r.height;const x=cv.getContext("2d");
  if(s.length<2){x.fillStyle="#5f8aa3";x.fillText("not enough equity snapshots yet",4,30);return}const hi=Math.max(...s),lo=Math.min(...s);x.strokeStyle=s.at(-1)>=s[0]?"#39ff9c":"#ff3b6b";x.lineWidth=1.5;x.beginPath();s.forEach((v,i)=>{const X=i/(s.length-1)*r.width,Y=r.height-4-(v-lo)/((hi-lo)||1)*(r.height-8);i?x.lineTo(X,Y):x.moveTo(X,Y)});x.stroke();}
+function capital(){const c=(S.v6||{}).capital||{},g=c.guard,f=c.feed;
+ if(!g){return `<div class="empty">Capital guard: no equity reading yet${f?` (last feed ${esc(f.status)})`:""}.</div>`}
+ const src=Object.entries((f||{}).sources||{}).map(([k,v])=>`<span class="pill" style="font-size:10px">${esc(k)} <b class="${v.status==="ok"?"ok":v.status==="excluded"?"dim":"bad"}">${v.status==="ok"?usd(+v.equity_usd):esc(v.status)}</b></span>`).join(" ");
+ return `<div class="flag"><span class="dim">EQUITY</span><b>${usd(+g.equity_usd)}</b></div><div class="flag"><span class="dim">PEAK</span><b>${usd(+g.peak_usd)}</b></div><div class="flag"><span class="dim">FLOOR (rising)</span><b class="warn">${usd(+g.floor_usd)}</b></div><div class="flag"><span class="dim">TODAY'S STOP</span><b class="warn">${usd(+g.daily_stop_usd)}</b></div><div class="flag"><span class="dim">GUARD</span><b class="${g.tripped||!g.fresh?"bad":"ok"}">${g.tripped?"TRIPPED":g.fresh?"FRESH":"STALE"}</b></div><div style="margin:4px 0">${src}</div><div class="dim" style="font-size:10px">feed ${esc((f||{}).status||"—")} · ${esc((f||{}).at||"")} · deposits ${usd(+((f||{}).deposits_total_usd||0))}</div>`}
 function safety(){const t=S.tr||{},cc=S.cc||{},a=cc.autonomy||{},au=t.autonomy||{},b=cc.budget||{},fl=(t.flags||{}).flags||{},v6=S.v6||{};
  const lv=(a.ladder||[]).map(l=>`<div class="${l.level===au.level?"cur":""}">${l.level}<br><span class="dim">${l.resolved}</span></div>`).join("");
  const halt=(v6.signers||[]).find(s=>s.family==="master_halt");
- $("safety").innerHTML=`<div><b class="warn">${esc(au.level||"—")}</b> · ${au.resolved_forecasts??"—"}/${(a.next||{}).resolved??30} resolved to ${esc((a.next||{}).level||"PAPER")} · ${f2(a.days,2)} days</div><div class="bar"><i style="width:${Math.min(100,(au.resolved_forecasts||0)/((a.next||{}).resolved||30)*100)}%"></i></div><div class="lad">${lv}</div>
+ $("safety").innerHTML=`${capital()}<div><b class="warn">${esc(au.level||"—")}</b> · ${au.resolved_forecasts??"—"}/${(a.next||{}).resolved??30} resolved to ${esc((a.next||{}).level||"PAPER")} · ${f2(a.days,2)} days</div><div class="bar"><i style="width:${Math.min(100,(au.resolved_forecasts||0)/((a.next||{}).resolved||30)*100)}%"></i></div><div class="lad">${lv}</div>
  ${Object.entries(fl).map(([k,v])=>`<div class="flag"><span class="dim">${k.replace("NOEMA_","")}</span><b class="${v?"bad":"ok"}">${v?"ON":"OFF"}</b></div>`).join("")}
  <div class="flag"><span class="dim">EVM_SIGNER_ENABLED</span><b class="ok">${esc(((v6.signers||[]).find(s=>s.family==="evm")||{}).state||"—")}</b></div>
  <div class="flag"><span class="dim">MASTER_HALT</span><b>${esc(halt?halt.state:"—")}</b></div>
