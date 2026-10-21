@@ -60,6 +60,7 @@ from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
 from .trench_desks import desk_overview
 from .trading_room import build_trading_room
+from .command_center import build_command_center
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 
@@ -1036,6 +1037,13 @@ async def trading_room() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         wallets = None
     return await asyncio.to_thread(build_trading_room, _db_path(), venues=venues, wallets=wallets)
+
+
+@app.get("/api/command-center")
+async def command_center() -> dict[str, Any]:
+    """Read-only v3 room aggregate: markets, ledger, coordinator, autonomy, budget, health."""
+    pnl = desk_overview(_db_path()).get("total_pnl_after_costs_usd")
+    return await asyncio.to_thread(build_command_center, _db_path(), desks_pnl=pnl)
 
 
 @app.get("/trading-room", response_class=HTMLResponse)

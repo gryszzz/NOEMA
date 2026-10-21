@@ -67,3 +67,26 @@ def test_feed_history_is_real_cycle_data(tmp_path):
     room = build_trading_room(str(tmp_path / "missing.db"))
     assert room["feed_history"] == []
     assert room["interval_seconds"] > 0
+
+
+def test_command_center_empty_db_is_explicit(tmp_path):
+    from noema.command_center import build_command_center
+    d = build_command_center(str(tmp_path / "none.db"), fetch_tokens=False)
+    assert d["missing_db"] is True and d["wallet"]["tokens"] == []
+
+
+def test_command_center_real_tables(tmp_path):
+    import sqlite3
+    from noema.command_center import build_command_center
+    db = tmp_path / "x.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE forecast_ledger (id INTEGER PRIMARY KEY, created_at, venue, market_id, snapshot_json, forecast_json, opportunity_json, action_json)")
+    c.execute("CREATE TABLE outcomes (venue, market_id, outcome_yes, resolved_at)")
+    c.execute("INSERT INTO forecast_ledger VALUES (1,'2026-01-01','k','m','{}','{\"model_version\":\"x\",\"probability_yes\":0.8}','{\"forecast\":{\"probability_yes\":0.8,\"model_version\":\"x\"},\"robust_edge\":0.1}','{}')")
+    c.execute("INSERT INTO outcomes VALUES ('k','m',1,'2026-01-02')")
+    c.commit(); c.close()
+    d = build_command_center(str(db), fetch_tokens=False)
+    assert d["ledger"]["brier"]["x"]["brier"] == 0.04
+    assert d["markets"]["independent"][0]["edge"] == 0.1
+    assert d["autonomy"]["resolved"] == 1
+    assert "not wired" in d["coordinator"]["status"] or d["coordinator"]["coordinator_module_present"]
