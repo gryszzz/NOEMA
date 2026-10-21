@@ -130,7 +130,7 @@ TEV is NOEMA's private, read-only war-room dashboard served by `noema-dashboard`
 | Venue | Status in code |
 | --- | --- |
 | Kalshi | Market + authenticated account observation; live orders only through the fail-closed gateway |
-| Polymarket US | Market observation; gated live adapter in review (#106) |
+| Polymarket US | Market observation + gated live adapter (`polymarket_us`, off by default) |
 | Solana memecoins | Trench crawler (GeckoTerminal, DexScreener, pump.fun) feeding **paper-only** desks |
 | Kraken / Robinhood | Not integrated |
 
@@ -158,7 +158,7 @@ Five parallel paper desks — **VET, RISK, FILLS, TAPE, FLOOR** seats — each w
 
 Autonomy is computed from evidence (`noema/autonomy.py`), never granted by config.
 
-| Level | Evidence required | Live sizing (per trade / per day, #107) |
+| Level | Evidence required | Live sizing (per trade / per day) |
 | --- | --- | --- |
 | SHADOW | < 30 resolved forecasts | none |
 | PAPER | ≥ 30 resolved | none |
@@ -166,7 +166,7 @@ Autonomy is computed from evidence (`noema/autonomy.py`), never granted by confi
 | MICRO | ≥ 250 resolved, ≥ 21 days (plus further gates) | 1% / 10% |
 | PROVEN | ≥ 1000 resolved, ≥ 60 days, ≥ 30 profitable days | 3% / 30% |
 
-#107 also defines SELF_FUNDED (5% / 50%) and EXPANSION (8% / 80%) tiers. Nothing trades live below MICRO, and `NOEMA_LIVE_REQUIRES_OWNER_REVIEW=1` by default.
+The authority config also defines SELF_FUNDED (5% / 50%) and EXPANSION (8% / 80%) tiers. Nothing trades live below MICRO, and `NOEMA_LIVE_REQUIRES_OWNER_REVIEW=1` by default.
 
 ## Fail-closed execution flags
 
