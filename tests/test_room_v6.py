@@ -56,6 +56,18 @@ def test_signer_armed_only_when_flag_is_one(monkeypatch):
     assert {s["family"]: s["state"] for s in room_v6.signer_status()}["evm"] == "ARMED"
 
 
+def test_accuracy_leaderboard_uses_private_api_only():
+    from pathlib import Path
+    page = Path("noema/static/trading-room-v6.html").read_text(encoding="utf-8")
+    assert "/api/accuracy" in page and "accuracy_leaderboard" in page
+    public = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in Path("site").rglob("*")
+        if path.is_file() and path.suffix in {".html", ".mjs", ".js", ".md"}
+    )
+    assert "/api/accuracy" not in public
+
+
 def test_routes(tmp_path, monkeypatch):
     monkeypatch.setenv("NOEMA_DB_PATH", str(tmp_path / "x.db"))
     monkeypatch.setattr(room_v6, "evm_balances", lambda fetch=True: [])

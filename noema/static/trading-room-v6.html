@@ -110,7 +110,7 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
 </div>
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const S={tr:null,cc:null,v4:null,v6:null,fi:0,seen:new Set(),lane:{}};
+const S={tr:null,cc:null,v4:null,v6:null,accuracy:null,fi:0,seen:new Set(),lane:{}};
 const f2=(x,d=2)=>x==null||x===""||isNaN(+x)?"—":(+x).toFixed(d), usd=x=>x==null||x===""?"—":"$"+(+x).toLocaleString(undefined,{maximumFractionDigits:2});
 const hm=t=>{if(!t)return"—";const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));return isNaN(d)?t:d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})};
 const ago=t=>{const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));const s=(Date.now()-d)/1e3;return isNaN(s)?"—":s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago"};
@@ -118,8 +118,8 @@ async function j(u){try{const r=await fetch(u,{cache:"no-store"});return r.ok?aw
 function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes]){try{f()}catch(e){console.error(e)}}}
 async function load(){let n=0;
  const go=(u,k)=>j(u).then(d=>{if(d){S[k]=d;n++}render();if(k==="tr"&&S.fi===0)flipNext()});
- await Promise.all([go("/api/trading-room","tr"),go("/api/command-center","cc"),go("/api/room-v4","v4"),go("/api/room-v6","v6")]);
- $("h-upd").textContent="data "+hm(new Date().toISOString())+(n===4?"":" ("+n+"/4 feeds)");
+ await Promise.all([go("/api/trading-room","tr"),go("/api/command-center","cc"),go("/api/room-v4","v4"),go("/api/room-v6","v6"),go("/api/accuracy","accuracy")]);
+ $("h-upd").textContent="data "+hm(new Date().toISOString())+(n===5?"":" ("+n+"/5 feeds)");
 }
 function header(){const t=S.tr||{},b=(S.cc||{}).budget||{};
  $("h-lvl").textContent=(t.autonomy||{}).level||"—";
@@ -223,10 +223,13 @@ function safety(){const t=S.tr||{},cc=S.cc||{},a=cc.autonomy||{},au=t.autonomy||
  <div class="flag"><span class="dim">MASTER_HALT</span><b>${esc(halt?halt.state:"—")}</b></div>
  <div class="flag"><span class="dim">live cap / venues</span><b>${esc((t.flags||{}).max_live_daily_notional_usd||"none")} / ${esc((t.flags||{}).live_venues||"none")}</b></div>
  <div class="flag"><span class="dim">model spend today</span><b>${usd(b.cognition_usd)} cog + ${usd(b.desk_judgement_usd)} judge (${b.desk_judgement_calls??0} calls) / ${usd(b.cognition_cap_usd)}</b></div>`;}
-function acc(){const v6=S.v6||{},L=v6.accuracy_leaderboard,el=$("acc");
- if(Array.isArray(L)&&L.length){el.innerHTML=`<table><tr><th>agent</th><th>brier</th><th>calib</th><th>weight</th><th>status</th></tr>${L.map(r=>`<tr><td>${esc(r.agent||r.name||r.model)}</td><td>${f2(r.brier,3)}</td><td>${f2(r.calibration_error??r.calibration,3)}</td><td>${f2(r.weight)}</td><td class="${r.benched?"bad":"ok"}">${r.benched?"BENCHED":"active"}</td></tr>`).join("")}</table>`;return}
+function acc(){const v6=S.v6||{},el=$("acc");
+ const direct=S.accuracy&&Array.isArray(S.accuracy.agents)?S.accuracy.agents:null;
+ const passed=v6.accuracy_leaderboard;
+ const L=(direct&&direct.length)?direct:(Array.isArray(passed)&&passed.length?passed:(direct||passed));
+ if(Array.isArray(L)&&L.length){el.innerHTML=`<table><tr><th>agent</th><th>brier</th><th>calib</th><th>weight</th><th>status</th></tr>${L.map(r=>`<tr><td>${esc(r.agent||r.agent_id||r.name||r.model)}</td><td>${f2(r.brier,3)}</td><td>${f2(r.calibration_error??r.calibration,3)}</td><td>${f2(r.weight)}</td><td class="${r.benched?"bad":"ok"}">${r.benched?"BENCHED":"active"}</td></tr>`).join("")}</table>`;return}
  const b=v6.brier_by_model||((S.cc||{}).ledger||{}).brier||{};
- el.innerHTML='<div class="empty">Leaderboard fields (weight, calibration, benched) not in the API yet. Showing raw Brier from resolved pairs only:</div>'+(Object.keys(b).length?`<table><tr><th>model</th><th>brier</th><th>n</th></tr>${Object.entries(b).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${f2(v.brier,3)}</td><td>${v.n}</td></tr>`).join("")}</table>`:"");}
+ el.innerHTML='<div class="empty">No accuracy-engine forecasts yet.</div>'+(Object.keys(b).length?`<table><tr><th>model</th><th>brier</th><th>n</th></tr>${Object.entries(b).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${f2(v.brier,3)}</td><td>${v.n}</td></tr>`).join("")}</table>`:"");}
 function health(){const v6=S.v6||{},h=(S.cc||{}).health||{};const up=v6.uptime_seconds;
  $("health").innerHTML=`<div class="kv"><span>agent heartbeat</span><span class="${h.health==="healthy"?"ok":"warn"}">${esc(h.health||"—")} · ${h.heartbeat_age_s??"—"}s · cycle ${h.cycle_id??"—"}</span><span>dashboard uptime</span><span>${up==null?"—":Math.floor(up/3600)+"h "+Math.floor(up%3600/60)+"m"}</span><span>GeckoTerminal</span><span>${(v6.rate_limits||{}).geckoterminal_per_min??"—"} req/min shared limiter</span><span>news crawler</span><span class="warn">${esc(v6.news_crawler||"—")}</span></div>
  <table>${(v6.providers||[]).map(p=>`<tr><td>${esc(p.provider)}</td><td class="${p.state==="healthy"?"ok":"warn"}">${esc(p.state)}</td><td class="dim">${p.consecutive_failures} fails · ${esc(p.last_error_class||"")}</td></tr>`).join("")||'<tr><td class="dim">no provider health rows</td></tr>'}</table>`;}

@@ -1067,9 +1067,15 @@ async def room_v6() -> dict[str, Any]:
     """Read-only v6 extras: crawler lanes, EVM balances, signer flags, provider health."""
     try:
         cc = await asyncio.wait_for(asyncio.to_thread(build_command_center, _db_path()), timeout=8)
-    except Exception:  # noqa: BLE001 - leaderboard degrades to empty state
+    except Exception:  # noqa: BLE001 - leaderboard degrades to the accuracy route
         cc = None
-    return await asyncio.to_thread(build_room_v6, _db_path(), command_center=cc)
+    payload = await asyncio.to_thread(build_room_v6, _db_path(), command_center=cc)
+    if not payload.get("accuracy_leaderboard"):
+        report = await asyncio.to_thread(build_accuracy_report, _db_path())
+        agents = report.get("agents") if isinstance(report, dict) else None
+        if isinstance(agents, list):
+            payload["accuracy_leaderboard"] = agents
+    return payload
 
 
 _TEV_BRAND = Path(__file__).with_name("static") / "brand" / "tev"
