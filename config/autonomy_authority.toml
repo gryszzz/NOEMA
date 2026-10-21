@@ -15,7 +15,7 @@ live = false
 
 [micro]
 live = true
-per_trade_fraction = "0.01"
+per_trade_fraction = "0.03"
 daily_notional_fraction = "0.10"
 
 [proven]
