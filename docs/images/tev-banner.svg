@@ -1,15 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300">
-<defs>
-<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#07060f"/><stop offset="1" stop-color="#140a26"/></linearGradient>
-<linearGradient id="neon" x1="0" x2="1"><stop offset="0" stop-color="#ff2bd6"/><stop offset="1" stop-color="#22e3ff"/></linearGradient>
-<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#22e3ff" stroke-opacity=".08"/></pattern>
-<filter id="glow"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-</defs>
-<rect width="1200" height="300" fill="url(#bg)"/><rect width="1200" height="300" fill="url(#grid)"/>
-<polyline filter="url(#glow)" fill="none" stroke="#2bff88" stroke-width="3" points="620,230 660,210 700,220 740,180 780,195 820,140 860,160 900,110 940,125 980,80 1020,95 1060,60 1100,70 1160,40"/>
-<g fill="#2bff88" opacity=".55"><rect x="650" y="240" width="10" height="30"/><rect x="690" y="250" width="10" height="20"/><rect x="730" y="230" width="10" height="40"/><rect x="770" y="245" width="10" height="25"/><rect x="810" y="225" width="10" height="45"/><rect x="850" y="240" width="10" height="30"/><rect x="890" y="220" width="10" height="50"/></g>
-<text x="60" y="150" font-family="Courier New,monospace" font-weight="700" font-size="110" fill="url(#neon)" filter="url(#glow)">TEV</text>
-<text x="300" y="150" font-family="Courier New,monospace" font-size="34" fill="#e8e6ff">// NOEMA</text>
-<text x="62" y="200" font-family="Courier New,monospace" font-size="22" fill="#22e3ff">Observe. Infer. Verify. Act.</text>
-<text x="62" y="245" font-family="Courier New,monospace" font-size="16" fill="#ff2bd6">KALSHI · POLYMARKET US · SOLANA TRENCH DESKS — FAIL-CLOSED · PAPER FIRST</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" width="1600" height="420">
+  <defs>
+    <linearGradient id="bbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#070a18"/><stop offset="1" stop-color="#03040a"/></linearGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#22f5ff"/><stop offset=".55" stop-color="#7c5cff"/><stop offset="1" stop-color="#ff2bd6"/></linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#22f5ff" stroke-opacity=".07"/></pattern>
+    <filter id="g" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="10"/></filter>
+  </defs>
+  <rect width="1600" height="420" rx="28" fill="url(#bbg)"/>
+  <rect width="1600" height="420" rx="28" fill="url(#grid)"/>
+  <polyline points="0,350 120,340 200,360 290,300 360,320 450,250 520,280 600,230 700,260 800,190 880,215 980,160 1080,190 1180,120 1300,150 1400,95 1500,120 1600,70" fill="none" stroke="#22f5ff" stroke-opacity=".18" stroke-width="3"/>
+  <g transform="translate(80,58) scale(0.297)">
+  <defs>
+    <linearGradient id="lbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f1f"/><stop offset="1" stop-color="#05060d"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22f5ff"/><stop offset=".55" stop-color="#7c5cff"/><stop offset="1" stop-color="#ff2bd6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".45" r=".55">
+      <stop offset="0" stop-color="#22f5ff" stop-opacity=".28"/><stop offset="1" stop-color="#22f5ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="lblur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#lbg)"/>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#glow)"/>
+  <g stroke="#22f5ff" stroke-opacity=".08" stroke-width="2">
+    <path d="M32 272H992M32 432H992M32 592H992M32 752H992M272 32V992M432 32V992M592 32V992M752 32V992"/>
+  </g>
+  <polygon points="512,138 836,325 836,699 512,886 188,699 188,325" fill="none" stroke="url(#neon)" stroke-width="44" stroke-linejoin="round" filter="url(#lblur)" opacity=".75"/>
+  <polygon points="512,138 836,325 836,699 512,886 188,699 188,325" fill="none" stroke="url(#neon)" stroke-width="30" stroke-linejoin="round"/>
+  <path d="M318 352H706V444H564V742H460V444H318Z" fill="url(#neon)" filter="url(#lblur)" opacity=".7"/>
+  <path d="M318 352H706V444H564V742H460V444H318Z" fill="url(#neon)"/>
+  <polyline points="250,640 340,640 380,580 420,690 470,610" fill="none" stroke="#22f5ff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+  <polyline points="554,610 610,560 650,640 700,530 774,530" fill="none" stroke="#ff2bd6" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+  <circle cx="774" cy="530" r="22" fill="#ff2bd6"/>
+  </g>
+  <text x="430" y="200" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-weight="800" font-size="150" letter-spacing="18" fill="url(#wm)" filter="url(#g)" opacity=".6">TEV</text>
+  <text x="430" y="200" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-weight="800" font-size="150" letter-spacing="18" fill="url(#wm)">TEV</text>
+  <text x="440" y="252" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="34" letter-spacing="14" fill="#e6f7ff">// NOEMA TRADING TERMINAL</text>
+  <text x="440" y="306" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="22" letter-spacing="4" fill="#8aa3c7">KALSHI · POLYMARKET US · SOLANA · EVM · NEWS CRAWLER</text>
+  <g font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="17" letter-spacing="2">
+    <rect x="440" y="336" width="200" height="36" rx="18" fill="none" stroke="#2bff88"/><text x="466" y="360" fill="#2bff88">● PAPER MODE</text>
+    <rect x="660" y="336" width="270" height="36" rx="18" fill="none" stroke="#ff4d6d"/><text x="684" y="360" fill="#ff4d6d">LIVE: FAIL-CLOSED</text>
+    <rect x="950" y="336" width="270" height="36" rx="18" fill="none" stroke="#7c5cff"/><text x="974" y="360" fill="#b9a8ff">AUTONOMY: EARNED</text>
+  </g>
 </svg>
