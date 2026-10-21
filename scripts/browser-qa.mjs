@@ -3,7 +3,7 @@ import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { serveBuild } from "./serve-build.mjs";
-const base = process.env.SITE_BASE_PATH ?? "/NOEMA/";
+const base = process.env.SITE_BASE_PATH ?? "/TEV-Bot-Trading-Terminal/";
 const { server, url } = await serveBuild("dist-site", base);
 const browser = await chromium.launch({
   headless: true,
@@ -28,21 +28,11 @@ try {
     page.on("request", (r) => {
       if (!r.url().startsWith(url)) external.push(r.url());
     });
-    await page.goto(url + "#method", { waitUntil: "networkidle" });
+    await page.goto(url + "#capabilities", { waitUntil: "networkidle" });
     assert.equal(await page.locator("h1").count(), 1);
-    for (const step of ["observe", "infer", "verify", "act"]) {
-      await page.locator(`[data-step="${step}"]`).click();
-      assert.equal(
-        await page
-          .locator(`[data-step="${step}"]`)
-          .getAttribute("aria-pressed"),
-        "true",
-      );
-    }
-    for (const key of ["challenger", "evaluation", "allocation", "quarantine"])
-      await page.locator(`[data-specialist="${key}"]`).click();
-    for (const key of ["meridian", "research", "evaluation", "execution"])
-      await page.locator(`[data-node="${key}"]`).click();
+    assert.equal(await page.locator(".gallery img").count(), 5);
+    assert.equal(await page.locator(".ladder li").count(), 7);
+    assert.ok((await page.locator("#ticker span").count()) > 0);
     for (const summary of await page.locator("summary").all()) {
       await summary.click();
       await summary.click();
@@ -102,8 +92,11 @@ try {
       false,
       `overflow at ${width}`,
     );
-    for (const img of await page.locator("img").all())
+    for (const img of await page.locator("img").all()) {
+      await img.scrollIntoViewIfNeeded();
+      await img.evaluate((el) => el.decode().catch(() => {}));
       assert.ok(await img.evaluate((el) => el.complete && el.naturalWidth > 0));
+    }
     await page.locator(".skip").focus();
     await page.keyboard.press("Enter");
     await page.waitForURL((next) => next.hash === "#main");
@@ -111,7 +104,7 @@ try {
     if (process.env.QA_SCREENSHOTS) {
       await mkdir(process.env.QA_SCREENSHOTS, { recursive: true });
       await page.screenshot({
-        path: `${process.env.QA_SCREENSHOTS}/noema-${width}.png`,
+        path: `${process.env.QA_SCREENSHOTS}/tev-${width}.png`,
       });
     }
     await page.close();

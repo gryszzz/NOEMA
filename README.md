@@ -10,7 +10,7 @@
 
 **An evidence-first autonomous agent runtime for prediction markets, on-chain research and bounded machine action — with TEV, its private neon trading room.**
 
-[![NOEMA Verify](https://github.com/gryszzz/NOEMA/actions/workflows/verify.yml/badge.svg)](https://github.com/gryszzz/NOEMA/actions/workflows/verify.yml)
+[![NOEMA Verify](https://github.com/gryszzz/TEV-Bot-Trading-Terminal/actions/workflows/verify.yml/badge.svg)](https://github.com/gryszzz/TEV-Bot-Trading-Terminal/actions/workflows/verify.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-22f5ff?style=flat-square&labelColor=0b0f1f&logo=python&logoColor=22f5ff)
 ![Mode](https://img.shields.io/badge/mode-paper-2bff88?style=flat-square&labelColor=0b0f1f)
 ![Live](https://img.shields.io/badge/live%20orders-fail--closed-ff4d6d?style=flat-square&labelColor=0b0f1f)
@@ -182,8 +182,8 @@ Not in `main` yet — listed so the roadmap stays honest.
 
 | Work | Status |
 | --- | --- |
-| **Swap signers** ([#108](https://github.com/gryszzz/NOEMA/pull/108)) — Jupiter (Solana) + EVM aggregator signers in a separate process; sign only for NOEMA's own addresses, simulate first, ship **disabled** with a daily cap | ✅ Merged (ships disabled) |
-| **Accuracy engine** ([#116](https://github.com/gryszzz/NOEMA/pull/116)) — per-agent Brier, calibration, and CHIEF influence from resolved forecasts. Public-history baseline (24h before close, no keys): Kalshi midpoint Brier **0.1205** (n=60); series-frequency **0.1885** (n=29, weight 0, 17 no-edge skips); CHIEF shadow Brier **0.154** (n=29); Polymarket CLOB midpoint **0.2765** (n=18); Polymarket US history HTTP 401, scored **0**; Solana OHLCV shadow **0.3308** (n=228, live entry gate passed 0). Paper scoring only. | ✅ Merged |
+| **Swap signers** ([#108](https://github.com/gryszzz/TEV-Bot-Trading-Terminal/pull/108)) — Jupiter (Solana) + EVM aggregator signers in a separate process; sign only for NOEMA's own addresses, simulate first, ship **disabled** with a daily cap | ✅ Merged (ships disabled) |
+| **Accuracy engine** ([#116](https://github.com/gryszzz/TEV-Bot-Trading-Terminal/pull/116)) — per-agent Brier, calibration, and CHIEF influence from resolved forecasts. Public-history baseline (24h before close, no keys): Kalshi midpoint Brier **0.1205** (n=60); series-frequency **0.1885** (n=29, weight 0, 17 no-edge skips); CHIEF shadow Brier **0.154** (n=29); Polymarket CLOB midpoint **0.2765** (n=18); Polymarket US history HTTP 401, scored **0**; Solana OHLCV shadow **0.3308** (n=228, live entry gate passed 0). Paper scoring only. | ✅ Merged |
 
 ## A living operating system
 

@@ -40,7 +40,7 @@ unreconciled” and hypothetical paper labels. No report is bundled as real tele
 In repository **Settings → Pages → Build and deployment**, choose **GitHub Actions**.
 Merge the dependency PR before merging this stacked PR into main. Then push main
 or dispatch **Deploy YSZ NOEMA**. Expected default URL:
-`https://gryszzz.github.io/NOEMA/`.
+`https://gryszzz.github.io/TEV-Bot-Trading-Terminal/`.
 
 The workflow reads the actual Pages URL to support custom domains/base paths.
 HTTP 404 produces an explicit disabled-deployment summary; other lookup errors

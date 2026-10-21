@@ -1,12 +1,12 @@
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
-const base = process.env.SITE_BASE_PATH ?? "/NOEMA/";
+const base = process.env.SITE_BASE_PATH ?? "/TEV-Bot-Trading-Terminal/";
 if (!/^\/(?:[A-Za-z0-9_-]+\/)*$/.test(base))
   throw new Error(
     "SITE_BASE_PATH must be an absolute directory path with a trailing slash.",
   );
-const files = await readdir(root + "site");
+const files = await readdir(root + "site", { recursive: true });
 const html = await readFile(root + "site/index.html", "utf8");
 for (const [, asset] of html.matchAll(/(?:href|src)="\.\/([^"]+)"/g))
   if (!files.includes(asset)) throw new Error("Missing site asset: " + asset);
@@ -16,7 +16,9 @@ await rm(root + "dist-site", { recursive: true, force: true });
 await mkdir(root + "dist-site");
 for (const name of files)
   if (!name.endsWith(".test.mjs"))
-    await cp(root + "site/" + name, root + "dist-site/" + name);
+    await cp(root + "site/" + name, root + "dist-site/" + name, {
+      recursive: true,
+    });
 await writeFile(
   root + "dist-site/index.html",
   html.replaceAll(/((?:href|src)=")\.\//g, "$1" + base),
