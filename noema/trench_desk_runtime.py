@@ -131,6 +131,7 @@ async def run_desk_cycle(
             "liquidity_usd": round(pool.liquidity_usd, 2), "price_usd": pool.price_usd,
             "pool_age_hours": round(age / 3600, 2) if age is not None else None,
             "price_change_m5": pool.price_change_m5,
+            "pool_address": pool.pool_address,
             "fdv_usd": pool.fdv_usd, "volume_h1_usd": pool.volume_h1_usd, "trades_h1": pool.trades_h1,
             "stage": "filters" if ok else "rejected",
             "reason": "; ".join(reasons) or ("passed filters; queued for holder check" if ok else None),
@@ -177,6 +178,19 @@ async def run_desk_cycle(
                 "spike_acceleration": metrics["spike_acceleration"],
                 "chatter_status": (context or {}).get("status", "disabled"),
             })
+    # Real candles for a few filter-passing pools so the room's crawler can flip through charts.
+    ohlcv_budget = int(os.getenv("NOEMA_TRENCH_OHLCV_PER_CYCLE", "6"))
+    if hasattr(gecko, "pool_ohlcv"):
+        for pool, _age in pre[:ohlcv_budget]:
+            if not pool.pool_address:
+                continue
+            try:
+                candles = await gecko.pool_ohlcv(pool.pool_address)
+            except ProviderFailure as exc:
+                summary["provider_failures"].append(f"ohlcv:{exc}")
+                continue
+            if candles and pool.mint in feed:
+                feed[pool.mint]["candles"] = candles
     summary["prefilter_passed"] = len(pre)
     summary["holder_checked"] = min(len(pre), config.holder_enrichment_limit)
     summary["entry_passed"] = len(passed)
@@ -197,8 +211,14 @@ async def run_desk_cycle(
             feed[j.mint].update(stage="desk" if j.trade else "rejected",
                                 probability=round(j.probability, 4), judge=j.source,
                                 reason=None if j.trade else f"{j.source} pass p={j.probability:.2f}")
+    for c in chief_log:
+        if c["mint"] in feed:
+            feed[c["mint"]].update(chief="approve" if c["approved"] else "veto", chief_reason=c["reason"],
+                                   confidence=c["confidence"])
+            if not c["approved"]:
+                feed[c["mint"]]["stage"] = "chief_veto"
     summary["feed"] = sorted(feed.values(), key=lambda r: (
-        ["desk", "holders", "filters", "rejected"].index(r["stage"]), -r["liquidity_usd"]))[:60]
+        ["desk", "chief_veto", "holders", "filters", "rejected"].index(r["stage"]), -r["liquidity_usd"]))[:60]
     by_mint = {c["mint"]: c for c in passed}
 
     store = TrenchDeskStore(db_path)

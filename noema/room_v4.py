@@ -84,7 +84,7 @@ def build_room_v4(db_path: str, *, fetch: bool = True) -> dict[str, Any]:
     if fetch:
         for i, (mint, sym) in enumerate(held):
             tf, agg = ("minute", 5) if i == 0 else ("minute", 15)
-            out["charts"].append(_cached(f"{mint}:{agg}", 60, lambda m=mint, s=sym, t=tf, a=agg: _ohlcv(m, s, t, a)))
+            out["charts"].append(_cached(f"{mint}:{agg}", 300, lambda m=mint, s=sym, t=tf, a=agg: _ohlcv(m, s, t, a)))
     out["held"] = [{"mint": m, "symbol": s} for m, s in held]
     out["chief"] = _events(db_path, "chief_decision", 20)
     cyc = _events(db_path, "desk_cycle", 1)

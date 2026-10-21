@@ -1055,6 +1055,11 @@ async def room_v4() -> dict[str, Any]:
 
 @app.get("/trading-room", response_class=HTMLResponse)
 async def trading_room_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room-v5.html").read_text()
+
+
+@app.get("/trading-room-v4", response_class=HTMLResponse)
+async def trading_room_v4_page() -> str:
     return (Path(__file__).with_name("static") / "trading-room-v4.html").read_text()
 
 
