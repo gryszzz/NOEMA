@@ -21,7 +21,7 @@ from .solana_research import (
     SolanaRpcResearchClient,
     XChatterSource,
 )
-from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore
+from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore, desk_overview
 from .trench_judgement import judge_candidates
 from .trench_risk import DeskEntryPolicy, evaluate_desk_entry
 
@@ -114,6 +114,7 @@ async def run_desk_cycle(
     # Cheap pre-filter without holder data, then spend RPC calls only on survivors.
     pre: list[tuple[PoolCandidate, float | None]] = []
     rejections: dict[str, int] = {}
+    feed: dict[str, dict[str, Any]] = {}
     for pool in pools:
         age = (now - pool.pool_created_at).total_seconds() if pool.pool_created_at else None
         ok, reasons, _ = evaluate_desk_entry(
@@ -125,6 +126,14 @@ async def run_desk_cycle(
             pre.append((pool, age))
         for reason in reasons:
             rejections[reason] = rejections.get(reason, 0) + 1
+        feed[pool.mint] = {
+            "mint": pool.mint, "symbol": pool.symbol, "source": pool.source,
+            "liquidity_usd": round(pool.liquidity_usd, 2), "price_usd": pool.price_usd,
+            "pool_age_hours": round(age / 3600, 2) if age is not None else None,
+            "price_change_m5": pool.price_change_m5,
+            "stage": "filters" if ok else "rejected",
+            "reason": "; ".join(reasons) or ("passed filters; queued for holder check" if ok else None),
+        }
     pre.sort(key=lambda item: item[0].liquidity_usd, reverse=True)
 
     passed: list[dict[str, Any]] = []
@@ -150,6 +159,10 @@ async def run_desk_cycle(
         )
         for reason in reasons:
             rejections[reason] = rejections.get(reason, 0) + 1
+        if pool.mint in feed:
+            feed[pool.mint].update(
+                stage="holders" if ok else "rejected", reason="; ".join(reasons) or None,
+                top10_holder_fraction=metrics.get("top10_holder_fraction"))
         if ok:
             context = await chatter.chatter(pool.symbol, pool.mint) if chatter else None
             passed.append({
@@ -172,6 +185,13 @@ async def run_desk_cycle(
     judgements, judge_status = await judge_candidates(db_path, top)
     summary["judgement"] = judge_status
     picks = [j for j in judgements if j.trade]
+    for j in judgements:
+        if j.mint in feed:
+            feed[j.mint].update(stage="desk" if j.trade else "rejected",
+                                probability=round(j.probability, 4), judge=j.source,
+                                reason=None if j.trade else f"{j.source} pass p={j.probability:.2f}")
+    summary["feed"] = sorted(feed.values(), key=lambda r: (
+        ["desk", "holders", "filters", "rejected"].index(r["stage"]), -r["liquidity_usd"]))[:60]
     by_mint = {c["mint"]: c for c in passed}
 
     store = TrenchDeskStore(db_path)
@@ -216,5 +236,23 @@ async def run_desk_cycle(
         engine.commit()
     finally:
         store.close()
+    _record_equity_snapshot(db_path)
+    summary.pop("feed", None)
     summary.update(entries=entries, fired=fired, marks=len(marks))
     return summary
+
+
+def _record_equity_snapshot(db_path: str) -> None:
+    """Persist aggregate paper equity so the trading room can chart P&L over time."""
+    overview = desk_overview(db_path)
+    desks = overview["desks"]
+    store = TrenchDeskStore(db_path)
+    try:
+        store.event(None, "equity_snapshot",
+                    equity_usd=round(sum(d["equity_usd"] for d in desks), 2),
+                    starting_usd=round(sum(d["starting_bankroll_usd"] for d in desks), 2),
+                    pnl_after_costs_usd=overview.get("total_pnl_after_costs_usd", 0.0),
+                    active=sum(1 for d in desks if d["status"] == "active"))
+        store.conn.commit()
+    finally:
+        store.close()

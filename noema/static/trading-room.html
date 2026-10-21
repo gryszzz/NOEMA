@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NOEMA · Trading Room</title>
+<style>
+:root{--bg:#07090d;--panel:#0d1117;--line:#1b2330;--txt:#d7dee8;--dim:#7d8896;--g:#36e39a;--r:#ff5d6c;--y:#ffc857;--b:#5aa9ff;--p:#b48cff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 600px at 10% -10%,#12203a 0,transparent 60%),var(--bg);color:var(--txt);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+a{color:var(--b);text-decoration:none}
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);background:#0a0d12cc;position:sticky;top:0;backdrop-filter:blur(6px);z-index:2}
+.logo{font-weight:800;letter-spacing:.2em;color:#fff}.logo small{color:var(--dim);letter-spacing:.1em;margin-left:8px;font-weight:400}
+.spacer{flex:1}.pill{padding:3px 9px;border-radius:999px;border:1px solid var(--line);font-size:11px;white-space:nowrap}
+.pill.off{color:var(--g);border-color:#1f5a40;background:#0c2a1e}.pill.on{color:#fff;background:var(--r);border-color:var(--r)}
+.pill.lvl{color:var(--y);border-color:#5a4a1f;background:#2a220c}
+#banner{display:flex;flex-wrap:wrap;gap:8px;padding:8px 20px;border-bottom:1px solid var(--line);background:#0b1410}
+#banner b{color:var(--g)}
+main{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;padding:14px 20px}
+.card{background:linear-gradient(180deg,#0f141c,#0b0f15);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.card h2{margin:0 0 8px;font-size:11px;letter-spacing:.16em;color:var(--dim);font-weight:600;display:flex;justify-content:space-between}
+.span12{grid-column:span 12}.span8{grid-column:span 8}.span4{grid-column:span 4}.span6{grid-column:span 6}
+@media(max-width:1100px){.span8,.span4,.span6{grid-column:span 12}}
+#seats{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.seat{border:1px solid var(--line);border-radius:9px;padding:10px;background:#0a0e14;position:relative}
+.seat.fired{opacity:.55;border-color:#4a1f25}.seat .nm{font-size:15px;font-weight:800;color:#fff}
+.seat .st{position:absolute;top:10px;right:10px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:2px 8px;margin-top:6px}.kv span:nth-child(odd){color:var(--dim)}
+.pos{color:var(--g)}.neg{color:var(--r)}.dim{color:var(--dim)}
+.trades{margin-top:6px;border-top:1px dashed var(--line);padding-top:5px;font-size:11px;max-height:80px;overflow:auto}
+.chain{display:flex;align-items:stretch;gap:6px}
+.stage{flex:1;text-align:center;border:1px solid var(--line);border-radius:8px;padding:10px 4px;background:#0a0e14}
+.stage .n{font-size:22px;font-weight:800;color:#fff}.stage .l{font-size:10px;letter-spacing:.14em;color:var(--dim)}
+.arrow{align-self:center;color:var(--dim)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #141b26;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+th{color:var(--dim);font-weight:500;font-size:11px}
+.tag{padding:1px 6px;border-radius:4px;font-size:10px}.t-desk{background:#0c2a1e;color:var(--g)}.t-holders{background:#0c1f2a;color:var(--b)}.t-filters{background:#1d1630;color:var(--p)}.t-rejected{background:#2a0f14;color:var(--r)}
+.scroll{max-height:340px;overflow:auto}
+#chart{width:100%;height:180px}
+.rej{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.rej span{font-size:11px;color:var(--dim)}
+.venue{border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:#0a0e14}
+.venue b{color:#fff}.mono-s{font-size:11px;word-break:break-all;color:var(--dim)}
+.big{font-size:24px;font-weight:800}
+</style></head><body>
+<header><span class="logo">NOEMA<small>TRADING ROOM</small></span>
+<span class="pill off" id="mode">PAPER</span><span class="pill lvl" id="level">AUTONOMY …</span>
+<span class="spacer"></span><span class="dim" id="updated">loading…</span><a href="/">Dashboard</a></header>
+<div id="banner"></div>
+<main>
+<section class="card span12"><h2><span>DESK SEATS</span><span id="total"></span></h2><div id="seats"></div></section>
+<section class="card span8"><h2><span>APPROVAL CHAIN · LATEST CYCLE</span><span id="cyclets" class="dim"></span></h2>
+<div class="chain" id="chain"></div><div class="rej" id="rej"></div></section>
+<section class="card span4"><h2><span>AGGREGATE PAPER P&amp;L</span><span id="pnlnow"></span></h2><canvas id="chart"></canvas></section>
+<section class="card span8"><h2><span>LIVE CRAWLER FEED</span><span class="dim" id="feedn"></span></h2>
+<div class="scroll"><table><thead><tr><th>stage</th><th>token</th><th>liq</th><th>age h</th><th>5m %</th><th>top10</th><th>p</th><th>reason</th></tr></thead><tbody id="feed"></tbody></table></div></section>
+<section class="card span4"><h2><span>MODEL JUDGEMENTS</span><span class="dim" id="spend"></span></h2><div class="scroll" id="judg"></div></section>
+<section class="card span6"><h2><span>VENUES · READ-ONLY</span></h2><div id="venues"></div></section>
+<section class="card span6"><h2><span>DESK EVENTS</span></h2><div class="scroll" id="events"></div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const usd=(v,d=2)=>v==null||v===''?'—':(Number(v)<0?'-':'')+'$'+Math.abs(Number(v)).toFixed(d);
+const cls=v=>Number(v)>0?'pos':Number(v)<0?'neg':'dim';
+const t=ts=>ts?new Date(ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
+function render(d){
+  const f=d.flags||{flags:{}};
+  $('banner').innerHTML=Object.entries(f.flags).map(([k,v])=>`<span class="pill ${v?'on':'off'}">${esc(k.replace('NOEMA_',''))}: <b>${v?'ON':'OFF'}</b></span>`).join('')
+   +`<span class="pill ${f.any_live?'on':'off'}">${f.any_live?'⚠ LIVE FLAG SET':'ALL LIVE EXECUTION OFF · PAPER ONLY'}</span>`;
+  const a=d.autonomy||{};$('level').textContent=`AUTONOMY ${a.level||'?'} · ${a.resolved_forecasts||0} resolved · ${a.days_observed||0}d`;
+  $('level').title=(a.reasons||[]).join('\n');
+  $('total').innerHTML=`total after costs <span class="${cls(d.total_pnl_after_costs_usd)}">${usd(d.total_pnl_after_costs_usd)}</span>`;
+  $('seats').innerHTML=(d.seats||[]).map(s=>`<div class="seat ${s.hired?'':'fired'}"><div class="nm">${esc(s.name)}</div>
+   <span class="st pill ${s.hired?'off':'on'}">${s.hired?'HIRED':'FIRED'}</span>
+   <div class="kv"><span>equity</span><span>${usd(s.equity_usd)}</span><span>cash</span><span>${usd(s.cash_usd)}</span>
+   <span>unrealized</span><span class="${cls(s.unrealized_pnl_usd)}">${usd(s.unrealized_pnl_usd)}</span>
+   <span>realized</span><span class="${cls(s.realized_pnl_usd)}">${usd(s.realized_pnl_usd)}</span>
+   <span>after costs</span><span class="${cls(s.pnl_after_costs_usd)}">${usd(s.pnl_after_costs_usd)}</span>
+   <span>W/L · streak</span><span>${s.wins}/${s.losses} · <span class="${s.consecutive_losses?'neg':'dim'}">${s.consecutive_losses}L</span></span>
+   <span>open</span><span>${(s.positions_detail||[]).map(p=>esc(p.symbol)).join(', ')||'—'}</span></div>
+   ${s.fired_reason?`<div class="neg" style="font-size:11px;margin-top:4px">${esc(s.fired_reason)}</div>`:''}
+   <div class="trades">${(s.trades||[]).map(x=>`<div><span class="${x.side=='buy'?'pos':'neg'}">${esc(x.side)}</span> ${esc(x.symbol)} ${esc(x.leg)} ${usd(x.notional_usd)} <span class="dim">${t(x.ts)}</span></div>`).join('')||'<span class="dim">no trades yet</span>'}</div></div>`).join('')||'<span class="dim">no desks yet</span>';
+  const c=d.chain||{};const st=[['CRAWLER','crawler','pools scanned'],['FILTERS','filters','liq/age/spike'],['HOLDERS','holders','top-10 < 60%'],['JUDGEMENT','judgement','model picks'],['DESKS','desk','paper entries']];
+  $('chain').innerHTML=st.map(([n,k,l],i)=>`${i?'<span class="arrow">➜</span>':''}<div class="stage"><div class="l">${n}</div><div class="n">${c[k]??0}</div><div class="dim" style="font-size:10px">${l}</div></div>`).join('');
+  $('cyclets').textContent=c.ts?'cycle '+t(c.ts)+(c.pumpfun_new_launches!=null?` · pump.fun launches ${c.pumpfun_new_launches}`:''):'';
+  $('rej').innerHTML=Object.entries(c.rejections||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<span class="pill">${esc(k)} <b class="neg">${v}</b></span>`).join('');
+  const feed=d.feed||[];$('feedn').textContent=feed.length+' pools';
+  $('feed').innerHTML=feed.map(p=>`<tr><td><span class="tag t-${esc(p.stage)}">${esc(p.stage)}</span></td><td title="${esc(p.mint)}">${esc(p.symbol)}</td><td>${usd(p.liquidity_usd,0)}</td><td>${p.pool_age_hours??'—'}</td><td class="${cls(p.price_change_m5)}">${p.price_change_m5??'—'}</td><td>${p.top10_holder_fraction!=null?(p.top10_holder_fraction*100).toFixed(0)+'%':'—'}</td><td>${p.probability??''}</td><td class="dim" title="${esc(p.reason)}">${esc(p.reason||'passed')}</td></tr>`).join('')||'<tr><td colspan=8 class="dim">waiting for next crawler cycle…</td></tr>';
+  $('spend').textContent='spend (recent) '+usd(d.judgement_spend_usd,4);
+  $('judg').innerHTML=(d.judgements||[]).map(j=>`<div style="border-bottom:1px solid #141b26;padding:4px 0"><span class="dim">${t(j.ts)}</span> ${esc(j.source)} · ${esc(j.status)} · ${usd(j.estimated_usd,4)}
+   ${(j.judgements||[]).map(x=>`<div>&nbsp; ${esc(x.symbol||String(x.mint).slice(0,6))} p=<b>${x.probability??'?'}</b> <span class="${x.trade?'pos':'neg'}">${x.trade?'TRADE':'PASS'}</span></div>`).join('')}</div>`).join('')||'<span class="dim">no judgements yet</span>';
+  $('venues').innerHTML=(d.venues||[]).map(v=>`<div class="venue"><b>${esc(v.venue)}</b> <span class="pill">${esc(v.status)}</span> <span class="pill off">execution ${esc(v.execution)}</span>
+   ${v.address?`<div class="mono-s">${esc(v.address)}</div><div>SOL <b>${esc(v.sol??'—')}</b> ${v.usd!=null?'· '+usd(v.usd):''}</div>`:`<div>cash <b>${usd(v.cash_usd)}</b> · portfolio ${usd(v.portfolio_value_usd)} · positions ${esc(v.position_count??0)}</div>`}
+   <div class="dim" style="font-size:11px">${v.observed_at?'observed '+t(v.observed_at):''}</div></div>`).join('')||'<span class="dim">venue status unavailable</span>';
+  $('events').innerHTML=(d.events||[]).map(e=>`<div><span class="dim">${t(e.ts)}</span> ${esc(e.desk_id||'room')} · ${esc(e.event)}</div>`).join('')||'<span class="dim">no events</span>';
+  chart(d.equity_series||[]);
+  $('pnlnow').innerHTML=`<span class="${cls(d.total_pnl_after_costs_usd)}">${usd(d.total_pnl_after_costs_usd)}</span>`;
+  $('updated').textContent='updated '+t(d.as_of)+' · auto-refresh 10s';
+}
+function chart(s){const cv=$('chart'),r=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*r;cv.height=h*r;const g=cv.getContext('2d');g.scale(r,r);g.clearRect(0,0,w,h);
+  const v=s.map(x=>Number(x.pnl_usd)||0);if(v.length<2){g.fillStyle='#7d8896';g.fillText('collecting equity snapshots…',10,20);return}
+  const lo=Math.min(0,...v),hi=Math.max(0,...v),sp=(hi-lo)||1,X=i=>8+i*(w-16)/(v.length-1),Y=y=>h-14-(y-lo)/sp*(h-28);
+  g.strokeStyle='#1b2330';g.beginPath();g.moveTo(0,Y(0));g.lineTo(w,Y(0));g.stroke();
+  g.strokeStyle=v[v.length-1]>=0?'#36e39a':'#ff5d6c';g.lineWidth=2;g.beginPath();v.forEach((y,i)=>i?g.lineTo(X(i),Y(y)):g.moveTo(X(i),Y(y)));g.stroke();
+  g.fillStyle='#7d8896';g.fillText(usd(hi),4,10);g.fillText(usd(lo),4,h-2);}
+async function load(){try{const r=await fetch('/api/trading-room',{cache:'no-store'});if(r.ok)render(await r.json());else $('updated').textContent='error '+r.status}catch(e){$('updated').textContent='offline'}}
+load();setInterval(load,10000);
+</script></body></html>

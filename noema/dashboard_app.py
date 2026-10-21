@@ -59,6 +59,7 @@ from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
 from .trench_desks import desk_overview
+from .trading_room import build_trading_room
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 
@@ -1021,6 +1022,25 @@ async def trench_desks() -> dict[str, Any]:
 @app.get("/trench-desks", response_class=HTMLResponse)
 async def trench_desks_page() -> str:
     return (Path(__file__).with_name("static") / "trench-desks.html").read_text()
+
+
+@app.get("/api/trading-room")
+async def trading_room() -> dict[str, Any]:
+    """Read-only aggregate for the trading room view (no orders, no secrets)."""
+    try:
+        venues = await asyncio.wait_for(build_prediction_venue_status(), timeout=8)
+    except Exception:  # noqa: BLE001 - venue panel degrades, room still renders
+        venues = None
+    try:
+        wallets = await asyncio.wait_for(wallet_status(), timeout=8)
+    except Exception:  # noqa: BLE001
+        wallets = None
+    return await asyncio.to_thread(build_trading_room, _db_path(), venues=venues, wallets=wallets)
+
+
+@app.get("/trading-room", response_class=HTMLResponse)
+async def trading_room_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room.html").read_text()
 
 
 @app.get("/api/compare")
