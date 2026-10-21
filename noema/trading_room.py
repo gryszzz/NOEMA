@@ -192,7 +192,11 @@ def build_trading_room(db_path: str, *, venues: dict[str, Any] | None = None,
         "as_of": datetime.now(UTC).isoformat(), "paper": True,
         "flags": live_flags(), "autonomy": autonomy,
         "seats": seats, "total_pnl_after_costs_usd": desks.get("total_pnl_after_costs_usd", 0.0),
-        "chain": chain, "feed": feed, "judgements": judgements,
+        "chain": chain, "feed": feed,
+        # real feeds from recent cycles, so the UI can replay genuine log lines between cycles
+        "feed_history": [{"cycle_ts": c.get("ts"), "feed": (c.get("feed") or [])[:60]}
+                         for c in cycles[:6]],
+        "interval_seconds": float(os.getenv("NOEMA_TRENCH_DESK_INTERVAL_SECONDS", "120")), "judgements": judgements,
         "judgement_spend_usd": round(sum(j["estimated_usd"] for j in judgements), 6),
         "equity_series": [{"ts": e["ts"], "equity_usd": e.get("equity_usd"),
                            "pnl_usd": e.get("pnl_after_costs_usd")} for e in equity],

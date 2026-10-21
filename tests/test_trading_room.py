@@ -60,3 +60,10 @@ def test_trading_room_endpoints(tmp_path, monkeypatch):
     page = client.get("/trading-room")
     assert page.status_code == 200 and "/api/trading-room" in page.text
     assert "/trading-room" in client.get("/").text
+
+
+def test_feed_history_is_real_cycle_data(tmp_path):
+    from noema.trading_room import build_trading_room
+    room = build_trading_room(str(tmp_path / "missing.db"))
+    assert room["feed_history"] == []
+    assert room["interval_seconds"] > 0
