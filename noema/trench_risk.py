@@ -174,3 +174,108 @@ def assess_trench_candidate(
         reasons=tuple(reasons),
         features=features,
     )
+
+
+@dataclass(frozen=True)
+class DeskEntryPolicy:
+    """Paper-desk entry rules. Thresholds are owner-tunable research settings.
+
+    ``exclude_largest_holder`` drops the single largest token account before computing
+    top-10 concentration because on AMM pools that account is usually the pool vault.
+    """
+
+    max_top10_holder_fraction: float = 0.60
+    min_pool_age_seconds: float = 3600.0
+    min_liquidity_usd: float = 12_000.0
+    max_spike_m5_pct: float = 15.0
+    max_spike_acceleration: float = 3.0
+    exclude_largest_holder: bool = True
+    require_holder_data: bool = True
+
+    @classmethod
+    def from_env(cls) -> DeskEntryPolicy:
+        import os
+
+        def num(name: str, default: float) -> float:
+            return float(os.getenv(name, str(default)))
+
+        return cls(
+            max_top10_holder_fraction=num("NOEMA_DESK_MAX_TOP10_HOLDER_FRACTION", 0.60),
+            min_pool_age_seconds=num("NOEMA_DESK_MIN_POOL_AGE_SECONDS", 3600.0),
+            min_liquidity_usd=num("NOEMA_DESK_MIN_LIQUIDITY_USD", 12_000.0),
+            max_spike_m5_pct=num("NOEMA_DESK_MAX_SPIKE_M5_PCT", 15.0),
+            max_spike_acceleration=num("NOEMA_DESK_MAX_SPIKE_ACCELERATION", 3.0),
+            exclude_largest_holder=os.getenv("NOEMA_DESK_EXCLUDE_LARGEST_HOLDER", "1") == "1",
+            require_holder_data=os.getenv("NOEMA_DESK_REQUIRE_HOLDER_DATA", "1") == "1",
+        )
+
+
+def top10_holder_fraction(
+    holder_shares: tuple[float, ...], *, exclude_largest: bool,
+) -> float | None:
+    shares = sorted((s for s in holder_shares if 0 <= s <= 1), reverse=True)
+    if exclude_largest and shares:
+        shares = shares[1:]
+    if not shares:
+        return None
+    return min(1.0, sum(shares[:10]))
+
+
+def spike_acceleration(price_change_m5: float | None, price_change_h1: float | None) -> float | None:
+    """Ratio of the 5-minute move to the average 5-minute move over the last hour.
+
+    A value well above 1 means price is accelerating now ("mid-rocket").
+    """
+
+    if price_change_m5 is None or price_change_h1 is None:
+        return None
+    if price_change_m5 <= 0:
+        return 0.0
+    hourly_per_5m = abs(price_change_h1) / 12.0
+    return price_change_m5 / max(hourly_per_5m, 0.5)
+
+
+def evaluate_desk_entry(
+    *,
+    liquidity_usd: float,
+    pool_age_seconds: float | None,
+    holder_shares: tuple[float, ...] | None,
+    price_change_m5: float | None,
+    price_change_h1: float | None,
+    control: TokenControlState | None = None,
+    policy: DeskEntryPolicy | None = None,
+) -> tuple[bool, tuple[str, ...], dict[str, float | None]]:
+    """Deterministic gate for paper-desk entries. Social chatter is never an input."""
+
+    policy = policy or DeskEntryPolicy()
+    reasons: list[str] = []
+    top10 = (top10_holder_fraction(holder_shares, exclude_largest=policy.exclude_largest_holder)
+             if holder_shares else None)
+    accel = spike_acceleration(price_change_m5, price_change_h1)
+    if liquidity_usd < policy.min_liquidity_usd:
+        reasons.append("liquidity below desk floor")
+    if pool_age_seconds is None:
+        reasons.append("pool age unknown")
+    elif pool_age_seconds < policy.min_pool_age_seconds:
+        reasons.append("pool younger than minimum age")
+    if top10 is None:
+        if policy.require_holder_data:
+            reasons.append("holder concentration unknown")
+    elif top10 >= policy.max_top10_holder_fraction:
+        reasons.append("top-10 holders above concentration limit")
+    if price_change_m5 is not None and price_change_m5 > policy.max_spike_m5_pct:
+        reasons.append("mid-spike: 5m move above limit")
+    elif accel is not None and accel > policy.max_spike_acceleration:
+        reasons.append("mid-spike: price accelerating")
+    if control is not None:
+        if control.freeze_authority_present is True:
+            reasons.append("freeze authority retained")
+        if control.mint_authority_present is True:
+            reasons.append("mint authority retained")
+        if control.permanent_delegate_present is True:
+            reasons.append("permanent delegate retained")
+        if control.suspicious_flag:
+            reasons.append("provider suspicious flag")
+    metrics = {"top10_holder_fraction": top10, "spike_acceleration": accel,
+               "pool_age_seconds": pool_age_seconds, "liquidity_usd": liquidity_usd}
+    return (not reasons, tuple(reasons), metrics)
