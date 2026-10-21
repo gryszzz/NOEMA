@@ -29,3 +29,7 @@
 - Drawdown and calibration breaches re-run `earned_autonomy` each cycle and
   demote immediately. Open orders above the new per-trade cap are cancelled.
   Level transitions are appended to the economic ledger.
+
+### Polymarket US live adapter
+
+- Add a Polymarket US trading adapter (`PolymarketUSTradingVenue`) for authenticated balances, positions, open orders, fills, order status, limit entry, and cancel. Live entry stays off unless credentials, `NOEMA_ALLOW_LIVE_ORDERS=1`, and an inactive master halt are all present. The execution gateway routes to it only when `NOEMA_LIVE_VENUES` contains `polymarket_us` and book, fee, and account-state checks pass. `noema pm-account` and `noema pm-order` (dry-run by default) are the owner commands.

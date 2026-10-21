@@ -20,6 +20,21 @@ from pathlib import Path
 from typing import Any
 
 from .models import Action, Decision, Opportunity
+from .venues.errors import VenueRejected, VenueUnavailable
+
+# Polymarket US retail trading (api.polymarket.us). The international CLOB is not a live venue.
+POLYMARKET_US_LIVE_VENUE = "polymarket_us"
+
+
+def configured_live_venues() -> frozenset[str]:
+    """Owner allowlist from ``NOEMA_LIVE_VENUES``.
+
+    Select Polymarket US with the exact name ``polymarket_us``. Any other name
+    containing "polymarket" is unrecognized and must not be treated as live.
+    """
+    return frozenset(
+        item.strip() for item in os.getenv("NOEMA_LIVE_VENUES", "").split(",") if item.strip()
+    )
 
 
 @dataclass(frozen=True)
@@ -309,6 +324,16 @@ class ExecutionGateway:
                 reference = await venue_adapter.execute(action, client_order_id=client_order_id)
             else:
                 reference = await venue_adapter.execute(action)
+        except VenueRejected as exc:
+            # The adapter confirmed the venue did not accept the order.
+            self._finish(proposal.proposal_id, "rejected", None, {"reason": exc.code})
+            return GatewayResult(False, "rejected", (exc.code,))
+        except VenueUnavailable as exc:
+            self._finish(proposal.proposal_id, "unknown", None, {
+                "reason": "provider outcome is unknown; reconciliation required",
+                "error_class": exc.code,
+            })
+            raise
         except Exception:
             # A transport error can happen after the provider accepted the
             # request. Keep its reservation consumed until explicit
@@ -395,12 +420,16 @@ class ExecutionGateway:
         cap = self._owner_daily_notional_cap(authority)
         if cap is None or cap <= 0:
             reasons.append("positive owner daily execution limit is missing")
-        allowed_venues = {
-            item.strip() for item in os.getenv("NOEMA_LIVE_VENUES", "").split(",")
-            if item.strip()
-        }
-        if proposal.venue not in allowed_venues:
+        allowed_venues = configured_live_venues()
+        if "polymarket" in proposal.venue.casefold() and proposal.venue != POLYMARKET_US_LIVE_VENUE:
+            reasons.append("only polymarket_us is a recognized Polymarket live venue")
+        elif proposal.venue not in allowed_venues:
             reasons.append("venue is not explicitly allowlisted")
+        if any(
+            "polymarket" in item.casefold() and item != POLYMARKET_US_LIVE_VENUE
+            for item in allowed_venues
+        ):
+            reasons.append("NOEMA_LIVE_VENUES contains an unrecognized Polymarket venue")
         if not isinstance(authority, PredictionExecutionAuthority):
             reasons.append("separate mission execution authority is absent")
         else:

@@ -47,6 +47,7 @@ from .trench_survival_model import audit_database as audit_trench_survival
 from .venues.kalshi import KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.kalshi_stream import KalshiStream
+from .venues.polymarket_us_trading import run_pm_account, run_pm_order
 
 
 async def _durable_mirror_sync(db: str, rounds: int) -> None:
@@ -389,6 +390,27 @@ def main() -> None:
     bill_show = sub.add_parser("bill-show")
     bill_show.add_argument("--db", default="data/noema.db")
 
+    sub.add_parser("pm-account")
+
+    pm_order = sub.add_parser("pm-order")
+    pm_order.add_argument("--db", default="data/noema.db")
+    pm_order.add_argument("--slug", required=True)
+    pm_order.add_argument(
+        "--side", required=True, choices=("buy_yes", "sell_yes", "buy_no", "sell_no"),
+    )
+    pm_order.add_argument("--price", type=Decimal, required=True)
+    pm_order.add_argument("--qty", type=Decimal, required=True)
+    pm_order.add_argument("--tif", default="gtc", choices=("gtc", "gtd", "ioc", "fok", "day"))
+    pm_order.add_argument("--client-order-id", default=None)
+    pm_order.add_argument(
+        "--dry-run", action="store_true",
+        help="Record a proposal only. This is the default.",
+    )
+    pm_order.add_argument(
+        "--live", action="store_true",
+        help="Place a limit order and cancel it. Requires every live gate. Off by default.",
+    )
+
     pm_import = sub.add_parser("polymarket-owner-import")
     pm_import.add_argument("--db", default="data/noema.db")
     pm_import.add_argument("--input", required=True,
@@ -488,6 +510,16 @@ def main() -> None:
         print(json.dumps(tracker.overview(), sort_keys=True))
     elif args.command == "bill-show":
         print(json.dumps(BillTracker(args.db).overview(), sort_keys=True))
+    elif args.command == "pm-account":
+        print(json.dumps(asyncio.run(run_pm_account()), sort_keys=True, default=str))
+    elif args.command == "pm-order":
+        if args.live and args.dry_run:
+            raise SystemExit("pm-order accepts either --dry-run or --live")
+        print(json.dumps(asyncio.run(run_pm_order(
+            slug=args.slug, side=args.side, price=args.price, quantity=args.qty,
+            tif=args.tif, live=bool(args.live), client_order_id=args.client_order_id,
+            db_path=args.db,
+        )), sort_keys=True, default=str))
     elif args.command == "polymarket-owner-import":
         print(json.dumps(ingest_polymarket_owner_export(
             args.input, db_path=args.db, source_reference=args.source_reference,
