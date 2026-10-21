@@ -1,5 +1,5 @@
-import re
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime
 
@@ -260,7 +260,7 @@ def test_market_query_never_quotes_rules_boilerplate():
     for title in ("Will the S&P 500 be above 6800 at the end of Oct 22, 2026?",
                   "Will Steve Witkoff resign as Envoy?", "Fed decision in December"):
         q = nc.market_query(title, rules)
-        assert not re.search(r"kalshi|rulebook|source agency|contract|chapter", q, re.I), q
+        assert not re.search(r"kalshi|rulebook|source agency|contract|chapter", q, re.IGNORECASE), q
 
 
 def test_market_query_for_daily_price_markets():

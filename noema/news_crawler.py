@@ -743,28 +743,28 @@ def _names(text: str) -> list[str]:
 RULES_BOILERPLATE = re.compile(
     r"\b(kalshi|polymarket|rulebook|rules?|contract|exchange|settlement|settle[sd]?|source agency|"
     r"underlying|expiration|expiry|terms|cftc|dcm|appendix|chapter|section|resolution|resolve[sd]?|"
-    r"market maker|last trading|business day|official)\b", re.I)
+    r"market maker|last trading|business day|official)\b", re.IGNORECASE)
 
 # Daily/weekly price markets: (pattern, news phrase, driver words). Matched on the title.
 PRICE_UNDERLYINGS = (
-    (re.compile(r"s\s*&\s*p\s*500|\bspx\b|\binx\b", re.I), "S&P 500", "(stocks OR futures)"),
-    (re.compile(r"nasdaq(?:-?100)?|\bndx\b", re.I), "Nasdaq", "(stocks OR futures)"),
-    (re.compile(r"\bdow\b|dow jones", re.I), "Dow Jones", "(stocks OR futures)"),
-    (re.compile(r"gas(?:oline)? prices?|\baaa\b.*gas", re.I), "gas prices", "(AAA OR gasoline)"),
-    (re.compile(r"\b(wti|crude oil|oil price)", re.I), "oil prices", "(crude OR OPEC)"),
-    (re.compile(r"\bbitcoin\b|\bbtc\b", re.I), "bitcoin", "price"),
-    (re.compile(r"\bethereum\b|\beth\b", re.I), "ethereum", "price"),
-    (re.compile(r"\bgold\b", re.I), "gold prices", "(ounce OR futures)"),
-    (re.compile(r"10-?year|treasury yield", re.I), "Treasury yields", "bonds"),
+    (re.compile(r"s\s*&\s*p\s*500|\bspx\b|\binx\b", re.IGNORECASE), "S&P 500", "(stocks OR futures)"),
+    (re.compile(r"nasdaq(?:-?100)?|\bndx\b", re.IGNORECASE), "Nasdaq", "(stocks OR futures)"),
+    (re.compile(r"\bdow\b|dow jones", re.IGNORECASE), "Dow Jones", "(stocks OR futures)"),
+    (re.compile(r"gas(?:oline)? prices?|\baaa\b.*gas", re.IGNORECASE), "gas prices", "(AAA OR gasoline)"),
+    (re.compile(r"\b(wti|crude oil|oil price)", re.IGNORECASE), "oil prices", "(crude OR OPEC)"),
+    (re.compile(r"\bbitcoin\b|\bbtc\b", re.IGNORECASE), "bitcoin", "price"),
+    (re.compile(r"\bethereum\b|\beth\b", re.IGNORECASE), "ethereum", "price"),
+    (re.compile(r"\bgold\b", re.IGNORECASE), "gold prices", "(ounce OR futures)"),
+    (re.compile(r"10-?year|treasury yield", re.IGNORECASE), "Treasury yields", "bonds"),
 )
-_MONTHS = ("January February March April May June July August September October November December").split()
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 _DATE = re.compile(r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})\b")
 
 
 def price_market(title: str) -> dict[str, str] | None:
     """Underlying + date for a daily/weekly price market ("Will the S&P 500 be above 6800 on Oct 22?")."""
     if not re.search(r"\b(above|below|between|range|close|high|low|price|level|at or)\b|\$?\d[\d,.]{2,}",
-                     title, re.I):
+                     title, re.IGNORECASE):
         return None
     for pat, phrase, driver in PRICE_UNDERLYINGS:
         if pat.search(title):
