@@ -28,6 +28,8 @@ export async function serveBuild(directory, base) {
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".json": "application/json",
+        ".ico": "image/x-icon",
+        ".webmanifest": "application/manifest+json",
       };
       res
         .writeHead(200, {

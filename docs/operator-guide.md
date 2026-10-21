@@ -3,7 +3,7 @@
 ![NOEMA — Observe · Infer · Verify · Act](../noema/static/brand/noema-banner.png)
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![CI](https://img.shields.io/github/actions/workflow/status/gryszzz/NOEMA/verify.yml?branch=main&label=verify)](https://github.com/gryszzz/NOEMA/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/gryszzz/TEV-Bot-Trading-Terminal/verify.yml?branch=main&label=verify)](https://github.com/gryszzz/TEV-Bot-Trading-Terminal/actions)
 ![Paper research](https://img.shields.io/badge/mode-paper%20research-57D9E3)
 ![Live execution locked](https://img.shields.io/badge/live%20execution-locked-F0B75E)
 

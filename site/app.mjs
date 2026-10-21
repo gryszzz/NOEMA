@@ -1,147 +1,49 @@
 import { MAX_REPORT_BYTES, validateReport } from "./report.mjs";
 const $ = (id) => document.getElementById(id);
-const lifecycle = {
-  observe: [
-    "Freeze the information boundary.",
-    "Public observations, market snapshots, timestamps, and source identity come first. Missing or stale data remains unavailable.",
-    [
-      "Preserve what was knowable at decision time",
-      "Keep source observations separate from model inference",
-      "Record an immutable forecast before its outcome",
-    ],
-  ],
-  infer: [
-    "An interesting idea is a candidate.",
-    "Optional cognition can challenge an opportunity and propose an investigation. Market consensus and simple historical baselines remain visible.",
-    [
-      "Account for model cost before the call",
-      "Compare alternative explanations",
-      "Keep model output away from unrestricted funds",
-    ],
-  ],
-  verify: [
-    "Ask what would invalidate it.",
-    "Evaluate on later resolved events. Count distinct evidence, measure calibration, and account for execution assumptions before considering an edge.",
-    [
-      "No repeated promotion on the same sample",
-      "No lookahead from future outcomes",
-      "Paper fills remain hypothetical",
-    ],
-  ],
-  act: [
-    "Choose only what is permitted.",
-    "PASS, bounded research, and paper experiments are useful outcomes. Financial execution is a separate, explicitly authorized workflow.",
-    [
-      "Deterministic limits precede any authorized order",
-      "A mature researcher does not inherit financial authority",
-      "Reconciliation and recovery remain necessary",
-    ],
-  ],
-};
-const specialists = {
-  challenger: [
-    "Start small. Make the hypothesis falsifiable.",
-    "A challenger enters with a bounded research budget and a versioned experiment. Its comparison includes simple baselines and abstention—not just the incumbent specialist.",
-  ],
-  evaluation: [
-    "Resolve evidence before promotion.",
-    "Calibration and after-cost outcomes matter. New, distinct resolved events are required for progress; a few wins or a repeated evaluation do not establish skill.",
-  ],
-  allocation: [
-    "Allocate attention, not imaginary profit.",
-    "Research calls, tokens, and estimated cost are reserved before work begins. Failed attempts still consume their reservations. Internal allocation is not an audited cash balance.",
-  ],
-  quarantine: [
-    "Failure should change the system.",
-    "Weak or invalid evidence can quarantine a specialist. A revised challenger needs a new version, a measurable experiment, and the same evidence gates.",
-  ],
-};
-const nodes = {
-  meridian: [
-    "WORLD CONTEXT",
-    "Evidence with an identity.",
-    "Meridian preserves source context in a frozen research request. NOEMA returns a deterministic review bound to its hash. File export and device recovery work today; a hosted durable job service is not yet implemented.",
-    "Explore the bridge contract",
-    "https://github.com/gryszzz/NOEMA/blob/main/docs/meridian-noema-contract.md",
-  ],
-  research: [
-    "RESEARCH WORKER",
-    "Bounded autonomy.",
-    "The Python worker collects public observations, records forecasts, and can use configured cognition. Today the implemented venue loop centers on Kalshi paper research; the long-term opportunity model is broader than one venue.",
-    "Read the worker guide",
-    "https://github.com/gryszzz/NOEMA/blob/main/docs/agent-runtime.md",
-  ],
-  evaluation: [
-    "EVIDENCE AND ECONOMICS",
-    "Outcomes close the loop.",
-    "SQLite stores forecasts, decisions, outcomes, and resource records. Evaluators enforce chronological evidence and promotion gates. The economics report keeps cash, estimates, and paper results separate.",
-    "Read economic integrity",
-    "https://github.com/gryszzz/NOEMA/blob/main/docs/economic-integrity.md",
-  ],
-  execution: [
-    "AUTHORITY BOUNDARY",
-    "Explicitly authorized, independently checked.",
-    "Live-value execution requires a supported venue adapter, deterministic risk policy, credentials, and explicit authorization. Public Pages cannot activate it. Multi-venue execution and complete reconciliation are unfinished.",
-    "Inspect the operating contract",
-    "https://github.com/gryszzz/NOEMA/blob/main/AGENTS.md",
-  ],
-};
-function element(tag, value, className) {
-  const el = document.createElement(tag);
-  el.textContent = value;
-  if (className) el.className = className;
-  return el;
+function element(tag, text, className) {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  if (className) node.className = className;
+  return node;
 }
-function choose(attribute, key) {
-  document
-    .querySelectorAll(`[${attribute}]`)
-    .forEach((b) =>
-      b.setAttribute("aria-pressed", String(b.getAttribute(attribute) === key)),
-    );
+const feeds = [
+  "KALSHI · markets sweep", "POLYMARKET US · CLOB", "SOLANA DEX · GeckoTerminal",
+  "DEXSCREENER · pairs", "PUMP.FUN · new pairs", "NEWS · BBC", "NEWS · NPR",
+  "FED · press", "SEC · press", "COURTLISTENER · SCOTUS", "GDELT · events",
+  "FEDERAL REGISTER", "CONGRESS", "TEV JUDGE · self-check", "CHIEF · veto gate",
+  "CAPITAL GUARD · floor 75%", "LIVE FLAGS · OFF",
+];
+const track = $("ticker");
+for (const pass of [0, 1])
+  feeds.forEach((f) => track.append(element("span", f, pass ? "dup" : "")));
+const canvas = $("grid");
+const ctx = canvas.getContext("2d");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let t = 0;
+function draw() {
+  const w = (canvas.width = innerWidth), h = (canvas.height = innerHeight);
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = "rgba(34,245,255,0.07)";
+  const step = 48, off = (t * 0.4) % step;
+  ctx.beginPath();
+  for (let x = -off; x < w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+  for (let y = off; y < h; y += step) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  ctx.stroke();
+  for (let i = 0; i < 24; i++) {
+    const x = (Math.sin(i * 12.9 + t * 0.002 * (1 + (i % 3))) * 0.5 + 0.5) * w;
+    const y = (Math.cos(i * 7.3 + t * 0.0015) * 0.5 + 0.5) * h;
+    ctx.fillStyle = i % 2 ? "rgba(255,43,214,0.35)" : "rgba(34,245,255,0.35)";
+    ctx.fillRect(x, y, 2, 2);
+  }
+  t++;
+  if (!still) requestAnimationFrame(draw);
 }
-function showStep(key) {
-  const [title, body, checks] = lifecycle[key];
-  choose("data-step", key);
-  const copy = element("div", "");
-  copy.append(element("h3", title), element("p", body));
-  const list = element("ul", "");
-  checks.forEach((c) => list.append(element("li", c)));
-  $("lifecycle-detail").replaceChildren(copy, list);
-}
-function showSpecialist(key) {
-  choose("data-specialist", key);
-  const [title, body] = specialists[key];
-  $("specialist-detail").replaceChildren(
-    element("h3", title),
-    element("p", body),
-  );
-}
-function showNode(key) {
-  choose("data-node", key);
-  const [label, title, body, link, url] = nodes[key];
-  const a = element("a", link + " ↗");
-  a.href = url;
-  $("architecture-detail").replaceChildren(
-    element("p", label, "eyebrow"),
-    element("h3", title),
-    element("p", body),
-    a,
-  );
-}
-document
-  .querySelectorAll("[data-step]")
-  .forEach((b) => b.addEventListener("click", () => showStep(b.dataset.step)));
-document
-  .querySelectorAll("[data-specialist]")
-  .forEach((b) =>
-    b.addEventListener("click", () => showSpecialist(b.dataset.specialist)),
-  );
-document
-  .querySelectorAll("[data-node]")
-  .forEach((b) => b.addEventListener("click", () => showNode(b.dataset.node)));
-showStep("observe");
-showSpecialist("challenger");
-showNode("research");
+draw();
+if (still) addEventListener("resize", draw);
+const io = new IntersectionObserver((entries) =>
+  entries.forEach((e) => e.isIntersecting && e.target.classList.add("in")),
+);
+document.querySelectorAll(".section").forEach((s) => io.observe(s));
 let importGeneration = 0;
 $("report-file").addEventListener("change", async (e) => {
   const generation = ++importGeneration;
