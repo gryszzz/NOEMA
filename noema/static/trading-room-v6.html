@@ -160,14 +160,14 @@ function lanes(){const L=(S.v6||{}).lanes||[];const el=$("lanes");
  if(!L.length){el.innerHTML='<div class="empty">Crawler lane telemetry unavailable (/api/room-v6).</div>';return}
  if(el.dataset.n!=L.length){el.dataset.n=L.length;el.innerHTML=L.map(l=>`<div class="lane" id="ln-${l.lane}"><div class="hd"><span class="dot"></span>${esc(l.label)}<span class="dim" style="margin-left:auto;font-weight:400" data-r></span></div><div class="url" data-u></div><div class="bar"><i data-b style="width:0"></i></div><div class="tick" data-t></div></div>`).join("")}
  for(const l of L){const e=$("ln-"+l.lane);e.querySelector(".dot").className="dot "+(l.status==="active"?"on":l.status==="idle"?"idle":"off");
-  e.querySelector("[data-r]").textContent=(l.hits_10m!=null?l.hits_10m+(l.lane==="solana_dex"?" pools":" quotes")+"/10m · ":"")+(l.last_hit_at?ago(l.last_hit_at):"never");
+  e.querySelector("[data-r]").textContent=(l.lane==="evidence"&&l.articles!=null?`${l.articles} articles · ${l.matched_articles} matched · ${l.markets_linked} mkts · `:"")+(l.hits_10m!=null?l.hits_10m+(l.lane==="solana_dex"?" pools":" quotes")+"/10m · ":"")+(l.last_hit_at?ago(l.last_hit_at):"never");
   if(!e.querySelector("[data-u]").textContent)e.querySelector("[data-u]").textContent=l.endpoints[0];
   if(l.note&&!e.dataset.note){e.dataset.note=1;e.querySelector("[data-t]").insertAdjacentHTML("afterbegin",`<div class="warn">${esc(l.note)}</div>`)}}}
 function laneTick(name){const e=$("ln-"+name);if(!e)return;let u,line,prog;
  if(name==="solana_dex"){({url:u,line,prog}=S.lane.solana||{})}else{const l=((S.v6||{}).lanes||[]).find(x=>x.lane===name);if(!l||!(l.recent||[]).length)return;
   S.lane[name]=(S.lane[name]||0)+1;const k=S.lane[name]%l.recent.length,r=l.recent[k];
-  u=name==="evidence"?l.endpoints[0]:name==="kalshi"?`https://api.elections.kalshi.com/trade-api/v2/markets/${r.market_id}`:`https://api.polymarket.us/v1/market/slug/${r.market_id}`;
-  line=`${hm(r.ts)} ${r.title||r.market_id}`;prog=(k+1)/l.recent.length}
+  u=name==="evidence"?(r.url||l.endpoints[0]):name==="kalshi"?`https://api.elections.kalshi.com/trade-api/v2/markets/${r.market_id}`:`https://api.polymarket.us/v1/market/slug/${r.market_id}`;
+  line=name==="evidence"?`${r.source} · ${r.title} ⇒ ${r.market_id||"no market match"}${r.relevance?" ("+f2(r.relevance)+")":""}`:`${hm(r.ts)} ${r.title||r.market_id}`;prog=(k+1)/l.recent.length}
  if(!u)return;e.querySelector("[data-u]").textContent=u;e.querySelector("[data-b]").style.width=(prog*100)+"%";
  const t=e.querySelector("[data-t]");t.insertAdjacentHTML("afterbegin",`<div>${esc(line)}</div>`);while(t.children.length>8)t.lastChild.remove();}
 setInterval(flipNext,1900);setInterval(()=>["kalshi","polymarket","evidence"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);

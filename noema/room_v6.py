@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from .news_crawler import FEEDS, recent_hits
 from .room_v4 import _cached
 
 STARTED_AT = datetime.now(UTC)
@@ -33,7 +34,6 @@ LANE_ENDPOINTS = {
                    "https://frontend-api-v3.pump.fun/coins"],
     "kalshi": ["https://api.elections.kalshi.com/trade-api/v2/markets"],
     "polymarket": ["https://api.polymarket.us/v1/markets"],
-    "evidence": ["https://api.elections.kalshi.com/trade-api/v2/markets?status=settled"],
 }
 SIGNER_FLAGS = {"solana": "NOEMA_SOLANA_SIGNER_ENABLED", "evm": "NOEMA_EVM_SIGNER_ENABLED"}
 
@@ -116,14 +116,27 @@ def crawler_lanes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     lanes.insert(0, {"lane": "solana_dex", "label": "SOLANA DEX", "endpoints": LANE_ENDPOINTS["solana_dex"],
                      "last_hit_at": cyc[0][0] if cyc else None, "hits_10m": pools10,
                      "status": "active" if pools10 else ("idle" if cyc else "no data")})
-    ev = _q(conn, "SELECT source, source_type, retrieved_at, evidence_id FROM evidence_records "
-            "ORDER BY rowid DESC LIMIT 8")
-    lanes.append({"lane": "evidence", "label": "EVIDENCE / WEB", "endpoints": LANE_ENDPOINTS["evidence"],
-                  "last_hit_at": ev[0][2] if ev else None, "hits_10m": None,
-                  "recent": [{"ts": r[2], "title": f"{r[0]} ({r[1]})", "market_id": r[3]} for r in ev],
-                  "status": "active" if ev else "no data",
-                  "note": "no general news/web crawler exists in NOEMA yet; evidence is venue settlement history"})
+    lanes.append(news_lane(db_path_of(conn)))
     return lanes
+
+
+def db_path_of(conn: sqlite3.Connection) -> str:
+    row = conn.execute("PRAGMA database_list").fetchone()
+    return str(row[2]) if row else ""
+
+
+def news_lane(db_path: str) -> dict[str, Any]:
+    hits = recent_hits(db_path, 30)
+    return {"lane": "evidence", "label": "NEWS / EVIDENCE", "endpoints": [f[2] for f in FEEDS] +
+            ["https://api.gdeltproject.org/api/v2/doc/doc"],
+            "last_hit_at": hits.get("last_fetch_at"), "hits_10m": None,
+            "status": "active" if hits.get("articles") else "no data",
+            "articles": hits.get("articles", 0), "matched_articles": hits.get("matched_articles", 0),
+            "markets_linked": hits.get("markets_linked", 0), "by_source": hits.get("by_source", {}),
+            "recent": [{"ts": h["published_at"], "title": h["headline"], "market_id": h["market"],
+                        "url": h["url"], "source": h["source"], "venue": h["venue"],
+                        "relevance": h["relevance"]} for h in hits.get("hits", [])],
+            "note": None if hits.get("articles") else "news crawler has not stored any articles yet"}
 
 
 def provider_health(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -143,7 +156,7 @@ def build_room_v6(db_path: str, *, fetch: bool = True,
         "evm_balances": evm_balances(fetch), "signers": signer_status(),
         "lanes": [], "providers": [],
         "rate_limits": {"geckoterminal_per_min": 10, "note": "shared limiter across desks"},
-        "news_crawler": "not present",
+        "news_crawler": "not run yet",
     }
     cc = command_center or {}
     acc = cc.get("accuracy_leaderboard") or cc.get("accuracy") or (cc.get("ledger") or {}).get("leaderboard")
@@ -154,6 +167,10 @@ def build_room_v6(db_path: str, *, fetch: bool = True,
         try:
             out["lanes"] = crawler_lanes(conn)
             out["providers"] = provider_health(conn)
+            ev = next((lane for lane in out["lanes"] if lane["lane"] == "evidence"), {})
+            if ev.get("articles"):
+                out["news_crawler"] = (f"{ev['articles']} articles, {ev['matched_articles']} matched "
+                                       f"to {ev['markets_linked']} markets")
         finally:
             conn.close()
     out["generated_ms"] = round((time.time() - now.timestamp()) * 1000)

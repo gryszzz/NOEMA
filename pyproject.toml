@@ -29,6 +29,7 @@ noema = "noema.cli:main"
 noema-dashboard = "noema.dashboard_server:main"
 noema-dashboard-web = "noema.console_entry:main"
 noema-agent = "noema.agent_entry:main"
+noema-news = "noema.news_crawler:main"
 noema-meridian = "noema.meridian_bridge:main"
 
 [tool.pytest.ini_options]
