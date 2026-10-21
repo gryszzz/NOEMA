@@ -349,7 +349,12 @@ class ExecutionGateway:
     ) -> Any:
         """Route a structured WalletIntent into the existing deterministic coordinator."""
         action = str(getattr(intent, "action", ""))
-        tier = "treasury" if action in self._TREASURY_ACTIONS else "execution"
+        if action == "dex_swap":
+            tier = "dex_swap"
+        elif action in self._TREASURY_ACTIONS:
+            tier = "treasury"
+        else:
+            tier = "execution"
         intent_id = str(getattr(intent, "intent_id", ""))
         mission_id = getattr(intent, "mission_id", None)
         payload = {
@@ -366,6 +371,15 @@ class ExecutionGateway:
         request_hash = self._hash(payload)
         if not intent_id:
             raise ValueError("wallet intent must have a stable ID")
+        if tier == "dex_swap":
+            reasons = self._dex_swap_block_reasons(intent)
+            if reasons:
+                notional = getattr(intent, "notional_usd", None)
+                self._record(intent_id, "wallet", tier, payload["venue"], "rejected", notional,
+                             payload, reasons)
+                from .agent_wallet import AgentWalletResult
+                from .wallet_policy import WalletPolicyDecision
+                return AgentWalletResult(WalletPolicyDecision(False, tuple(reasons)), None)
         if tier == "treasury" and os.getenv("NOEMA_TREASURY_ACTIONS_ENABLED", "0") != "1":
             self._record(intent_id, "wallet", tier, payload["venue"], "rejected", None,
                          payload, ["owner treasury permission is disabled"])
@@ -394,6 +408,79 @@ class ExecutionGateway:
         )
         reference = getattr(receipt, "transaction_reference", None) if receipt else None
         self._finish(intent_id, status, reference, {})
+        return result
+
+    def _dex_swap_block_reasons(self, intent: Any) -> list[str]:
+        """Independent owner gates for a non-treasury dex_swap. Halt wins."""
+        from .solana_live_gate import LIVE_VENUE_NAMES, solana_venue_selected
+
+        reasons: list[str] = []
+        if os.getenv("NOEMA_ALLOW_LIVE_ORDERS", "0") != "1" or os.getenv("NOEMA_SOLANA_SIGNER_ENABLED", "0") != "1":
+            reasons.append("solana live swaps are disabled")
+        venue = getattr(intent, "venue", None)
+        allowed = {
+            item.strip() for item in os.getenv("NOEMA_LIVE_VENUES", "").split(",") if item.strip()
+        }
+        if venue not in LIVE_VENUE_NAMES or venue not in allowed or not solana_venue_selected():
+            reasons.append("solana venue is not allowlisted")
+        if os.getenv("NOEMA_MASTER_HALT", "0") == "1":
+            reasons.append("owner master halt is active")
+        if os.getenv("NOEMA_SOLANA_MASTER_HALT", "1") != "0":
+            reasons.append("solana master halt is active")
+        if os.getenv("NOEMA_WALLET_MASTER_HALT", "1") != "0":
+            reasons.append("wallet master halt is active")
+        if not getattr(intent, "mission_id", None) or not tuple(getattr(intent, "evidence_ids", ()) or ()):
+            reasons.append("dex swap requires a mission and evidence references")
+        return reasons
+
+    def submit_dex_swap(self, *, intent: Any, handler: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Synchronous dex_swap tier used by trench desks. The handler performs the swap."""
+        action = str(getattr(intent, "action", ""))
+        if action != "dex_swap":
+            raise ValueError("wallet intent must have a stable ID")
+        intent_id = str(getattr(intent, "intent_id", ""))
+        if not intent_id:
+            raise ValueError("wallet intent must have a stable ID")
+        payload = {
+            "intent_id": intent_id,
+            "mission_id": getattr(intent, "mission_id", None),
+            "chain": getattr(getattr(intent, "chain", None), "value", None),
+            "venue": getattr(intent, "venue", None),
+            "action": action,
+            "asset_in": getattr(intent, "asset_in", None),
+            "asset_out": getattr(intent, "asset_out", None),
+            "amount_atomic": getattr(intent, "amount_atomic", None),
+            "minimum_output_atomic": getattr(intent, "minimum_output_atomic", None),
+            "evidence_refs": list(getattr(intent, "evidence_ids", ())),
+        }
+        reasons = self._dex_swap_block_reasons(intent)
+        notional = getattr(intent, "notional_usd", None)
+        if reasons:
+            self._record(intent_id, "wallet", "dex_swap", payload["venue"], "rejected", notional,
+                         payload, reasons)
+            return {"status": "rejected", "reasons": reasons}
+        if not self._reserve_generic(intent_id, "wallet", "dex_swap", payload["venue"], notional,
+                                     payload, self._hash(payload)):
+            return {"status": "rejected", "reasons": ["intent has already been consumed"]}
+        try:
+            result = handler()
+        except Exception:
+            self._finish(intent_id, "unknown", None,
+                         {"reason": "wallet outcome is unknown; reconciliation required"})
+            raise
+        if not isinstance(result, dict):
+            self._finish(intent_id, "unknown", None, {"reason": "wallet outcome is unknown; reconciliation required"})
+            raise RuntimeError("swap fill could not be reconciled")  # noqa: TRY004
+        public = {
+            key: result.get(key)
+            for key in (
+                "status", "signature", "mint", "side", "amount_in", "amount_out",
+                "token_delta_raw", "token_decimals", "sol_delta_lamports", "fee_lamports",
+                "notional_usd", "idempotency_key",
+            )
+        }
+        status = str(public.get("status") or "unknown")
+        self._finish(intent_id, status, public.get("signature") if isinstance(public.get("signature"), str) else None, public)
         return result
 
     def _prediction_checks(

@@ -1,9 +1,9 @@
-"""Paper-only parallel trench desks.
+"""Parallel trench desks.
 
-Each desk owns a paper bankroll slice, trades a held core leg plus a bounce leg, and is
+Each desk owns a bankroll slice, trades a held core leg plus a bounce leg, and is
 quarantined ("fired") after consecutive losses, then replaced by a mutated successor.
-Nothing in this module signs, quotes for execution, or submits a transaction: every fill
-is simulated from an observed market quote with explicit fee and slippage estimates.
+Fills are paper simulations unless a live executor is attached. The live executor is
+used only when the owner Solana gate is on; this module never loads a private key.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .solana_live_gate import DeskSwapRejected
 
 BASE_DESK_NAMES = ("VET", "RISK", "FILLS", "TAPE", "FLOOR", "DEPTH", "DRIFT", "EDGE")
 HARD_STOP_CEILING = 0.079  # every loser is cut before -8%
@@ -133,6 +135,22 @@ class Mark:
     source: str
 
 
+@dataclass(frozen=True)
+class LegFill:
+    """One desk leg. ``paper=0`` fills carry the chain signature and raw amounts."""
+
+    qty: float
+    fill_price: float
+    fee_usd: float
+    slippage_usd: float
+    notional_usd: float
+    paper: int = 1
+    signature: str | None = None
+    amount_in_raw: str | None = None
+    amount_out_raw: str | None = None
+    idempotency_key: str | None = None
+
+
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS trench_desks (
         desk_id TEXT PRIMARY KEY, name TEXT NOT NULL, base_name TEXT NOT NULL,
@@ -141,7 +159,8 @@ SCHEMA = (
         realized_pnl_usd REAL NOT NULL DEFAULT 0, fees_usd REAL NOT NULL DEFAULT 0,
         slippage_usd REAL NOT NULL DEFAULT 0, consecutive_losses INTEGER NOT NULL DEFAULT 0,
         wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0,
-        parent_desk_id TEXT, created_at TEXT NOT NULL, fired_at TEXT, fired_reason TEXT
+        parent_desk_id TEXT, created_at TEXT NOT NULL, fired_at TEXT, fired_reason TEXT,
+        swap_seq INTEGER NOT NULL DEFAULT 0
     )""",
     """CREATE TABLE IF NOT EXISTS trench_desk_positions (
         desk_id TEXT NOT NULL, mint TEXT NOT NULL, symbol TEXT NOT NULL,
@@ -159,7 +178,8 @@ SCHEMA = (
         quote_price REAL NOT NULL, quote_source TEXT NOT NULL, fill_price REAL NOT NULL,
         qty REAL NOT NULL, notional_usd REAL NOT NULL, fee_usd REAL NOT NULL,
         slippage_usd REAL NOT NULL, realized_pnl_usd REAL, reason TEXT NOT NULL,
-        paper INTEGER NOT NULL DEFAULT 1 CHECK (paper = 1)
+        paper INTEGER NOT NULL DEFAULT 1 CHECK (paper IN (0, 1)),
+        signature TEXT, amount_in_raw TEXT, amount_out_raw TEXT, idempotency_key TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS trench_desk_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, desk_id TEXT,
@@ -179,6 +199,7 @@ class TrenchDeskStore:
         self.conn.row_factory = sqlite3.Row
         for statement in SCHEMA:
             self.conn.execute(statement)
+        _migrate_desk_schema(self.conn)
         self.conn.commit()
 
     def close(self) -> None:
@@ -240,52 +261,128 @@ class TrenchDeskStore:
                           tuple(fields.values()))
 
 
+def _migrate_desk_schema(conn: sqlite3.Connection) -> None:
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "trench_desks" in tables:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(trench_desks)")}
+        if "swap_seq" not in columns:
+            conn.execute("ALTER TABLE trench_desks ADD COLUMN swap_seq INTEGER NOT NULL DEFAULT 0")
+    if "trench_desk_trades" in tables:
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='trench_desk_trades'"
+        ).fetchone()[0]
+        if "idempotency_key" not in sql:
+            conn.execute("ALTER TABLE trench_desk_trades RENAME TO trench_desk_trades_v1")
+            conn.execute(SCHEMA[2].replace("CREATE TABLE IF NOT EXISTS", "CREATE TABLE"))
+            old_cols = [row[1] for row in conn.execute("PRAGMA table_info(trench_desk_trades_v1)")]
+            new_cols = [row[1] for row in conn.execute("PRAGMA table_info(trench_desk_trades)")]
+            shared = [column for column in new_cols if column in old_cols]
+            rendered = ", ".join(shared)
+            conn.execute(
+                f"INSERT INTO trench_desk_trades ({rendered}) "
+                f"SELECT {rendered} FROM trench_desk_trades_v1"
+            )
+            conn.execute("DROP TABLE trench_desk_trades_v1")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS trench_desk_trades_idempotency "
+        "ON trench_desk_trades(idempotency_key) WHERE idempotency_key IS NOT NULL"
+    )
+
+
 def desk_params(row: sqlite3.Row) -> DeskParams:
     return DeskParams(**json.loads(row["params_json"]))
 
 
 class PaperDeskEngine:
-    """Deterministic paper desk state machine. No network, no signing."""
+    """Desk state machine. Paper fills unless a live executor is attached."""
 
     def __init__(self, store: TrenchDeskStore, *, costs: CostModel | None = None,
-                 fire_after_losses: int = 2) -> None:
+                 fire_after_losses: int = 2, executor: Any | None = None) -> None:
         self.store = store
         self.costs = costs or CostModel()
         self.fire_after_losses = fire_after_losses
+        self.executor = executor
+
+    def _idempotency_key(self, desk: sqlite3.Row, mint: str, leg: str, side: str,
+                         opened_at: str | None = None) -> str:
+        if side == "buy":
+            return f"desk:{desk['desk_id']}:{int(desk['swap_seq'])}:{mint}:{leg}:buy"
+        return f"desk:{desk['desk_id']}:{opened_at}:{mint}:{leg}:sell"
+
+    def _paper_buy(self, notional: float, mark: Mark) -> LegFill:
+        fill_price, fee, slip = self.costs.fill(
+            side="buy", quote_price=mark.price_usd, notional_usd=notional,
+            liquidity_usd=mark.liquidity_usd,
+        )
+        return LegFill(
+            qty=(notional - fee) / fill_price, fill_price=fill_price, fee_usd=fee,
+            slippage_usd=slip, notional_usd=notional, paper=1,
+        )
+
+    def _paper_sell(self, qty: float, cost_usd: float, mark: Mark) -> tuple[LegFill, float]:
+        gross = qty * mark.price_usd
+        fill_price, fee, slip = self.costs.fill(
+            side="sell", quote_price=mark.price_usd, notional_usd=gross,
+            liquidity_usd=mark.liquidity_usd,
+        )
+        proceeds = qty * fill_price - fee
+        fill = LegFill(
+            qty=qty, fill_price=fill_price, fee_usd=fee, slippage_usd=slip,
+            notional_usd=proceeds, paper=1,
+        )
+        return fill, proceeds - cost_usd
+
+    def _record_leg(self, desk: sqlite3.Row, mint: str, symbol: str, leg: str, side: str,
+                    mark: Mark, reason: str, fill: LegFill, pnl: float | None) -> None:
+        self.store.record_trade(
+            desk_id=desk["desk_id"], mint=mint, symbol=symbol, leg=leg, side=side, ts=_now(),
+            quote_price=mark.price_usd, quote_source=mark.source, fill_price=fill.fill_price,
+            qty=fill.qty, notional_usd=fill.notional_usd, fee_usd=fill.fee_usd,
+            slippage_usd=fill.slippage_usd, realized_pnl_usd=pnl, reason=reason,
+            paper=fill.paper, signature=fill.signature, amount_in_raw=fill.amount_in_raw,
+            amount_out_raw=fill.amount_out_raw, idempotency_key=fill.idempotency_key,
+        )
 
     # -- low level legs -------------------------------------------------------
     def _buy(self, desk: sqlite3.Row, mint: str, symbol: str, leg: str, notional: float,
-             mark: Mark, reason: str) -> tuple[float, float]:
-        fill_price, fee, slip = self.costs.fill(side="buy", quote_price=mark.price_usd,
-                                                notional_usd=notional,
-                                                liquidity_usd=mark.liquidity_usd)
-        qty = (notional - fee) / fill_price
-        self.store.record_trade(
-            desk_id=desk["desk_id"], mint=mint, symbol=symbol, leg=leg, side="buy", ts=_now(),
-            quote_price=mark.price_usd, quote_source=mark.source, fill_price=fill_price,
-            qty=qty, notional_usd=notional, fee_usd=fee, slippage_usd=slip,
-            realized_pnl_usd=None, reason=reason,
-        )
+             mark: Mark, reason: str) -> tuple[float, float, float]:
+        key = self._idempotency_key(desk, mint, leg, "buy")
+        if self.executor is None:
+            fill = self._paper_buy(notional, mark)
+        else:
+            # Release the desk transaction before the gateway and ledger write
+            # the same database from another connection.
+            self.store.conn.commit()
+            fill = self.executor.buy(
+                desk_id=desk["desk_id"], mint=mint, symbol=symbol, leg=leg,
+                notional_usd=notional, mark=mark, reason=reason, idempotency_key=key,
+            )
+        self._record_leg(desk, mint, symbol, leg, "buy", mark, reason, fill, None)
         self.store.conn.execute(
             """UPDATE trench_desks SET cash_usd=cash_usd-?, fees_usd=fees_usd+?,
                slippage_usd=slippage_usd+? WHERE desk_id=?""",
-            (notional, fee, slip, desk["desk_id"]))
-        return qty, fill_price
+            (fill.notional_usd, fill.fee_usd, fill.slippage_usd, desk["desk_id"]))
+        return fill.qty, fill.fill_price, fill.notional_usd
 
     def _sell(self, desk: sqlite3.Row, mint: str, symbol: str, leg: str, qty: float,
-              cost_usd: float, mark: Mark, reason: str) -> float:
-        gross = qty * mark.price_usd
-        fill_price, fee, slip = self.costs.fill(side="sell", quote_price=mark.price_usd,
-                                                notional_usd=gross,
-                                                liquidity_usd=mark.liquidity_usd)
-        proceeds = qty * fill_price - fee
-        pnl = proceeds - cost_usd
-        self.store.record_trade(
-            desk_id=desk["desk_id"], mint=mint, symbol=symbol, leg=leg, side="sell", ts=_now(),
-            quote_price=mark.price_usd, quote_source=mark.source, fill_price=fill_price,
-            qty=qty, notional_usd=proceeds, fee_usd=fee, slippage_usd=slip,
-            realized_pnl_usd=pnl, reason=reason,
-        )
+              cost_usd: float, mark: Mark, reason: str, opened_at: str | None = None) -> float | None:
+        key = self._idempotency_key(desk, mint, leg, "sell", opened_at)
+        if self.executor is None:
+            fill, pnl = self._paper_sell(qty, cost_usd, mark)
+        else:
+            self.store.conn.commit()
+            try:
+                fill = self.executor.sell(
+                    desk_id=desk["desk_id"], mint=mint, symbol=symbol, leg=leg, qty=qty,
+                    cost_usd=cost_usd, mark=mark, reason=reason, idempotency_key=key,
+                    opened_at=opened_at,
+                )
+            except DeskSwapRejected as exc:
+                self.store.event(desk["desk_id"], "live_swap_rejected", mint=mint, leg=leg,
+                                 side="sell", reason=str(exc))
+                return None
+            pnl = fill.notional_usd - cost_usd
+        self._record_leg(desk, mint, symbol, leg, "sell", mark, reason, fill, pnl)
         win = pnl > 0
         self.store.conn.execute(
             f"""UPDATE trench_desks SET cash_usd=cash_usd+?, fees_usd=fees_usd+?,
@@ -293,7 +390,7 @@ class PaperDeskEngine:
                 {'wins=wins+1, consecutive_losses=0' if win else
                  'losses=losses+1, consecutive_losses=consecutive_losses+1'}
                 WHERE desk_id=?""",
-            (proceeds, fee, slip, pnl, desk["desk_id"]))
+            (fill.notional_usd, fill.fee_usd, fill.slippage_usd, pnl, desk["desk_id"]))
         return pnl
 
     def _desk(self, desk_id: str) -> sqlite3.Row:
@@ -302,13 +399,31 @@ class PaperDeskEngine:
 
     def _close_position(self, desk_id: str, pos: sqlite3.Row, mark: Mark, reason: str) -> None:
         desk = self._desk(desk_id)
-        if pos["bounce_qty"] > 0:
-            self._sell(desk, pos["mint"], pos["symbol"], "bounce", pos["bounce_qty"],
-                       pos["bounce_cost_usd"], mark, reason)
+        opened_at = pos["opened_at"]
+        bounce_open = pos["bounce_qty"] > 0
+        bounce_failed = False
+        if bounce_open:
+            bounce_failed = self._sell(
+                desk, pos["mint"], pos["symbol"], "bounce", pos["bounce_qty"],
+                pos["bounce_cost_usd"], mark, reason, opened_at,
+            ) is None
+        if bounce_failed:
+            return
         desk = self._desk(desk_id)
-        if pos["core_qty"] > 0:
-            self._sell(desk, pos["mint"], pos["symbol"], "core", pos["core_qty"],
-                       pos["core_cost_usd"], mark, reason)
+        core_open = pos["core_qty"] > 0
+        core_failed = False
+        if core_open:
+            core_failed = self._sell(
+                desk, pos["mint"], pos["symbol"], "core", pos["core_qty"],
+                pos["core_cost_usd"], mark, reason, opened_at,
+            ) is None
+        if core_failed and bounce_open:
+            self.store.conn.execute(
+                """UPDATE trench_desk_positions SET bounce_qty=0, bounce_cost_usd=0,
+                   bounce_entry_price=NULL WHERE desk_id=? AND mint=? AND opened_at=?""",
+                (desk_id, pos["mint"], opened_at))
+        if core_failed:
+            return
         unused = pos["bounce_budget_usd"] if pos["bounce_qty"] == 0 else 0.0
         self.store.conn.execute(
             """UPDATE trench_desk_positions SET status='closed', closed_at=?, core_qty=0,
@@ -345,7 +460,10 @@ class PaperDeskEngine:
                 if reason:
                     desk = self._desk(desk_id)
                     pnl = self._sell(desk, pos["mint"], pos["symbol"], "bounce",
-                                     pos["bounce_qty"], pos["bounce_cost_usd"], mark, reason)
+                                     pos["bounce_qty"], pos["bounce_cost_usd"], mark, reason,
+                                     pos["opened_at"])
+                    if pnl is None:
+                        continue
                     budget = max(0.0, pos["bounce_cost_usd"] + pnl)
                     self.store.conn.execute(
                         """UPDATE trench_desk_positions SET bounce_qty=0, bounce_cost_usd=0,
@@ -364,13 +482,21 @@ class PaperDeskEngine:
                 self.store.conn.execute(
                     "UPDATE trench_desks SET cash_usd=cash_usd+? WHERE desk_id=?",
                     (budget, desk_id))
-                qty, price = self._buy(desk, pos["mint"], pos["symbol"], "bounce", budget,
-                                       mark, "rebuy after dip")
+                try:
+                    qty, price, spent = self._buy(desk, pos["mint"], pos["symbol"], "bounce", budget,
+                                                  mark, "rebuy after dip")
+                except DeskSwapRejected as exc:
+                    self.store.conn.execute(
+                        "UPDATE trench_desks SET cash_usd=cash_usd-? WHERE desk_id=?",
+                        (budget, desk_id))
+                    self.store.event(desk_id, "live_swap_rejected", mint=pos["mint"], leg="bounce",
+                                     side="buy", reason=str(exc))
+                    continue
                 self.store.conn.execute(
                     """UPDATE trench_desk_positions SET bounce_qty=?, bounce_cost_usd=?,
                        bounce_entry_price=?, bounce_budget_usd=0
                        WHERE desk_id=? AND mint=? AND opened_at=?""",
-                    (qty, budget, price, *key))
+                    (qty, spent, price, *key))
             self.store.conn.execute(
                 """UPDATE trench_desk_positions SET last_mark_price=?, last_mark_at=?
                    WHERE desk_id=? AND mint=? AND opened_at=? AND status='open'""",
@@ -390,14 +516,21 @@ class PaperDeskEngine:
         core_notional = allocation * params.core_fraction
         bounce_notional = allocation - core_notional
         core_qty = core_price = 0.0
-        if core_notional >= 1.0:
-            core_qty, core_price = self._buy(desk, mint, symbol, "core", core_notional, mark,
-                                             reason)
-        else:
-            core_notional = 0.0
-        desk = self._desk(desk_id)
-        bounce_qty, bounce_price = self._buy(desk, mint, symbol, "bounce", bounce_notional,
-                                             mark, reason)
+        try:
+            if core_notional >= 1.0:
+                core_qty, core_price, core_notional = self._buy(
+                    desk, mint, symbol, "core", core_notional, mark, reason)
+            else:
+                core_notional = 0.0
+            desk = self._desk(desk_id)
+            bounce_qty, bounce_price, bounce_notional = self._buy(
+                desk, mint, symbol, "bounce", bounce_notional, mark, reason)
+        except DeskSwapRejected as exc:
+            self.store.event(desk_id, "live_swap_rejected", mint=mint, symbol=symbol,
+                             reason=str(exc))
+            if core_qty <= 0:
+                return False
+            bounce_qty = bounce_price = bounce_notional = 0.0
         self.store.conn.execute(
             """INSERT INTO trench_desk_positions (desk_id, mint, symbol, opened_at, status,
                core_qty, core_cost_usd, core_entry_price, bounce_qty, bounce_cost_usd,
@@ -405,9 +538,11 @@ class PaperDeskEngine:
                VALUES (?,?,?,?, 'open', ?,?,?,?,?,?,?,?)""",
             (desk_id, mint, symbol, opened_at, core_qty, core_notional, core_price or None,
              bounce_qty, bounce_notional, bounce_price, mark.price_usd, opened_at))
-        self.store.event(desk_id, "paper_entry", mint=mint, symbol=symbol,
-                         allocation_usd=allocation, reason=reason, quote=mark.price_usd,
-                         quote_source=mark.source)
+        self.store.conn.execute(
+            "UPDATE trench_desks SET swap_seq=swap_seq+1 WHERE desk_id=?", (desk_id,))
+        self.store.event(desk_id, "live_entry" if self.executor else "paper_entry",
+                         mint=mint, symbol=symbol, allocation_usd=allocation, reason=reason,
+                         quote=mark.price_usd, quote_source=mark.source)
         return True
 
     def fire_if_needed(self, desk_id: str, marks: dict[str, Mark]) -> str | None:
@@ -419,6 +554,9 @@ class PaperDeskEngine:
                 pos["last_mark_price"] or pos["bounce_entry_price"] or pos["core_entry_price"],
                 1e12, "last_mark")
             self._close_position(desk_id, pos, mark, "desk fired")
+        if self.store.open_positions(desk_id):
+            self.store.event(desk_id, "desk_fire_blocked", reason="open position could not be closed")
+            return None
         desk = self._desk(desk_id)
         reason = f"{desk['consecutive_losses']} consecutive losses"
         self.store.conn.execute(
@@ -438,9 +576,22 @@ class PaperDeskEngine:
         self.store.conn.commit()
 
 
+def _execution_flags() -> dict[str, bool]:
+    from .solana_live_gate import master_halt_active, solana_desk_live_enabled
+
+    requested = solana_desk_live_enabled()
+    halted = master_halt_active()
+    return {
+        "paper": not requested,
+        "live_execution": requested and not halted,
+        "live_halted": requested and halted,
+    }
+
+
 def desk_overview(db_path: str) -> dict[str, Any]:
+    flags = _execution_flags()
     if not Path(db_path).exists():
-        return {"desks": [], "positions": [], "recent_trades": [], "fired": [], "paper": True}
+        return {"desks": [], "positions": [], "recent_trades": [], "fired": [], **flags}
     store = TrenchDeskStore(db_path)
     try:
         desks = []
@@ -471,8 +622,7 @@ def desk_overview(db_path: str) -> dict[str, Any]:
     finally:
         store.close()
     return {
-        "paper": True,
-        "live_execution": False,
+        **_execution_flags(),
         "desks": desks,
         "positions": positions,
         "recent_trades": trades,

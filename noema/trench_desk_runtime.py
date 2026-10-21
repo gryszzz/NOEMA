@@ -1,7 +1,8 @@
-"""One paper-desk cycle: discover pools, filter, judge, and run paper desks.
+"""One trench-desk cycle: discover pools, filter, judge, and run the desks.
 
-PAPER ONLY. This module never imports a signer or swap builder and refuses to run if
-any live-execution flag is enabled.
+Paper fills are the default. Entries and exits go to the isolated Solana signer only
+when NOEMA_SOLANA_SIGNER_ENABLED, NOEMA_ALLOW_LIVE_ORDERS, and a solana live venue
+are all set. This module never reads the signer secret.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .solana_live_gate import DeskSwapRejected, master_halt_active, solana_desk_live_enabled
 from .solana_research import (
     DexScreenerTrenchPriceClient,
     GeckoTerminalPoolClient,
@@ -24,9 +26,6 @@ from .solana_research import (
 from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore, desk_overview
 from .trench_judgement import judge_candidates
 from .trench_risk import DeskEntryPolicy, evaluate_desk_entry
-
-LIVE_FLAGS = ("NOEMA_EXECUTION_GATEWAY_ENABLED", "NOEMA_ALLOW_LIVE_ORDERS",
-              "NOEMA_TREASURY_ACTIONS_ENABLED", "NOEMA_SOLANA_SIGNER_ENABLED")
 
 
 @dataclass(frozen=True)
@@ -55,10 +54,12 @@ class DeskRuntimeConfig:
         )
 
 
-def assert_paper_only() -> None:
-    enabled = [flag for flag in LIVE_FLAGS if os.getenv(flag, "0") == "1"]
-    if enabled:
-        raise RuntimeError("trench desks are paper-only; live flags enabled: " + ",".join(enabled))
+class _HaltedDeskExecutor:
+    def buy(self, **_kwargs: Any) -> Any:
+        raise DeskSwapRejected("owner master halt is active")
+
+    def sell(self, **_kwargs: Any) -> Any:
+        raise DeskSwapRejected("owner master halt is active")
 
 
 def paper_capital(db_path: str, config: DeskRuntimeConfig) -> float:
@@ -89,9 +90,17 @@ async def run_desk_cycle(
     gecko: GeckoTerminalPoolClient, solana: SolanaRpcResearchClient,
     dex: DexScreenerTrenchPriceClient, pumpfun: PumpFunLaunchClient | None = None,
     chatter: XChatterSource | None = None, policy: DeskEntryPolicy | None = None,
-    now: datetime | None = None,
+    now: datetime | None = None, executor: Any | None = None,
 ) -> dict[str, Any]:
-    assert_paper_only()
+    live = solana_desk_live_enabled()
+    if not live:
+        executor = None
+    elif executor is None and master_halt_active():
+        executor = _HaltedDeskExecutor()
+    elif executor is None:
+        from .solana_execution import JupiterDeskExecutor
+
+        executor = JupiterDeskExecutor(db_path)
     now = now or datetime.now(UTC)
     policy = policy or DeskEntryPolicy.from_env()
     summary: dict[str, Any] = {"provider_failures": []}
@@ -224,7 +233,7 @@ async def run_desk_cycle(
     store = TrenchDeskStore(db_path)
     try:
         store.ensure_desks(config.desk_count, paper_capital(db_path, config))
-        engine = PaperDeskEngine(store, costs=CostModel.from_env())
+        engine = PaperDeskEngine(store, costs=CostModel.from_env(), executor=executor)
         names = {m: f.get("symbol") for m, f in feed.items()}
         for c in chief_log:
             store.event(None, "chief_decision", **{**c, "symbol": names.get(c["mint"])})
@@ -268,7 +277,8 @@ async def run_desk_cycle(
         store.close()
     _record_equity_snapshot(db_path)
     summary.pop("feed", None)
-    summary.update(entries=entries, fired=fired, marks=len(marks))
+    summary.update(entries=entries, fired=fired, marks=len(marks),
+                   live_execution=live and not master_halt_active())
     return summary
 
 
