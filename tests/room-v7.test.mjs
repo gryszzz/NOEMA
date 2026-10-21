@@ -44,3 +44,17 @@ test('rulebook boilerplate target queries are hidden', () => {
   assert.equal(V.isBoilerplateQuery('S&P "Kalshi Rulebook"'), true);
   assert.equal(V.isBoilerplateQuery('"average gas prices" AAA'), false);
 });
+
+test('laptop dock engages on MacBook-sized screens only', () => {
+  const noop = () => {};
+  const ctx = { document: { readyState: 'complete', querySelector: () => null, querySelectorAll: () => [],
+    getElementById: () => null, addEventListener: noop }, localStorage: {}, setTimeout: () => 0,
+    clearTimeout: noop, addEventListener: noop, innerWidth: 1512, innerHeight: 982 };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(readFileSync(new URL('../noema/static/room-v7-dock.js', import.meta.url), 'utf8'), ctx);
+  const D = ctx.TEV_V7_DOCK;
+  assert.equal(D.isLaptop(1512, 982), true);
+  assert.equal(D.isLaptop(1728, 1117), true);
+  assert.equal(D.isLaptop(2560, 1440), false);
+});

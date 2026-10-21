@@ -88,3 +88,12 @@ def test_v7_grid_accounts_for_every_v6_row():
     html = (Path(__file__).parents[1] / "noema" / "static" / "trading-room-v6.html").read_text()
     if "culture-row" in html:
         assert ".culture-row{grid-row:6!important}" in css and ".left{grid-row:4/7!important}" in css
+
+
+def test_laptop_dock_assets_are_included(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOEMA_DB_PATH", _db(tmp_path, "d.db"))
+    from noema.dashboard_app import app
+    client = TestClient(app)
+    html = client.get("/trading-room").text
+    for asset in ("/static/room-v7-dock.js", "/static/room-v7-dock.css"):
+        assert asset in html and client.get(asset).status_code == 200

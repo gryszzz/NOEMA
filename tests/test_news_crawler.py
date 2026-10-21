@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime
 
@@ -250,4 +251,22 @@ def test_market_targets_and_queries(tmp_path):
     t = nc.market_targets(c)
     assert [x["market_id"] for x in t] == ["b", "a"]  # soonest first, strike ladder collapsed, sports skipped
     assert nc.market_query(t[1]["title"], t[1]["rules"]) == '"Steve Witkoff" Envoy resign'
-    assert nc.market_query(t[0]["title"], t[0]["rules"]).startswith('"average gas prices"')
+    assert nc.market_query(t[0]["title"], t[0]["rules"]).startswith('"gas prices"')
+
+
+def test_market_query_never_quotes_rules_boilerplate():
+    rules = ('If the S&P 500 closes above 6800 per the Kalshi Rulebook and the Source Agency, '
+             'the market resolves Yes. See Contract Terms, Chapter 13.')
+    for title in ("Will the S&P 500 be above 6800 at the end of Oct 22, 2026?",
+                  "Will Steve Witkoff resign as Envoy?", "Fed decision in December"):
+        q = nc.market_query(title, rules)
+        assert not re.search(r"kalshi|rulebook|source agency|contract|chapter", q, re.IGNORECASE), q
+
+
+def test_market_query_for_daily_price_markets():
+    assert nc.market_query("Will the S&P 500 be above 6800 at the end of Oct 22, 2026?") == \
+        '"S&P 500" (stocks OR futures)'
+    assert nc.market_query("Nasdaq-100 range on Oct 22, 2026 at 4pm EDT?").startswith("Nasdaq ")
+    assert nc.market_query("Will average gas prices be above $4.10?") == '"gas prices" (AAA OR gasoline)'
+    assert nc.price_market("Will the S&P 500 be above 6800 on Oct 22?")["date"] == "October 22"
+    assert nc.price_market("Will Steve Witkoff resign?") is None
