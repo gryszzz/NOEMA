@@ -59,8 +59,11 @@ from .soak import SoakStore
 from .soak_runner import collect_rotating_market_batch
 from .solana_research import (
     DexScreenerTrenchPriceClient,
+    GeckoTerminalPoolClient,
     JupiterTrenchResearchClient,
+    PumpFunLaunchClient,
     SolanaRpcResearchClient,
+    XChatterSource,
 )
 from .sqlite_diagnostics import sqlite_error_fields
 from .stripe_economy import reconcile_persisted_stripe_evidence, sync_stripe_economy
@@ -71,6 +74,7 @@ from .sync import (
 )
 from .trench_collector import TrenchCollectorStore, collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
+from .trench_desk_runtime import DeskRuntimeConfig, run_desk_cycle
 from .venues.kalshi import KalshiCredentialError, KalshiVenue
 from .venues.kalshi_history import KalshiHistory
 from .venues.polymarket_us import PolymarketUSVenue
@@ -409,6 +413,37 @@ async def _trench_sampler_loop(
         except asyncio.CancelledError:
             await solana.close()
             raise
+
+
+async def _trench_desk_loop(db_path: str, config: DeskRuntimeConfig,
+                            trench_config: TrenchCollectorConfig) -> None:
+    """Paper-only memecoin desks on their own cadence (never signs or swaps)."""
+    gecko = GeckoTerminalPoolClient()
+    solana = SolanaRpcResearchClient(
+        rpc_url=trench_config.solana_rpc_url,
+        fallback_rpc_url=trench_config.solana_rpc_fallback_url,
+    )
+    dex = DexScreenerTrenchPriceClient()
+    pumpfun = PumpFunLaunchClient()
+    chatter = XChatterSource(enabled=config.chatter_enabled)
+    try:
+        while True:
+            started = asyncio.get_running_loop().time()
+            try:
+                summary = await run_desk_cycle(
+                    db_path, config=config, gecko=gecko, solana=solana, dex=dex,
+                    pumpfun=pumpfun, chatter=chatter,
+                )
+                _log("trench_desk_cycle", **summary)
+            except asyncio.CancelledError:
+                raise
+            except (httpx.HTTPError, sqlite3.Error, OSError, RuntimeError, ValueError,
+                    KeyError, TypeError) as exc:
+                _log("trench_desk_cycle_error", error=type(exc).__name__, detail=str(exc)[:200])
+            elapsed = asyncio.get_running_loop().time() - started
+            await asyncio.sleep(max(0.0, config.interval_seconds - elapsed))
+    finally:
+        await solana.close()
 
 
 async def _market_discovery_sampler_loop(
@@ -1118,6 +1153,7 @@ async def run_agent(
     heartbeat_thread.start()
 
     trench_sampler: asyncio.Task[None] | None = None
+    trench_desks: asyncio.Task[None] | None = None
     market_discovery_sampler: asyncio.Task[None] | None = None
     polymarket_stream: asyncio.Task[None] | None = None
     polymarket_rest_sampler: asyncio.Task[None] | None = None
@@ -1147,6 +1183,14 @@ async def run_agent(
         )
     else:
         _log("trench_forward_sampler_started", enabled=False, reason="collector_disabled")
+    desk_config = DeskRuntimeConfig.from_env()
+    if desk_config.enabled:
+        trench_desks = asyncio.create_task(
+            _trench_desk_loop(config.db_path, desk_config, trench_config),
+            name="noema-trench-paper-desks",
+        )
+        _log("trench_desks_started", enabled=True, desks=desk_config.desk_count,
+             interval_seconds=desk_config.interval_seconds, paper_only=True)
     market_discovery_config = MarketDiscoveryConfig.from_env()
     if market_discovery_config.enabled:
         market_discovery_sampler = asyncio.create_task(
@@ -1244,7 +1288,7 @@ async def run_agent(
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
         for task in (
-            trench_sampler, market_discovery_sampler, polymarket_stream,
+            trench_sampler, trench_desks, market_discovery_sampler, polymarket_stream,
             polymarket_rest_sampler, changed_snapshot_task,
         ):
             if task is None:

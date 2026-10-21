@@ -58,6 +58,7 @@ from .storage_recovery import recover_storage
 from .stripe_economy import stripe_economy_overview
 from .telemetry_report import build_telemetry_report
 from .trench_dashboard import build_trench_overview
+from .trench_desks import desk_overview
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 
@@ -1010,6 +1011,16 @@ async def doctor() -> dict[str, Any]:
 @app.get("/api/ladder")
 async def ladder() -> dict[str, Any]:
     return build_ladder_report(_db_path())
+
+
+@app.get("/api/trench-desks")
+async def trench_desks() -> dict[str, Any]:
+    return desk_overview(_db_path())
+
+
+@app.get("/trench-desks", response_class=HTMLResponse)
+async def trench_desks_page() -> str:
+    return (Path(__file__).with_name("static") / "trench-desks.html").read_text()
 
 
 @app.get("/api/compare")
