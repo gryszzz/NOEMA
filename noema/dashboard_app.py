@@ -58,6 +58,7 @@ from .prediction_venues import (
 from .research_state import research_trial_update_is_newer
 from .room_v4 import build_room_v4
 from .room_v6 import build_room_v6
+from .room_v7 import build_room_v7
 from .sqlite_diagnostics import sqlite_error_fields
 from .storage_recovery import recover_storage
 from .stripe_economy import stripe_economy_overview
@@ -1094,6 +1095,12 @@ async def tev_favicon() -> FileResponse:
 @app.get("/apple-touch-icon.png", include_in_schema=False)
 async def tev_apple_touch_icon() -> FileResponse:
     return FileResponse(_TEV_BRAND / "tev-180.png", media_type="image/png")
+
+
+@app.get("/api/room-v7")
+async def room_v7(since: int = 0) -> dict[str, Any]:
+    """Read-only v7 overlay: event pulse, funnel, scan lane, equity vs floor, prices, Stripe view."""
+    return await asyncio.to_thread(build_room_v7, _db_path(), since_id=max(0, since))
 
 
 @app.get("/trading-room", response_class=HTMLResponse)

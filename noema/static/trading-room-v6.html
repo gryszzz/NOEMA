@@ -323,4 +323,6 @@ function health(){const v6=S.v6||{},h=(S.cc||{}).health||{};const up=v6.uptime_s
  $("health").innerHTML=`<div class="kv"><span>agent heartbeat</span><span class="${h.health==="healthy"?"ok":"warn"}">${esc(h.health||"—")} · ${h.heartbeat_age_s??"—"}s · cycle ${h.cycle_id??"—"}</span><span>dashboard uptime</span><span>${up==null?"—":Math.floor(up/3600)+"h "+Math.floor(up%3600/60)+"m"}</span><span>GeckoTerminal</span><span>${(v6.rate_limits||{}).geckoterminal_per_min??"—"} req/min shared limiter</span><span>news crawler</span><span class="warn">${esc(v6.news_crawler||"—")}</span></div>
  <table>${(v6.providers||[]).map(p=>`<tr><td>${esc(p.provider)}</td><td class="${p.state==="healthy"?"ok":"warn"}">${esc(p.state)}</td><td class="dim">${p.consecutive_failures} fails · ${esc(p.last_error_class||"")}</td></tr>`).join("")||'<tr><td class="dim">no provider health rows</td></tr>'}</table>`;}
 load();setInterval(load,15000);setTimeout(flipNext,300);
-</script></body></html>
+</script>
+<link rel="stylesheet" href="/static/room-v7.css"><script src="/static/room-v7.js" defer></script>
+</body></html>
