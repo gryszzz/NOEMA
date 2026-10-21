@@ -11,6 +11,8 @@ from noema import equity_feed as ef
 from noema.capital_guard import CapitalGuard
 from noema.room_v6 import capital_panel
 
+pytestmark = pytest.mark.capital_guard
+
 T0 = datetime(2026, 10, 21, 20, 0, tzinfo=UTC)
 
 
