@@ -72,6 +72,7 @@ from .sync import (
     sync_kalshi_outcomes,
     sync_polymarket_us_outcomes,
 )
+from .trading_coordinator import run_scheduled_trading_cycle
 from .trench_collector import TrenchCollectorStore, collect_trench_cycle
 from .trench_config import TrenchCollectorConfig
 from .trench_desk_runtime import DeskRuntimeConfig, run_desk_cycle
@@ -943,6 +944,20 @@ async def run_cycle(
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError):
         investigation_decision = None
         _log("agent_economic_investigation_unavailable", status="degraded")
+    finish_stage(stage_name)
+    stage_name = "trading_coordinator"
+    try:
+        trading_report = await run_scheduled_trading_cycle(config.db_path)
+        _log(
+            "trading_coordinator",
+            status=trading_report.get("status"),
+            mode=trading_report.get("mode"),
+            level=trading_report.get("level"),
+            submitted=trading_report.get("submitted"),
+            paper_fills=trading_report.get("paper_fills"),
+        )
+    except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
+        _log("trading_coordinator_error", status="skipped")
     finish_stage(stage_name)
 
     cycle = AgentCycleState(

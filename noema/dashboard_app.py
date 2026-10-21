@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .account_capital import value_native_wallets
 from .agent_dashboard import build_agent_overview
+from .autonomy_authority import console_trading_status
 from .bill_tracker import BillTracker
 from .cognition_dashboard import build_cognition_overview, build_provider_health
 from .command_center import build_command_center
@@ -1173,6 +1174,7 @@ async def wallet_status(*, force: bool = False) -> dict[str, Any]:
                 _wallet_status_cache["fetched_at"] = time.monotonic()
                 _wallet_status_cache["observed_at"] = datetime.now(UTC).isoformat()
     policy = public_wallet_policy()
+    trading = console_trading_status()
     policy_by_chain = {row["chain"]: row for row in policy.get("wallet_networks", [])}
     networks = []
     for cached in _wallet_status_cache["networks"]:
@@ -1197,8 +1199,10 @@ async def wallet_status(*, force: bool = False) -> dict[str, Any]:
             "live_execution_enabled": False,
             "mission_authority_present": False,
             "coordinator_wired": False,
+            "trading_coordinator_wired": True,
+            "trading_live_gates_open": trading["trading_live_gates_open"],
             "halted": policy["master_halt"],
-            "status": "SIGNER MAY BE CONFIGURED · LIVE EXECUTION DISABLED · COORDINATOR NOT WIRED",
+            "status": trading["status"],
         },
         "networks": networks,
     }

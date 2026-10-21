@@ -14,18 +14,23 @@ The capability tiers are distinct:
 - Research is read-only and cannot create a proposal.
 - Proposal records intent and evidence but cannot call a provider.
 - Execution requires the gateway and existing live-order switches, a positive
-  owner daily cap, a venue allowlist, current mission-specific authority,
+  daily cap, a venue allowlist, current mission-specific authority,
   verified venue fee/depth economics, a live deterministic risk pass, and a
   venue adapter that supports live execution and provides current balances,
-  positions, and open-order state.
+  positions, and open-order state. `NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD` is an
+  optional override. When it is unset, the daily cap is the mission authority
+  limit, which earned autonomy sets as a fraction of bankroll. An explicit
+  value, including `0`, replaces that fraction.
 - Treasury-class wallet sends, approvals, contract calls, and withdrawals also
   require `NOEMA_TREASURY_ACTIONS_ENABLED=1`, the wallet's own policy approval,
   isolated signing, and explicit mission authority.
 
 Environment controls read by the gateway are `NOEMA_EXECUTION_GATEWAY_ENABLED`,
 `NOEMA_ALLOW_LIVE_ORDERS`, `NOEMA_MASTER_HALT`,
-`NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD`, `NOEMA_LIVE_VENUES`, and
-`NOEMA_TREASURY_ACTIONS_ENABLED`. The runtime owner must supply them through the
+`NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD` (optional override), `NOEMA_LIVE_VENUES`, and
+`NOEMA_TREASURY_ACTIONS_ENABLED`. The trading coordinator also reads
+`NOEMA_LIVE_REQUIRES_OWNER_REVIEW` (default required) and
+`NOEMA_ORDER_TTL_SECONDS`. The runtime owner must supply them through the
 existing secure configuration path. Missing values fail closed. The raw
 credential fields are not accepted by the gateway and are not written to its
 audit table.
@@ -72,18 +77,21 @@ rejection, cancellation, expiration, or failure releases the reservation;
 ambiguous dispatch failures remain `unknown` and fully reserved. Legacy
 ambiguous `failed` rows remain conservatively charged.
 
-This checkpoint does not yet create canonical economic-ledger fill/fee events
-or reconcile wallet transactions. The retained gateway exposure is conservative
-order/position exposure, not a reconciled venue position ledger. Those paths
-need provider-backed tests before live authority is considered. Pre-dispatch
-policy rejection does not reserve exposure.
+The gateway itself still stores order exposure, not a venue position ledger.
+The trading coordinator appends canonical fill events after reconciliation and
+keeps paper results in the paper value state. Wallet transactions are not
+reconciled here. Pre-dispatch policy rejection does not reserve exposure.
 
 ## Current execution status
 
-No live prediction venue is currently eligible through the gateway. Kalshi's
-existing adapter has not declared verified live fee/depth/fill economics, and
-Polymarket US has no live order adapter. The default engine also has no
-prediction mission-authority resolver configured. Wallet sends are classified
+The trading coordinator is wired. Its default path records paper fills through
+the same fill accounting and economic-ledger shape as a live fill, without
+calling a venue. Live orders still require the gateway flags, an earned level
+of at least MICRO, `NOEMA_LIVE_REQUIRES_OWNER_REVIEW=0`, and a venue adapter
+that declares verified economics and authoritative reconciliation. Kalshi's
+existing adapter has not declared verified live fee/depth/fill economics, so
+production Kalshi orders remain fail-closed at the gateway. Polymarket US live
+trading is a separate adapter behind the same venue interface. Wallet sends are classified
 as treasury actions and remain blocked unless the separate owner flag and
 existing wallet policy both allow them. This integration used provider-response
 fixtures and sent no live order or chain transaction.

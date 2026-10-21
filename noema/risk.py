@@ -13,7 +13,8 @@ class RiskPolicy:
     min_robust_edge: float = 0.03
     min_liquidity_usd: float = 1_000.0
     max_spread: float = 0.08
-    max_stake_usd: float = 10.0
+    # None removes the fixed dollar cap and sizes only from max_fraction_of_bankroll.
+    max_stake_usd: float | None = 10.0
     max_fraction_of_bankroll: float = 0.005
     max_forecast_width: float = 0.20
     max_market_data_age_seconds: float = 10.0
@@ -68,10 +69,14 @@ class RiskEngine:
         if opportunity.robust_edge < self.policy.min_robust_edge:
             return self._pass(opportunity, "robust edge below threshold")
 
-        stake = min(
-            self.policy.max_stake_usd * risk_multiplier,
-            max(0.0, bankroll_usd * self.policy.max_fraction_of_bankroll * risk_multiplier),
+        fraction_stake = max(
+            0.0,
+            bankroll_usd * self.policy.max_fraction_of_bankroll * risk_multiplier,
         )
+        if self.policy.max_stake_usd is None:
+            stake = fraction_stake
+        else:
+            stake = min(self.policy.max_stake_usd * risk_multiplier, fraction_stake)
         if stake <= 0:
             return self._pass(opportunity, "zero risk budget")
 
@@ -88,22 +93,23 @@ class RiskEngine:
 
     def _valid_policy(self) -> bool:
         p = self.policy
-        values = (
+        values = [
             p.min_robust_edge,
             p.min_liquidity_usd,
             p.max_spread,
-            p.max_stake_usd,
             p.max_fraction_of_bankroll,
             p.max_forecast_width,
             p.max_market_data_age_seconds,
-        )
+        ]
+        if p.max_stake_usd is not None:
+            values.append(p.max_stake_usd)
         if not all(_finite_number(value) for value in values):
             return False
         return (
             0 <= p.min_robust_edge <= 1
             and p.min_liquidity_usd >= 0
             and 0 <= p.max_spread <= 1
-            and p.max_stake_usd >= 0
+            and (p.max_stake_usd is None or p.max_stake_usd >= 0)
             and 0 <= p.max_fraction_of_bankroll <= 1
             and 0 <= p.max_forecast_width <= 1
             and p.max_market_data_age_seconds >= 0
