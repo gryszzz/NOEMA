@@ -112,3 +112,8 @@ footer{text-align:center;padding:32px;font:12px var(--mono);color:var(--mute);bo
 @media (max-width:900px){.hero{grid-template-columns:1fr;min-height:auto}.hero-art{max-width:320px;margin:auto;order:-1}.cards,.guard,.gallery{grid-template-columns:1fr 1fr}.ladder{grid-template-columns:repeat(4,1fr)}.arch{flex-direction:column}.arrow{transform:rotate(90deg)}.economics-grid{grid-template-columns:1fr}.brand span{display:none}}
 @media (max-width:600px){h1 small{letter-spacing:.15em}nav a:not(.cta){display:none}.cards,.guard,.gallery{grid-template-columns:1fr}.gallery .phone{grid-row:auto;max-width:320px;margin:auto}.ladder{grid-template-columns:repeat(2,1fr)}.section{padding:60px 0}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.section:not(.in){transform:none}}
+.metric{margin-top:10px!important;font:12px var(--mono)!important;color:var(--green)!important}
+.card.soon{border-style:dashed}
+.card.soon::before{background:linear-gradient(90deg,var(--amber),transparent)}
+.card em{font:600 10px var(--mono);font-style:normal;color:#000;background:var(--amber);padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle;text-transform:uppercase}
+.card.c7{grid-column:1/-1}

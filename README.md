@@ -103,8 +103,8 @@ The logo source is a single vector file: [`noema/static/brand/tev/tev-logo.svg`]
 | Kalshi | Market + authenticated account observation; live orders only through the fail-closed gateway |
 | Polymarket US | Market observation + gated live adapter (`polymarket_us`, off by default) |
 | Solana memecoins | Trench crawler (GeckoTerminal, DexScreener, pump.fun) feeding **paper-only** desks |
-| EVM (ETH / Base / Polygon) | Wallet balances observed read-only (`evm_watch.py`); no trading in `main` |
-| Kraken / Robinhood | Not integrated |
+| EVM (ETH / Base / Polygon) | Read-only balances (`evm_watch.py`) + KyberSwap signer in a separate process (merged, ships disabled) |
+| Kraken | Not integrated |
 
 ## News / evidence crawler
 
