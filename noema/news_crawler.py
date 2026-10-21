@@ -128,8 +128,8 @@ def parse_feed(source: str, body: bytes) -> list[Article]:
         url = (link.get("href") if link is not None and link.get("href") else
                (link.text if link is not None else "")) or ""
         title = get.get("title")
-        desc = get.get("description") or get.get("summary") or get.get("content")
-        date = get.get("pubDate") or get.get("published") or get.get("updated")
+        desc = next((get[k] for k in ("description", "summary", "content") if k in get), None)
+        date = next((get[k] for k in ("pubDate", "published", "updated", "date") if k in get), None)
         url = url.strip()
         if not url.startswith("https://") and not url.startswith("http://"):
             continue
@@ -372,8 +372,14 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
     now = datetime.now(UTC)
     to_store: list[Article] = []
     for a in articles:
-        if not a.headline or conn.execute("SELECT 1 FROM news_evidence WHERE url=?", (a.url,)).fetchone():
+        if not a.headline:
             continue
+        prev = conn.execute("SELECT snippet FROM news_evidence WHERE url=?", (a.url,)).fetchone()
+        if prev and (prev[0] or not a.snippet):
+            continue  # dedupe; only re-process rows stored before snippets were parsed
+        if prev:
+            conn.execute("DELETE FROM news_market_links WHERE evidence_id=?", (a.evidence_id,))
+            conn.execute("DELETE FROM news_evidence WHERE url=?", (a.url,))
         a.matches = index.match(f"{a.headline} {a.snippet}")
         conn.execute("INSERT OR IGNORE INTO news_evidence VALUES (?,?,?,?,?,?,?,?)",
                      (a.evidence_id, a.source, a.url, a.headline, a.snippet,

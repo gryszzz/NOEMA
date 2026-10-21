@@ -44,7 +44,9 @@ def test_sanitize_strips_markup_and_injection():
 def test_parse_rss_atom_and_reject_dtd():
     arts = nc.parse_feed("X", RSS)
     assert arts[0].headline.startswith("Bush family") and "send funds" not in arts[0].snippet
-    assert nc.parse_feed("Y", ATOM)[0].url == "https://example.com/fed"
+    assert arts[0].snippet.startswith("Texas race") and arts[0].published_at.day == 21
+    atom = nc.parse_feed("Y", ATOM)[0]
+    assert atom.url == "https://example.com/fed" and atom.snippet == "FOMC" and atom.published_at.hour == 10
     assert nc.parse_feed("Z", b'<!DOCTYPE x [<!ENTITY a "b">]><rss/>') == []
 
 
