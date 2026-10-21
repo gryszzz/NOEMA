@@ -21,7 +21,7 @@ from .solana_research import (
     SolanaRpcResearchClient,
     XChatterSource,
 )
-from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore
+from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore, desk_overview
 from .trench_judgement import judge_candidates
 from .trench_risk import DeskEntryPolicy, evaluate_desk_entry
 
@@ -114,6 +114,7 @@ async def run_desk_cycle(
     # Cheap pre-filter without holder data, then spend RPC calls only on survivors.
     pre: list[tuple[PoolCandidate, float | None]] = []
     rejections: dict[str, int] = {}
+    feed: dict[str, dict[str, Any]] = {}
     for pool in pools:
         age = (now - pool.pool_created_at).total_seconds() if pool.pool_created_at else None
         ok, reasons, _ = evaluate_desk_entry(
@@ -125,6 +126,16 @@ async def run_desk_cycle(
             pre.append((pool, age))
         for reason in reasons:
             rejections[reason] = rejections.get(reason, 0) + 1
+        feed[pool.mint] = {
+            "mint": pool.mint, "symbol": pool.symbol, "source": pool.source,
+            "liquidity_usd": round(pool.liquidity_usd, 2), "price_usd": pool.price_usd,
+            "pool_age_hours": round(age / 3600, 2) if age is not None else None,
+            "price_change_m5": pool.price_change_m5,
+            "pool_address": pool.pool_address,
+            "fdv_usd": pool.fdv_usd, "volume_h1_usd": pool.volume_h1_usd, "trades_h1": pool.trades_h1,
+            "stage": "filters" if ok else "rejected",
+            "reason": "; ".join(reasons) or ("passed filters; queued for holder check" if ok else None),
+        }
     pre.sort(key=lambda item: item[0].liquidity_usd, reverse=True)
 
     passed: list[dict[str, Any]] = []
@@ -150,6 +161,10 @@ async def run_desk_cycle(
         )
         for reason in reasons:
             rejections[reason] = rejections.get(reason, 0) + 1
+        if pool.mint in feed:
+            feed[pool.mint].update(
+                stage="holders" if ok else "rejected", reason="; ".join(reasons) or None,
+                top10_holder_fraction=metrics.get("top10_holder_fraction"))
         if ok:
             context = await chatter.chatter(pool.symbol, pool.mint) if chatter else None
             passed.append({
@@ -163,6 +178,19 @@ async def run_desk_cycle(
                 "spike_acceleration": metrics["spike_acceleration"],
                 "chatter_status": (context or {}).get("status", "disabled"),
             })
+    # Real candles for a few filter-passing pools so the room's crawler can flip through charts.
+    ohlcv_budget = int(os.getenv("NOEMA_TRENCH_OHLCV_PER_CYCLE", "6"))
+    if hasattr(gecko, "pool_ohlcv"):
+        for pool, _age in pre[:ohlcv_budget]:
+            if not pool.pool_address:
+                continue
+            try:
+                candles = await gecko.pool_ohlcv(pool.pool_address)
+            except ProviderFailure as exc:
+                summary["provider_failures"].append(f"ohlcv:{exc}")
+                continue
+            if candles and pool.mint in feed:
+                feed[pool.mint]["candles"] = candles
     summary["prefilter_passed"] = len(pre)
     summary["holder_checked"] = min(len(pre), config.holder_enrichment_limit)
     summary["entry_passed"] = len(passed)
@@ -171,13 +199,35 @@ async def run_desk_cycle(
     top = sorted(passed, key=lambda c: c["liquidity_usd"], reverse=True)[: config.judge_top_n]
     judgements, judge_status = await judge_candidates(db_path, top)
     summary["judgement"] = judge_status
-    picks = [j for j in judgements if j.trade]
+    judged_picks = [j for j in judgements if j.trade]
+    picks, chief_log = chief_gate(judged_picks)
+    summary["chief"] = {"approved": [c["symbol"] for c in chief_log if c["approved"]],
+                        "vetoed": [c["symbol"] for c in chief_log if not c["approved"]],
+                        "min_probability": CHIEF_MIN_PROBABILITY, "min_confidence": CHIEF_MIN_CONFIDENCE}
+    summary["social"] = {"status": "unavailable",
+                         "detail": "recycled-X-account check not wired (X search needs login); research only"}
+    for j in judgements:
+        if j.mint in feed:
+            feed[j.mint].update(stage="desk" if j.trade else "rejected",
+                                probability=round(j.probability, 4), judge=j.source,
+                                reason=None if j.trade else f"{j.source} pass p={j.probability:.2f}")
+    for c in chief_log:
+        if c["mint"] in feed:
+            feed[c["mint"]].update(chief="approve" if c["approved"] else "veto", chief_reason=c["reason"],
+                                   confidence=c["confidence"])
+            if not c["approved"]:
+                feed[c["mint"]]["stage"] = "chief_veto"
+    summary["feed"] = sorted(feed.values(), key=lambda r: (
+        ["desk", "chief_veto", "holders", "filters", "rejected"].index(r["stage"]), -r["liquidity_usd"]))[:60]
     by_mint = {c["mint"]: c for c in passed}
 
     store = TrenchDeskStore(db_path)
     try:
         store.ensure_desks(config.desk_count, paper_capital(db_path, config))
         engine = PaperDeskEngine(store, costs=CostModel.from_env())
+        names = {m: f.get("symbol") for m, f in feed.items()}
+        for c in chief_log:
+            store.event(None, "chief_decision", **{**c, "symbol": names.get(c["mint"])})
         held = {p["mint"] for p in store.open_positions()}
         wanted = list(held | {j.mint for j in picks})
         marks: dict[str, Mark] = {}
@@ -216,5 +266,47 @@ async def run_desk_cycle(
         engine.commit()
     finally:
         store.close()
+    _record_equity_snapshot(db_path)
+    summary.pop("feed", None)
     summary.update(entries=entries, fired=fired, marks=len(marks))
     return summary
+
+
+CHIEF_MIN_PROBABILITY = float(os.getenv("NOEMA_CHIEF_MIN_PROBABILITY", "0.60"))
+CHIEF_MIN_CONFIDENCE = float(os.getenv("NOEMA_CHIEF_MIN_CONFIDENCE", "0.55"))
+
+
+def chief_gate(picks: list[Any]) -> tuple[list[Any], list[dict[str, Any]]]:
+    """CHIEF seat: approve a judged pick only if p >= min and confidence >= min."""
+    approved, log = [], []
+    for j in picks:
+        conf = getattr(j, "confidence", None)
+        if j.probability < CHIEF_MIN_PROBABILITY:
+            ok, why = False, f"p={j.probability:.2f} < {CHIEF_MIN_PROBABILITY:.2f}"
+        elif conf is None:
+            ok, why = False, "no confidence signal"
+        elif conf < CHIEF_MIN_CONFIDENCE:
+            ok, why = False, f"confidence={conf:.2f} < {CHIEF_MIN_CONFIDENCE:.2f}"
+        else:
+            ok, why = True, f"p={j.probability:.2f} conf={conf:.2f}"
+        log.append({"mint": j.mint, "symbol": None, "approved": ok, "reason": why,
+                    "probability": j.probability, "confidence": conf})
+        if ok:
+            approved.append(j)
+    return approved, log
+
+
+def _record_equity_snapshot(db_path: str) -> None:
+    """Persist aggregate paper equity so the trading room can chart P&L over time."""
+    overview = desk_overview(db_path)
+    desks = overview["desks"]
+    store = TrenchDeskStore(db_path)
+    try:
+        store.event(None, "equity_snapshot",
+                    equity_usd=round(sum(d["equity_usd"] for d in desks), 2),
+                    starting_usd=round(sum(d["starting_bankroll_usd"] for d in desks), 2),
+                    pnl_after_costs_usd=overview.get("total_pnl_after_costs_usd", 0.0),
+                    active=sum(1 for d in desks if d["status"] == "active"))
+        store.conn.commit()
+    finally:
+        store.close()

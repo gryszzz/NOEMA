@@ -797,6 +797,31 @@ class GeckoTerminalPoolClient:
             return None
         return top10 / 100.0
 
+    async def pool_ohlcv(self, pool_address: str, *, aggregate: int = 5,
+                         limit: int = 36) -> list[list[float]]:
+        """Real 5m OHLCV candles [t, o, h, l, c, v] for one pool (shares the 10/min limiter)."""
+
+        await self.limiter.acquire()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
+                response = await client.get(
+                    f"{self.base_url}/networks/{self.network}/pools/{pool_address}/ohlcv/minute",
+                    params={"aggregate": aggregate, "limit": limit},
+                    headers={"accept": "application/json"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            error_class, _ = _http_error_class(exc.response.status_code)
+            raise ProviderFailure("geckoterminal", "ohlcv", error_class,
+                                  http_status=exc.response.status_code) from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderFailure("geckoterminal", "ohlcv", "transport_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise ProviderFailure("geckoterminal", "ohlcv", "malformed_json") from exc
+        rows = (((payload or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+        return sorted([[float(x) for x in r[:6]] for r in rows if isinstance(r, list) and len(r) >= 6])
+
     async def new_pools(self) -> list[PoolCandidate]:
         return await self._pools("new_pools?page=1")
 
