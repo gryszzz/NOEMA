@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>NOEMA · Trench paper desks</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font:14px/1.4 system-ui,sans-serif;background:#0f1117;color:#e6e6e6;margin:0;padding:20px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:24px 0 8px;color:#9fb3ff}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;background:#2b3a1f;color:#9be37a;font-weight:600}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:5px 8px;border-bottom:1px solid #252a36;text-align:left;white-space:nowrap}
+th{color:#8a93a6;font-weight:500}.pos{color:#6fdc8c}.neg{color:#ff7a7a}.muted{color:#8a93a6}
+</style></head><body>
+<h1>Trench paper desks <span class="badge">PAPER ONLY · LIVE OFF</span></h1>
+<div class="muted" id="summary">loading…</div>
+<h2>Desks</h2><table id="desks"></table>
+<h2>Open paper positions</h2><table id="positions"></table>
+<h2>Recent paper trades</h2><table id="trades"></table>
+<h2>Fired desks</h2><table id="fired"></table>
+<script type="module">
+const $=id=>document.getElementById(id);
+const money=v=>v==null?'–':`<span class="${v>=0?'pos':'neg'}">$${Number(v).toFixed(2)}</span>`;
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function table(el,cols,rows){el.innerHTML='<tr>'+cols.map(c=>`<th>${c[0]}</th>`).join('')+'</tr>'+
+ (rows.length?rows.map(r=>'<tr>'+cols.map(c=>`<td>${c[1](r)}</td>`).join('')+'</tr>').join(''):`<tr><td class="muted" colspan="${cols.length}">none</td></tr>`);}
+async function load(){
+ const d=await (await fetch('/api/trench-desks')).json();
+ $('summary').innerHTML=`Total P&L after costs: ${money(d.total_pnl_after_costs_usd)} · ${d.desks.filter(x=>x.status==='active').length} active desks · updated ${new Date().toLocaleTimeString()}`;
+ table($('desks'),[['Desk',r=>esc(r.name)],['Status',r=>r.status],['Bankroll',r=>money(r.starting_bankroll_usd)],['Equity',r=>money(r.equity_usd)],['P&L after costs',r=>money(r.pnl_after_costs_usd)],['Fees+slip',r=>'$'+(r.fees_usd+r.slippage_usd).toFixed(2)],['W/L',r=>`${r.wins}/${r.losses}`],['Loss streak',r=>r.consecutive_losses],['Open',r=>r.open_positions],['TP/SL',r=>`${(r.params.take_profit_pct*100).toFixed(0)}% / ${(r.params.stop_loss_pct*100).toFixed(1)}%`]],d.desks.filter(x=>x.status==='active'));
+ table($('positions'),[['Desk',r=>esc(r.desk_id)],['Token',r=>esc(r.symbol)],['Opened',r=>esc(r.opened_at).slice(0,19)],['Core $',r=>'$'+r.core_cost_usd.toFixed(2)],['Bounce $',r=>'$'+r.bounce_cost_usd.toFixed(2)],['Last mark',r=>r.last_mark_price?.toPrecision(4)??'–']],d.positions);
+ table($('trades'),[['Time',r=>esc(r.ts).slice(11,19)],['Desk',r=>esc(r.desk_id)],['Token',r=>esc(r.symbol)],['Leg',r=>r.leg],['Side',r=>r.side],['Notional',r=>'$'+r.notional_usd.toFixed(2)],['P&L',r=>money(r.realized_pnl_usd)],['Reason',r=>esc(r.reason)]],d.recent_trades);
+ table($('fired'),[['Desk',r=>esc(r.name)],['Reason',r=>esc(r.fired_reason)],['P&L after costs',r=>money(r.pnl_after_costs_usd)]],d.fired);
+}
+load();setInterval(load,15000);
+</script></body></html>
