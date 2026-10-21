@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .accuracy_api import build_accuracy_report
+
 LADDER = (  # mirrors noema/autonomy.py earned_autonomy thresholds
     {"level": "SHADOW", "resolved": 0, "days": 0},
     {"level": "PAPER", "resolved": 30, "days": 0},
@@ -260,4 +262,5 @@ def build_command_center(db_path: str, *, desks_pnl: float | None = None,
         data["missing_db"] = True
     addr = os.getenv("NOEMA_SOLANA_WALLET_ADDRESS")
     data["wallet"] = wallet_tokens(addr) if fetch_tokens else {"status": "skipped", "tokens": []}
+    data["accuracy"] = build_accuracy_report(db_path)
     return data

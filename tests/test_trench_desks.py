@@ -148,6 +148,9 @@ def test_full_cycle_records_paper_entries(tmp_path, monkeypatch):
                  "NOEMA_TREASURY_ACTIONS_ENABLED", "NOEMA_SOLANA_SIGNER_ENABLED",
                  "NOEMA_DESK_JUDGEMENT_ENABLED"):
         monkeypatch.delenv(flag, raising=False)
+    # This test exercises paper entries. Influence is covered separately and
+    # would shadow every unproven agent.
+    monkeypatch.setenv("NOEMA_ACCURACY_INFLUENCE_ENABLED", "0")
     db = str(tmp_path / "c.db")
     summary = asyncio.run(run_desk_cycle(
         db, config=DeskRuntimeConfig(enabled=True, paper_capital_usd=500.0),

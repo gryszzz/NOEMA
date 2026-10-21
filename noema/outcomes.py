@@ -172,6 +172,16 @@ class OutcomeStore:
             (digest, venue, market_id, canonical_proposition_id, outcome_yes,
              observed_at, resolved_at, source or "unspecified", source_url, raw_json),
         )
+        try:
+            from .accuracy_ledger import resolve_open_forecasts
+
+            db_file = self.conn.execute("PRAGMA database_list").fetchone()[2] or None
+            resolve_open_forecasts(
+                self.conn, venue=venue, market_id=market_id, outcome_yes=outcome_yes,
+                resolved_at=resolved_at, source=source or "outcome_store", db_path=db_file,
+            )
+        except (sqlite3.Error, ValueError, TypeError, AttributeError):
+            pass
         self.conn.commit()
 
     def evaluate_ledger(self) -> EvaluationSummary:

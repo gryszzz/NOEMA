@@ -143,6 +143,13 @@ class ForecastLedger:
                 encode(action),
             ),
         )
+        try:
+            from .accuracy_ledger import mirror_forecast
+
+            mirror_forecast(self.conn, snapshot, forecast, opportunity, action)
+        except (sqlite3.Error, ValueError, TypeError, AttributeError):
+            # The immutable forecast row still commits. Scoring is not an order path.
+            pass
         self.conn.commit()
 
     def append_canonical_pair_observation(self, observation: dict[str, Any]) -> bool:

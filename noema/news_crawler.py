@@ -56,7 +56,7 @@ FEEDS: tuple[tuple[str, str, str], ...] = (
 # AP/Reuters have no free public RSS, so their stories only arrive via GDELT).
 BASE_QUERIES = ("federal reserve interest rates", "inflation CPI", "supreme court ruling",
                 "election polls senate", "hurricane forecast", "tariffs trade")
-HOST_SPACING = {"api.gdeltproject.org": 10.0}
+HOST_SPACING = {"api.gdeltproject.org": 30.0}
 
 STOP = frozenset(["the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "at", "by", "with", "from", "is", "are", "be", "will", "was", "were", "this", "that", "yes", "no", "than", "over", "under", "more", "less", "above", "below", "before", "after", "win", "wins", "winner", "who", "what", "which", "when", "market", "price", "2025", "2026", "2027", "total", "points", "game", "match", "vs", "between"])
 
@@ -249,6 +249,10 @@ CREATE INDEX IF NOT EXISTS news_links_market ON news_market_links(venue, market_
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(news_market_links)")}
+    if "category" not in cols:
+        conn.execute("ALTER TABLE news_market_links ADD COLUMN category TEXT")
+        conn.commit()
 
 
 ENTITY_STOP = frozenset(["Will", "What", "When", "Who", "Which", "How", "Yes", "No", "The", "This", "That", "Over", "Under", "Above", "Below", "Total", "Points", "Game", "Match", "Wins", "Win", "Winner", "Before", "After", "Between", "Market", "Champion", "Championship", "Season", "Round", "Quarter", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Protected", "Million", "Billion", "Team", "City", "United"])
@@ -259,11 +263,94 @@ def entities(text: str) -> set[str]:
     return {w for w in re.findall(r"\b[A-Z][a-zA-Z'&.-]{2,}\b", text) if w not in ENTITY_STOP}
 
 
+CATEGORY_PATTERNS: dict[str, re.Pattern[str]] = {
+    "sports": re.compile(
+        r"\b(nfl|nba|mlb|nhl|mls|ncaa|wnba|ufc|atp|wta|pga|fifa|uefa|liga|premier league|serie a|"
+        r"bundesliga|super bowl|playoffs?|\d(st|nd|rd|th) quarter|halftime|touchdowns?|passing yards|"
+        r"rushing|receiving|rebounds|assists|points scored|goals scored|innings?|strikeouts?|"
+        r"home runs?|wins? by over|vs\.?|game|tournament|grand slam|esports?|basketball|"
+        r"football|soccer|baseball|hockey|tennis|golf|boxing|nascar|formula 1)\b", re.IGNORECASE),
+    "politics": re.compile(
+        r"\b(election|elected|nominee|primary|senate|senator|house of representatives|congress|"
+        r"governor|mayor|president(ial)?|white house|democrat(ic)?|republican|gop|campaign|poll(s|ing)?|"
+        r"cabinet|impeach\w*|vote[sd]?|ballot|midterm|parliament|prime minister|envoy|administration)\b",
+        re.IGNORECASE),
+    "economics": re.compile(
+        r"\b(federal reserve|fed|fomc|interest rates?|rate (cut|hike)|inflation|cpi|pce|gdp|jobs report|"
+        r"payrolls?|unemployment|recession|tariffs?|treasury|yields?|bonds?|stocks?|s&p|nasdaq|dow|"
+        r"earnings|ipo|bitcoin|crypto|oil prices?|economy|economic|bank(s|ing)?|sec\b|stablecoin)\b", re.IGNORECASE),
+    "legal": re.compile(
+        r"\b(supreme court|scotus|court|judge|justices?|ruling|ruled|lawsuit|sued|trial|verdict|"
+        r"indict\w*|convict\w*|sentenc\w*|appeal|v\.|attorney general|doj|charges?|charged)\b", re.IGNORECASE),
+    "weather": re.compile(
+        r"\b(hurricane|tropical storm|tornado|blizzard|snow(fall)?|rain(fall)?|temperature|heat wave|"
+        r"flood(ing)?|wildfire|drought|weather|nws|noaa|forecast high|degrees)\b", re.IGNORECASE),
+    "geopolitics": re.compile(
+        r"\b(war|ceasefire|invasion|military|troops|missile|nato|sanctions?|treaty|summit|talks|"
+        r"diplomat\w*|ukraine|russia|china|taiwan|israel|gaza|iran|north korea|putin|xi jinping|"
+        r"kim jong un|un security council)\b", re.IGNORECASE),
+}
+NEWS_CATEGORIES = frozenset({"politics", "economics", "legal", "weather", "geopolitics"})
+SOURCE_CATEGORIES = {
+    "Federal Reserve": {"economics"}, "BEA": {"economics"}, "SEC press": {"economics", "legal"},
+    "CourtListener SCOTUS": {"legal"}, "NPR Politics": {"politics"}, "NWS alerts": {"weather"},
+    "BBC Business": {"economics"},
+}
+# Place names: a shared place alone (e.g. "West Virginia" in a court caption vs a football
+# market) is never enough to link an article to a market.
+PLACES = frozenset(["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "Hampshire", "Jersey", "Mexico", "York", "Carolina", "Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode", "Island", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "West", "Washington", "Wisconsin", "Wyoming", "North", "South", "East", "New", "America", "American", "United", "States", "Kingdom", "Britain", "England", "London", "Paris", "Chicago", "Boston", "Dallas", "Houston", "Miami", "Atlanta", "Denver", "Seattle", "Phoenix", "Detroit", "Philadelphia", "Vegas", "Las", "Angeles", "Los", "San", "Francisco", "Diego", "Orlando", "Tampa", "Columbus", "Canada", "Europe", "Asia", "Africa", "City", "County"])
+
+
+def categorize(text: str, source: str | None = None) -> set[str]:
+    cats = {c for c, pat in CATEGORY_PATTERNS.items() if pat.search(text)}
+    cats |= SOURCE_CATEGORIES.get(source or "", set())
+    return cats or {"other"}
+
+
+def market_category(ctx: str) -> str:
+    """Single primary category for a watched market (sports wins: props are the noisy case)."""
+    cats = categorize(ctx)
+    if "sports" in cats:
+        return "sports"
+    for c in ("legal", "economics", "weather", "geopolitics", "politics"):
+        if c in cats:
+            return c
+    return "other"
+
+
 def _market_label(title: str, ctx: str) -> str:
     rules = ctx.split(". ", 1)[1] if ". " in ctx else ""
     if len(title.split()) >= 5 or not rules:
         return title[:200]
     return f"{title} — {rules.split('. ')[0][:150]}"
+
+
+GDELT_BASE_COOLDOWN = 1800.0
+GDELT_MAX_COOLDOWN = 6 * 3600.0
+
+
+def gdelt_state(conn: sqlite3.Connection) -> dict[str, Any]:
+    row = conn.execute("SELECT status, etag, last_modified FROM news_fetch_state WHERE url='gdelt:state'"
+                       ).fetchone()
+    if not row:
+        return {"failures": 0, "cooldown_until": None, "cursor": 0}
+    try:
+        failures, cursor = (int(x) for x in str(row[0]).split(":"))
+    except ValueError:
+        failures, cursor = 0, 0
+    return {"failures": failures, "cooldown_until": row[2], "cursor": cursor}
+
+
+def set_gdelt_state(conn: sqlite3.Connection, *, ok: bool, advance: int = 0) -> None:
+    st = gdelt_state(conn)
+    failures = 0 if ok else st["failures"] + 1
+    until = None if ok else (datetime.now(UTC) + timedelta(
+        seconds=min(GDELT_MAX_COOLDOWN, GDELT_BASE_COOLDOWN * 2 ** (failures - 1)))).isoformat()
+    conn.execute("INSERT INTO news_fetch_state (url, status, etag, last_modified, fetched_at) "
+                 "VALUES ('gdelt:state', ?, NULL, ?, ?) ON CONFLICT(url) DO UPDATE SET "
+                 "status=excluded.status, last_modified=excluded.last_modified, fetched_at=excluded.fetched_at",
+                 (f"{failures}:{st['cursor'] + advance}", until, datetime.now(UTC).isoformat()))
+    conn.commit()
 
 
 class MarketIndex:
@@ -278,6 +365,7 @@ class MarketIndex:
         self.ents = [entities(t) for t in self.titles]
         self.rule_ents = [entities(ctx) - es for (_, _, ctx, _), es in zip(markets, self.ents, strict=True)]
         self.docs = [set(tokens(ctx)) for _, _, ctx, _ in markets]
+        self.cats = [market_category(ctx) for _, _, ctx, _ in markets]
         df = Counter(e for es in self.ents for e in es)
         self.edf = df
         self.inv: dict[str, list[int]] = {}
@@ -285,8 +373,10 @@ class MarketIndex:
             for e in es:
                 self.inv.setdefault(e, []).append(i)
 
-    def match(self, text: str, top: int = 5) -> list[dict[str, Any]]:
+    def match(self, text: str, top: int = 5, source: str | None = None,
+              include_sports: bool = False) -> list[dict[str, Any]]:
         art_ents = entities(text)
+        art_cats = categorize(text, source)
         words = set(tokens(text))
         cand = Counter()
         for e in art_ents:
@@ -294,6 +384,11 @@ class MarketIndex:
                 cand[i] += 1
         out = []
         for i, _ in cand.most_common(400):
+            cat = self.cats[i]
+            if cat == "sports" and not include_sports:
+                continue  # sports props are deprioritised: no free sports feeds to ground them
+            if cat != "other" and cat not in art_cats:
+                continue  # category compatibility (court caption != football market)
             es = self.ents[i]
             hit = es & art_ents
             kw = (self.docs[i] & words) - {h.lower() for h in hit}
@@ -303,12 +398,16 @@ class MarketIndex:
             if not ctx_hit and len(kw) < 2:  # name alone is not evidence about *this* market
                 continue
             hit = hit | ctx_hit
+            if not (hit - PLACES):
+                continue  # a lone place-name overlap is not evidence
             score = 0.5 * len(hit & es) / len(es) + 0.25 * min(1.0, len(ctx_hit) / 2) \
                 + 0.25 * min(1.0, len(kw) / 4)
+            if cat == "other":
+                score *= 0.8
             if score >= MIN_RELEVANCE:
                 venue, mid, _, fid = self.markets[i]
                 out.append({"venue": venue, "market_id": mid, "title": _market_label(self.titles[i], self.markets[i][2]),
-                            "forecast_id": fid, "relevance": round(min(1.0, score), 3),
+                            "forecast_id": fid, "relevance": round(min(1.0, score), 3), "category": cat,
                             "terms": sorted(hit) + sorted(kw)[:6]})
         out.sort(key=lambda m: -m["relevance"])
         seen, uniq = set(), []
@@ -345,8 +444,10 @@ def topic_queries(index: MarketIndex | None = None) -> list[str]:
     return list(BASE_QUERIES)
 
 
-def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries: int = 6,
-               gdelt: bool = True) -> dict[str, Any]:
+def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries: int = 2,
+               gdelt: bool = True, include_sports: bool | None = None) -> dict[str, Any]:
+    if include_sports is None:
+        include_sports = os.getenv("NOEMA_NEWS_INCLUDE_SPORTS", "0") == "1"
     conn = sqlite3.connect(db_path, timeout=30)
     ensure_schema(conn)
     pc = client or PoliteClient(conn)
@@ -359,16 +460,25 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
         stats["fetched"][name] = status
         if body:
             articles += parse_nws(body) if kind == "nws" else parse_feed(name, body)
-    if gdelt:
-        for q in topic_queries(index)[:max_queries]:
+    gd = gdelt_state(conn)
+    if gdelt and gd["cooldown_until"] and gd["cooldown_until"] > datetime.now(UTC).isoformat():
+        stats["fetched"]["GDELT"] = f"cooldown until {gd['cooldown_until']}"
+    elif gdelt:
+        qs = topic_queries(index)
+        start = gd["cursor"] % len(qs)
+        rotated = (qs[start:] + qs[:start])[:max_queries]  # rotate so every query gets a turn
+        ok = True
+        for q in rotated:
             url = ("https://api.gdeltproject.org/api/v2/doc/doc?query=" + quote_plus(q) +
                    "%20sourcelang:english&mode=artlist&format=json&maxrecords=25&timespan=1d")
             status, body = pc.get(url)
             stats["fetched"][f"GDELT: {q}"] = status
             if body:
                 articles += parse_gdelt(body)
-            if status in (0, 429):  # rate limited or timing out: back off until next cycle
+            if status in (0, 429):  # rate limited or timing out: exponential host cooldown
+                ok = False
                 break
+        set_gdelt_state(conn, ok=ok, advance=len(rotated) if ok else 0)
     now = datetime.now(UTC)
     to_store: list[Article] = []
     for a in articles:
@@ -380,19 +490,22 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
         if prev:
             conn.execute("DELETE FROM news_market_links WHERE evidence_id=?", (a.evidence_id,))
             conn.execute("DELETE FROM news_evidence WHERE url=?", (a.url,))
-        a.matches = index.match(f"{a.headline} {a.snippet}")
+        a.matches = index.match(f"{a.headline} {a.snippet}", source=a.source,
+                                include_sports=include_sports)
         conn.execute("INSERT OR IGNORE INTO news_evidence VALUES (?,?,?,?,?,?,?,?)",
                      (a.evidence_id, a.source, a.url, a.headline, a.snippet,
                       a.published_at.isoformat(), now.isoformat(),
                       a.matches[0]["relevance"] if a.matches else 0.0))
         stats["new_articles"] += 1
         for m in a.matches:
-            conn.execute("INSERT OR IGNORE INTO news_market_links VALUES (?,?,?,?,?,?,?,?)",
+            conn.execute("INSERT OR IGNORE INTO news_market_links (evidence_id, venue, market_id, title, "
+                         "relevance, matched_terms, forecast_id, linked_at, category) VALUES (?,?,?,?,?,?,?,?,?)",
                          (a.evidence_id, m["venue"], m["market_id"], m["title"], m["relevance"],
-                          ",".join(m["terms"]), m["forecast_id"], now.isoformat()))
+                          ",".join(m["terms"]), m["forecast_id"], now.isoformat(), m["category"]))
             stats["links"] += 1
         if a.matches:
             to_store.append(a)
+    stats["rematched"] = rematch_recent(conn, index, include_sports=include_sports)
     conn.commit()
     conn.close()
     store = EvidenceStore(db_path)
@@ -409,6 +522,28 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
                 pass
     store.conn.close()
     return stats
+
+
+def rematch_recent(conn: sqlite3.Connection, index: MarketIndex, *, include_sports: bool = False,
+                   hours: int = 72) -> int:
+    """Re-score recent stored articles so matcher upgrades (and newly watched markets) apply."""
+    since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    rows = conn.execute("SELECT evidence_id, source, headline, snippet FROM news_evidence "
+                        "WHERE retrieved_at>=?", (since,)).fetchall()
+    now = datetime.now(UTC).isoformat()
+    linked = 0
+    for eid, source, headline, snippet in rows:
+        matches = index.match(f"{headline} {snippet}", source=source, include_sports=include_sports)
+        conn.execute("DELETE FROM news_market_links WHERE evidence_id=?", (eid,))
+        for m in matches:
+            conn.execute("INSERT OR IGNORE INTO news_market_links (evidence_id, venue, market_id, title, "
+                         "relevance, matched_terms, forecast_id, linked_at, category) VALUES (?,?,?,?,?,?,?,?,?)",
+                         (eid, m["venue"], m["market_id"], m["title"], m["relevance"],
+                          ",".join(m["terms"]), m["forecast_id"], now, m["category"]))
+        conn.execute("UPDATE news_evidence SET best_relevance=? WHERE evidence_id=?",
+                     (matches[0]["relevance"] if matches else 0.0, eid))
+        linked += bool(matches)
+    return linked
 
 
 def news_context_for_market(db_path: str, venue: str | None, market_id: str,
@@ -459,7 +594,8 @@ def recent_hits(db_path: str, limit: int = 30) -> dict[str, Any]:
         return {"status": "no data", "hits": [], "by_source": {}}
     try:
         rows = conn.execute(
-            "SELECT e.source, e.url, e.headline, e.published_at, e.retrieved_at, l.title, l.venue, l.relevance "
+            "SELECT e.source, e.url, e.headline, e.published_at, e.retrieved_at, l.title, l.venue, l.relevance, "
+            "l.category "
             "FROM news_evidence e LEFT JOIN news_market_links l ON l.evidence_id=e.evidence_id "
             "AND l.relevance=e.best_relevance GROUP BY e.evidence_id "
             "ORDER BY (e.best_relevance>0) DESC, e.published_at DESC LIMIT ?", (limit,)).fetchall()
@@ -477,7 +613,8 @@ def recent_hits(db_path: str, limit: int = 30) -> dict[str, Any]:
             "links": links[0], "markets_linked": links[1], "last_fetch_at": last[0], "endpoints": last[1],
             "by_source": by_source,
             "hits": [{"source": r[0], "url": r[1], "headline": r[2], "published_at": r[3],
-                      "retrieved_at": r[4], "market": r[5], "venue": r[6], "relevance": r[7]} for r in rows]}
+                      "retrieved_at": r[4], "market": r[5], "venue": r[6], "relevance": r[7],
+                      "category": r[8]} for r in rows]}
 
 
 def main() -> None:

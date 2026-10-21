@@ -9,6 +9,8 @@ from decimal import Decimal
 import httpx
 
 from .account import KalshiAccount
+from .accuracy_api import build_accuracy_report
+from .accuracy_backtest import run_accuracy_backtest
 from .agent_config import AgentConfig
 from .agent_runtime import run_cycle
 from .bill_tracker import BillTracker
@@ -366,6 +368,12 @@ def main() -> None:
     knowledge_show = sub.add_parser("knowledge-show")
     knowledge_show.add_argument("--db", default="data/noema.db")
 
+    accuracy_show = sub.add_parser("accuracy-show")
+    accuracy_show.add_argument("--db", default="data/noema.db")
+    accuracy_backtest = sub.add_parser("accuracy-backtest")
+    accuracy_backtest.add_argument("--db", default="data/accuracy-backtest.db")
+    accuracy_backtest.add_argument("--cache", default="data/accuracy-cache")
+
     knowledge_refresh = sub.add_parser("knowledge-refresh")
     knowledge_refresh.add_argument("--db", default="data/noema.db")
     knowledge_refresh.add_argument("--source", default=None)
@@ -494,6 +502,10 @@ def main() -> None:
         _knowledge_init(args.db)
     elif args.command == "knowledge-show":
         _knowledge_show(args.db)
+    elif args.command == "accuracy-show":
+        print(json.dumps(build_accuracy_report(args.db), sort_keys=True))
+    elif args.command == "accuracy-backtest":
+        print(json.dumps(asyncio.run(run_accuracy_backtest(args.db, args.cache)), sort_keys=True))
     elif args.command == "knowledge-refresh":
         _knowledge_refresh(args.db, args.source, args.limit)
     elif args.command == "bill-config":

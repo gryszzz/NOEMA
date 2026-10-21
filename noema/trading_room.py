@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from .accuracy_api import build_accuracy_report
 from .autonomy import earned_autonomy
 from .economic_models import AutonomyEvidence
 from .trench_desks import desk_overview
@@ -204,4 +205,5 @@ def build_trading_room(db_path: str, *, venues: dict[str, Any] | None = None,
                                           "entry_passed", "entries", "fired")} for c in cycles[:10]],
         "events": [e for e in desks.get("recent_events", []) if e.get("event") not in ("desk_cycle", "equity_snapshot")][:15],
         "venues": _venue_summary(venues, wallets),
+        "accuracy": build_accuracy_report(db_path),
     }

@@ -135,7 +135,8 @@ def news_lane(db_path: str) -> dict[str, Any]:
             "markets_linked": hits.get("markets_linked", 0), "by_source": hits.get("by_source", {}),
             "recent": [{"ts": h["published_at"], "title": h["headline"], "market_id": h["market"],
                         "url": h["url"], "source": h["source"], "venue": h["venue"],
-                        "relevance": h["relevance"]} for h in hits.get("hits", [])],
+                        "relevance": h["relevance"], "category": h.get("category")}
+                       for h in hits.get("hits", [])],
             "note": None if hits.get("articles") else "news crawler has not stored any articles yet"}
 
 
@@ -144,6 +145,18 @@ def provider_health(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "next_retry_at", "last_error_class")
     return [dict(zip(cols, r)) for r in _q(conn, f"SELECT {', '.join(cols)} FROM trench_provider_health "
                                                  "ORDER BY provider")]
+
+
+def _accuracy_rows(command_center: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Prefer an explicit list, then the accuracy-engine report's agents."""
+    explicit = command_center.get("accuracy_leaderboard")
+    if isinstance(explicit, list):
+        return explicit
+    report = command_center.get("accuracy")
+    if isinstance(report, dict) and isinstance(report.get("agents"), list):
+        return report["agents"]
+    ledger_board = (command_center.get("ledger") or {}).get("leaderboard")
+    return ledger_board if isinstance(ledger_board, list) else None
 
 
 def build_room_v6(db_path: str, *, fetch: bool = True,
@@ -159,8 +172,7 @@ def build_room_v6(db_path: str, *, fetch: bool = True,
         "news_crawler": "not run yet",
     }
     cc = command_center or {}
-    acc = cc.get("accuracy_leaderboard") or cc.get("accuracy") or (cc.get("ledger") or {}).get("leaderboard")
-    out["accuracy_leaderboard"] = acc if isinstance(acc, list) else None
+    out["accuracy_leaderboard"] = _accuracy_rows(cc)
     out["brier_by_model"] = (cc.get("ledger") or {}).get("brier")
     if Path(db_path).exists():
         conn = _ro(db_path)

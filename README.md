@@ -73,11 +73,13 @@ TEV is NOEMA's private, **read-only** war room served by `noema-dashboard` (port
 
 | Page | What it shows | API |
 | --- | --- | --- |
-| `/trading-room` (v6) | Crawler bay hero (cards flip through each scanned token's real chart and stamp PASS / REJECT / CHIEF VETO with the reason), crawler lanes incl. the live **news lane**, agent wall, decision stream, Kalshi/Polymarket board, treasury (Solana + EVM, signer status), accuracy panel, safety switches | `/api/trading-room`, `/api/room-v6` |
+| `/trading-room` (v6) | Crawler bay hero (cards flip through each scanned token's real chart and stamp PASS / REJECT / CHIEF VETO with the reason), crawler lanes incl. the live **news lane**, agent wall, decision stream, Kalshi/Polymarket board, treasury (Solana + EVM, signer status), accuracy leaderboard, safety switches | `/api/trading-room`, `/api/room-v6`, `/api/accuracy` |
 | `/trading-room-v5` | TEV CRAWLER card flip, decision graph, CHIEF dial, pool hex map | `/api/trading-room` |
 | `/trading-room-v4` | Neon pixel room: agent panels, crawler radar, balance ribbon | `/api/room-v4` |
 | `/command-center` | 4×4 grid: prediction scanner, forecast ledger / Brier / calibration, gateway, ladder, model budget, health | `/api/command-center` |
 | `/trench-desks` | Original paper-desk panel | `/api/trench-desks` |
+
+`/api/accuracy` is a read-only route on the private dashboard (`noema-dashboard`). It returns per-agent Brier, calibration, weight, and bench status. The public site (`site/`) does not serve it and does not receive signer material.
 
 <details><summary>Phone view</summary>
 <p align="center"><img src="docs/images/trading-room-v6-phone.jpg" alt="TEV on phone" width="320" /></p>
@@ -176,7 +178,8 @@ Not in `main` yet — listed so the roadmap stays honest.
 
 | Work | Status |
 | --- | --- |
-| **Accuracy engine** — per-agent forecast scoring, earned influence in CHIEF, backtests, self-consistency gating, trade post-mortems | 🟡 In progress |
+| **Swap signers** ([#108](https://github.com/gryszzz/NOEMA/pull/108)) — Jupiter (Solana) + EVM aggregator signers in a separate process; sign only for NOEMA's own addresses, simulate first, ship **disabled** with a daily cap | ✅ Merged (ships disabled) |
+| **Accuracy engine** ([#116](https://github.com/gryszzz/NOEMA/pull/116)) — per-agent Brier, calibration, and CHIEF influence from resolved forecasts. Public-history baseline (24h before close, no keys): Kalshi midpoint Brier **0.1205** (n=60); series-frequency **0.1885** (n=29, weight 0, 17 no-edge skips); CHIEF shadow Brier **0.154** (n=29); Polymarket CLOB midpoint **0.2765** (n=18); Polymarket US history HTTP 401, scored **0**; Solana OHLCV shadow **0.3308** (n=228, live entry gate passed 0). Paper scoring only. | ✅ Merged |
 
 ## A living operating system
 
@@ -236,12 +239,12 @@ flowchart LR
     G -.->|signer flags + owner review| S[Swap signers]
     Q --> H[Outcomes + scoring]
     G --> H
-    H --> AE[Calibration / accuracy engine*]
+    H --> AE[Calibration / accuracy engine]
     AE --> B
     E --> UI[(TEV trading room<br/>read-only)]
 ```
 
-<sub>* accuracy engine in progress. The graph shows flow, not live authority; the gateway stays separately gated and fail-closed.</sub>
+<sub>The accuracy engine scores forecasts and can shrink paper influence to zero. It does not arm live execution; the gateway stays separately gated and fail-closed.</sub>
 
 ## Self-hosting
 
@@ -268,7 +271,7 @@ NOEMA runs self-hosted on a single box: `noema-agent` (worker), `noema-dashboard
 | **01 · Reality-first console** | ✅ Done | Evidence-backed operations view, replay, diagnostics, economics |
 | **02 · Living habitat** | ✅ Done | Inhabitants, workstations, mission occupancy, handoffs |
 | **03 · Autonomous Desk + TEV** | ✅ Done | Desk seats, paper trench desks, TEV JUDGE / CHIEF, TEV trading room v6, news crawler |
-| **04 · Accuracy + signers** | 🟡 In progress | Accuracy engine, swap signers (#108), earned-autonomy sizing wired |
+| **04 · Accuracy + signers** | 🟡 In progress | Accuracy engine merged (#116, paper scoring only); swap signers still draft (#108); earned-autonomy sizing wired |
 | **05 · Policy-gated live execution** | 🔒 Gated | Only after the ladder reaches MICRO, owner review, and every live flag is set |
 
 The roadmap is directional. It does **not** grant execution authority or claim profitability.
