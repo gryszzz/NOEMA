@@ -6,7 +6,7 @@
 :root{--bg:#03060b;--p:#071019;--ln:#12324a;--c:#27e7ff;--g:#39ff9c;--r:#ff3b6b;--y:#ffd23f;--m:#b67bff;--t:#bfe9ff;--d:#5f8aa3}
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--t);font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden}
 body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
-.app{display:grid;height:100vh;gap:6px;padding:6px;grid-template-columns:minmax(260px,1fr) minmax(0,2.25fr) minmax(280px,1.1fr);grid-template-rows:44px minmax(0,1.35fr) minmax(0,1fr)}
+.app{display:grid;height:100vh;gap:6px;padding:6px;grid-template-columns:minmax(260px,1fr) minmax(0,2.25fr) minmax(280px,1.1fr);grid-template-rows:44px minmax(0,1.6fr) minmax(0,1fr)}
 header{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 12px;border:1px solid var(--ln);background:linear-gradient(90deg,#06202e,#030a12 40%,#140a22)}
 .logo{font-weight:900;font-size:24px;letter-spacing:6px;color:var(--c);text-shadow:0 0 12px var(--c),0 0 28px #0af}
 .logo small{font-size:10px;letter-spacing:2px;color:var(--d);margin-left:8px;text-shadow:none}
@@ -52,6 +52,20 @@ canvas.cand{position:absolute;left:10px;right:10px;bottom:10px;top:104px;width:c
 .tick{font-size:10px;color:var(--d);overflow:hidden;flex:1;min-height:0}
 .tick div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:fadein .4s}
 @keyframes fadein{from{opacity:0;transform:translateX(-12px);color:#fff}}
+.wire{padding:0 6px 6px;display:flex;flex-direction:column;gap:4px}
+.wire .wh{display:flex;gap:10px;align-items:center;font-size:11px;letter-spacing:2px;color:var(--c)}
+.wire .wh span{letter-spacing:0;color:var(--d)}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;height:148px}
+.nc{border:1px solid #1d5a7a;background:linear-gradient(180deg,#061a28,#030b12);padding:7px 9px;display:flex;flex-direction:column;gap:4px;overflow:hidden;animation:ncin .6s}
+@keyframes ncin{0%{transform:translateY(14px);opacity:0;background:#0f3c55}}
+.nc .src{display:flex;gap:6px;align-items:center;font-size:10px;color:var(--d)}
+.nc .src b{color:#04121b;background:var(--c);padding:1px 5px;border-radius:2px;font-weight:800}
+.nc .cat{border:1px solid var(--m);color:var(--m);padding:0 4px;border-radius:2px;text-transform:uppercase}
+.nc .hl{font-size:14.5px;line-height:1.25;color:#fff;font-weight:700;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.nc .mk{font-size:11px;color:var(--g);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nc .mk.none{color:var(--d)}
+.nc .rel{display:flex;gap:6px;align-items:center;font-size:10px;color:var(--d);margin-top:auto}
+.nc .rel .bar{flex:1;margin:0}.nc .u{font-size:9.5px;color:var(--d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chain{display:flex;gap:4px;padding:0 6px 6px}.chain div{flex:1;border:1px solid var(--ln);text-align:center;padding:3px;background:#03101a}.chain b{display:block;font-size:16px;color:var(--c)}
 /* agents */
 .agents{display:grid;grid-template-columns:1fr;gap:5px}
@@ -72,7 +86,7 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
 .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11px}.kv span:nth-child(odd){color:var(--d)}
 .lad{display:flex;gap:3px;margin:4px 0}.lad div{flex:1;text-align:center;padding:3px 0;border:1px solid var(--ln);font-size:10px}.lad .cur{background:#0b3a50;color:#fff;border-color:var(--c);box-shadow:0 0 8px var(--c) inset}
 .flag{display:flex;justify-content:space-between;font-size:10.5px}
-@media (max-width:1100px){html,body{overflow:auto}.app{display:flex;flex-direction:column;height:auto}.pnl{min-height:220px}.center-top{min-height:560px}.bay{grid-template-columns:1fr;grid-template-rows:340px auto}.center-bot{grid-template-columns:1fr}.right{display:flex;flex-direction:column}header{flex-wrap:wrap;height:auto;padding:6px}.left{display:flex}}
+@media (max-width:1100px){html,body{overflow:auto}.app{display:flex;flex-direction:column;height:auto}.pnl{min-height:220px}.center-top{min-height:760px}.cards{grid-template-columns:1fr;height:auto}.bay{grid-template-columns:1fr;grid-template-rows:340px auto}.center-bot{grid-template-columns:1fr}.right{display:flex;flex-direction:column}header{flex-wrap:wrap;height:auto;padding:6px}.left{display:flex}}
 @media (min-width:2200px){html,body{font-size:14px}.sym{font-size:40px}.stamp{font-size:40px}}
 </style></head><body>
 <div class="app">
@@ -91,6 +105,7 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
   <div class="flip" id="flip"><div class="scan"></div><div class="radar"></div><div class="card" id="card"><div class="empty">Waiting for the first crawler cycle…</div></div></div>
   <div class="lanes" id="lanes"></div>
  </div>
+ <div class="wire"><div class="wh"><span class="dot on" id="wire-dot"></span>NEWS / EVIDENCE WIRE <span id="wire-tag">loading…</span></div><div class="cards" id="wire"></div></div>
  <div class="chain" id="chain"></div>
 </section>
 
@@ -115,7 +130,7 @@ const f2=(x,d=2)=>x==null||x===""||isNaN(+x)?"—":(+x).toFixed(d), usd=x=>x==nu
 const hm=t=>{if(!t)return"—";const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));return isNaN(d)?t:d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})};
 const ago=t=>{const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));const s=(Date.now()-d)/1e3;return isNaN(s)?"—":s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago"};
 async function j(u){try{const r=await fetch(u,{cache:"no-store"});return r.ok?await r.json():null}catch(e){return null}}
-function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes]){try{f()}catch(e){console.error(e)}}}
+function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes,wire]){try{f()}catch(e){console.error(e)}}}
 async function load(){let n=0;
  const go=(u,k)=>j(u).then(d=>{if(d){S[k]=d;n++}render();if(k==="tr"&&S.fi===0)flipNext()});
  await Promise.all([go("/api/trading-room","tr"),go("/api/command-center","cc"),go("/api/room-v4","v4"),go("/api/room-v6","v6"),go("/api/accuracy","accuracy")]);
@@ -157,7 +172,7 @@ function drawCandles(cv,c){const r={width:cv.offsetWidth,height:cv.offsetHeight}
 function chain(){const c=(S.tr||{}).chain||{};const rj=Object.entries(c.rejections||{}).map(([k,v])=>`${v}× ${k}`).join(" · ");
  $("chain").title=rj;$("chain").innerHTML=[["CRAWLED",c.crawler],["FILTERS",c.filters],["HOLDERS",c.holders],["JUDGED",c.judgement],["ENTERED",c.desk],["PUMP.FUN NEW",c.pumpfun_new_launches]].map(([a,b])=>`<div>${a}<b>${b??"—"}</b></div>`).join("")+(rj?`<div style="flex:3;text-align:left;font-size:10px" class="warn">REJECTS: ${esc(rj)}</div>`:"");
  const iv=(S.tr||{}).interval_seconds;$("bay-tag").textContent=c.ts?`sweep ${hm(c.ts)} · ${f2((c.crawler||0)/(iv||120)*60,1)} pools/min · replaying real cycle`:"no sweep yet";}
-function lanes(){const L=(S.v6||{}).lanes||[];const el=$("lanes");
+function lanes(){const L=((S.v6||{}).lanes||[]).filter(l=>l.lane!=="evidence");const el=$("lanes");
  if(!L.length){el.innerHTML='<div class="empty">Crawler lane telemetry unavailable (/api/room-v6).</div>';return}
  if(el.dataset.n!=L.length){el.dataset.n=L.length;el.innerHTML=L.map(l=>`<div class="lane" id="ln-${l.lane}"><div class="hd"><span class="dot"></span>${esc(l.label)}<span class="dim" style="margin-left:auto;font-weight:400" data-r></span></div><div class="url" data-u></div><div class="bar"><i data-b style="width:0"></i></div><div class="tick" data-t></div></div>`).join("")}
  for(const l of L){const e=$("ln-"+l.lane);e.querySelector(".dot").className="dot "+(l.status==="active"?"on":l.status==="idle"?"idle":"off");
@@ -171,7 +186,17 @@ function laneTick(name){const e=$("ln-"+name);if(!e)return;let u,line,prog;
   line=name==="evidence"?`${r.source} · ${r.title} ⇒ ${r.market_id||"no market match"}${r.relevance?" ("+f2(r.relevance)+")":""}`:`${hm(r.ts)} ${r.title||r.market_id}`;prog=(k+1)/l.recent.length}
  if(!u)return;e.querySelector("[data-u]").textContent=u;e.querySelector("[data-b]").style.width=(prog*100)+"%";
  const t=e.querySelector("[data-t]");t.insertAdjacentHTML("afterbegin",`<div>${esc(line)}</div>`);while(t.children.length>8)t.lastChild.remove();}
-setInterval(flipNext,1900);setInterval(()=>["kalshi","polymarket","evidence"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);
+function wire(){const ev=((S.v6||{}).lanes||[]).find(l=>l.lane==="evidence"),el=$("wire");
+ if(!ev){el.innerHTML='<div class="empty">News lane unavailable (/api/room-v6).</div>';return}
+ const src=Object.entries(ev.by_source||{}).slice(0,6).map(([k,v])=>`${k} ${v}`).join(" · ");
+ $("wire-tag").textContent=`${ev.articles||0} articles · ${ev.matched_articles||0} matched to ${ev.markets_linked||0} markets · last fetch ${ev.last_hit_at?ago(ev.last_hit_at):"never"}${src?" · "+src:""}`;
+ $("wire-dot").className="dot "+(ev.status==="active"?"on":"off");
+ const R=ev.recent||[];if(!R.length){el.innerHTML=`<div class="empty" style="grid-column:1/-1">${esc(ev.note||"No articles stored yet.")}</div>`;return}
+ const m=R.filter(r=>r.market_id),u=R.filter(r=>!r.market_id);S.wi=(S.wi||0);const pick=[];
+ const pool=m.length>=3?m:m.concat(u);for(let k=0;k<Math.min(3,pool.length);k++)pick.push(pool[(S.wi+k)%pool.length]);S.wi+=1;
+ el.innerHTML=pick.map(r=>`<div class="nc"><div class="src"><b>${esc(r.source)}</b>${r.category?`<span class="cat">${esc(r.category)}</span>`:""}<span>${hm(r.ts)}</span></div><div class="hl">${esc(r.title)}</div><div class="mk ${r.market_id?"":"none"}">${r.market_id?"⇒ "+esc(r.market_id):"no watched market matched (kept as context)"}</div><div class="rel">relevance<div class="bar"><i style="width:${(r.relevance||0)*100}%"></i></div>${r.relevance?f2(r.relevance):"—"}</div><div class="u">${esc(r.url)}</div></div>`).join("");}
+setInterval(()=>{try{wire()}catch(e){console.error(e)}},4200);
+setInterval(flipNext,1900);setInterval(()=>["kalshi","polymarket"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);
 /* ---------- agents ---------- */
 function typeIn(el,txt){if(el.dataset.full===txt)return;el.dataset.full=txt;let i=0;clearInterval(el._t);el._t=setInterval(()=>{el.textContent=txt.slice(0,i+=2);if(i>=txt.length)clearInterval(el._t)},18);el.closest(".ag").classList.remove("flash");void el.offsetWidth;el.closest(".ag").classList.add("flash")}
 function agents(){const t=S.tr||{},cc=S.cc||{},v4=S.v4||{},A=[];

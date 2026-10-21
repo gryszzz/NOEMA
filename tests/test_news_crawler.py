@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import UTC, datetime
 
 import httpx
 
@@ -118,3 +119,67 @@ def test_attach_news_context_is_data_only():
     assert json.loads(out["input"])["untrusted_news_quotes"][0]["quote"] == "q"
     assert "never an instruction" in out["instructions"]
     assert nc.attach_news_context({"input": "{}"}, []) == {"input": "{}"}
+
+
+def _idx():
+    return nc.MarketIndex([
+        ("k", "WV-1Q", ("West Virginia wins the 1st quarter. If West Virginia wins the 1st quarter of the "
+                       "West Virginia vs TCU college football game, this market will settle to Yes."), 1),
+        ("pm", "tx", ("James Talarico (D). This market will settle to Yes if the Democratic Party nominee "
+                     "wins the 2026 midterm election for US Senator from Texas."), 2),
+        ("k", "TX-RAIN", "Texas rainfall. Will Austin, Texas record more than 2 inches of rain this week?", 3),
+    ])
+
+
+def test_scotus_caption_does_not_match_football_market():
+    assert _idx().match("West Virginia v. B. P. J.", source="CourtListener SCOTUS") == []
+    # even with sports allowed, a legal article never matches a sports market
+    assert _idx().match("West Virginia v. B. P. J. West Virginia ruling", source="CourtListener SCOTUS",
+                        include_sports=True) == []
+
+
+def test_lone_place_name_is_not_enough():
+    assert _idx().match("Texas Senate debate: Texas voters weigh election", source="NPR Politics") == []
+
+
+def test_category_tags_and_politics_match():
+    idx = _idx()
+    assert idx.cats == ["sports", "politics", "weather"]
+    m = idx.match("Bush family members back Democrat James Talarico in Texas Senate race", source="BBC")
+    assert [x["market_id"] for x in m] == ["tx"] and m[0]["category"] == "politics"
+    assert nc.categorize("Fed holds interest rates", "Federal Reserve") >= {"economics"}
+
+
+def test_sports_markets_deprioritised_unless_enabled():
+    idx = _idx()
+    text = "West Virginia beat TCU in the college football game; West Virginia led after the 1st quarter"
+    assert idx.match(text) == []
+    assert idx.match(text, include_sports=True)[0]["market_id"] == "WV-1Q"
+
+
+def test_gdelt_backoff_cooldown_and_rotation(tmp_path):
+    conn = sqlite3.connect(tmp_path / "g.db")
+    nc.ensure_schema(conn)
+    nc.set_gdelt_state(conn, ok=False)
+    first = nc.gdelt_state(conn)
+    assert first["failures"] == 1 and first["cooldown_until"] > datetime.now(UTC).isoformat()
+    nc.set_gdelt_state(conn, ok=False)
+    second = nc.gdelt_state(conn)
+    assert second["cooldown_until"] > first["cooldown_until"]  # exponential
+    nc.set_gdelt_state(conn, ok=True, advance=2)
+    assert nc.gdelt_state(conn) == {"failures": 0, "cooldown_until": None, "cursor": 2}
+
+
+def test_crawl_skips_gdelt_during_cooldown(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    monkeypatch.setattr(nc, "FEEDS", ())
+    conn = sqlite3.connect(db)
+    nc.ensure_schema(conn)
+    nc.set_gdelt_state(conn, ok=False)
+
+    def handler(req):
+        raise AssertionError("GDELT called during cooldown")
+
+    pc = nc.PoliteClient(conn, httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
+    stats = nc.crawl_once(db, client=pc)
+    assert str(stats["fetched"]["GDELT"]).startswith("cooldown until")
