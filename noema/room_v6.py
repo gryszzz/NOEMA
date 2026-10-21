@@ -135,7 +135,8 @@ def news_lane(db_path: str) -> dict[str, Any]:
             "markets_linked": hits.get("markets_linked", 0), "by_source": hits.get("by_source", {}),
             "recent": [{"ts": h["published_at"], "title": h["headline"], "market_id": h["market"],
                         "url": h["url"], "source": h["source"], "venue": h["venue"],
-                        "relevance": h["relevance"]} for h in hits.get("hits", [])],
+                        "relevance": h["relevance"], "category": h.get("category")}
+                       for h in hits.get("hits", [])],
             "note": None if hits.get("articles") else "news crawler has not stored any articles yet"}
 
 
