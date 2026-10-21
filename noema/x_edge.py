@@ -1271,6 +1271,24 @@ def x_signal_board(db_path: str, *, now: datetime | None = None) -> dict[str, An
                "liquidity, pushed FROM x_contracts ORDER BY first_at DESC LIMIT 12").fetchall()
         st = q("SELECT source, COUNT(*) FROM x_stance GROUP BY source").fetchall() if _has(conn, "x_stance") else []
         last = q("SELECT at, detail FROM x_edge_runs ORDER BY id DESC LIMIT 1").fetchone()
+        posts = []
+        for r in q("SELECT p.post_id, p.author_handle, p.author_class, p.author_followers, p.text, p.created_at, "
+                   "p.topic, p.url, p.credibility, p.pump_risk, p.weight, p.flags, a.status, a.shrunk, a.n, a.hits "
+                   "FROM x_posts p LEFT JOIN x_author_scores a ON a.author=LOWER(p.author_handle) WHERE p.weight>=0.01 "
+                   "AND p.created_at>=? ORDER BY (p.post_id IN (SELECT post_id FROM x_market_links)) DESC, "
+                   "p.created_at DESC LIMIT 30", (h48,)).fetchall():
+            pst = q("SELECT s.venue, s.market_id, l.title, s.stance, s.confidence, s.source FROM x_stance s "
+                   "LEFT JOIN x_market_links l ON l.post_id=s.post_id AND l.venue=s.venue AND l.market_id=s.market_id "
+                   "WHERE s.post_id=? AND s.relevant=1 ORDER BY s.confidence DESC LIMIT 3", (r[0],)).fetchall() \
+                if _has(conn, "x_stance") else []
+            posts.append({"id": r[0], "author": r[1], "author_class": r[2], "followers": r[3],
+                          "text": sanitize(r[4], 280), "created_at": r[5], "topic": r[6], "url": r[7],
+                          "credibility": r[8], "pump_risk": r[9], "weight": r[10],
+                          "flags": [f for f in (r[11] or "").split(",") if f],
+                          "smart_money": {"status": r[12] or "unscored", "shrunk": r[13], "n": r[14] or 0,
+                                          "hits": r[15] or 0},
+                          "stances": [{"venue": v, "market_id": m, "title": sanitize(t or m, 90), "stance": sv,
+                                       "confidence": cf, "source": src} for v, m, t, sv, cf, src in pst]})
         agents = []
         if _has(conn, "accuracy_forecasts") and _has(conn, "accuracy_resolutions"):
             for agent in AGENTS.values():
@@ -1308,7 +1326,7 @@ def x_signal_board(db_path: str, *, now: datetime | None = None) -> dict[str, An
                        "shill_score": sh, "verdict": v, "dump": json.loads(d) if d else None, "price": p,
                        "liquidity": lq, "sent_to_alpha": pu == 1,
                        "withdrawn_from_alpha": pu == -1} for c, a, s, m, au, k, sh, v, d, p, lq, pu in ca],
-        "rotation": rotation, "agents": agents, "stance": dict(st),
+        "rotation": rotation, "agents": agents, "stance": dict(st), "posts": posts,
     }
 
 
