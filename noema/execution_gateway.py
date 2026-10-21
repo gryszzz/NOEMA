@@ -139,8 +139,11 @@ class ExecutionGateway:
 
     Live order submission is disabled unless a separate gateway enable flag,
     the legacy venue-specific enable flag, a positive daily limit, and an
-    explicit venue allowlist are all present. Treasury-class wallet transfers
-    require their own owner-controlled flag in addition to WalletPolicy.
+    explicit venue allowlist are all present. When
+    ``NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD`` is unset, the mission authority's
+    daily limit is that cap. An explicit value, including zero, overrides it.
+    Treasury-class wallet transfers require their own owner-controlled flag in
+    addition to WalletPolicy.
     """
 
     _TREASURY_ACTIONS = frozenset({
@@ -388,7 +391,8 @@ class ExecutionGateway:
             reasons.append("owner live-order setting is disabled")
         if os.getenv("NOEMA_MASTER_HALT", "0") == "1":
             reasons.append("owner master halt is active")
-        cap = self._decimal(os.getenv("NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD", "0"))
+        authority = self._resolve_authority(proposal.mission_id)
+        cap = self._owner_daily_notional_cap(authority)
         if cap is None or cap <= 0:
             reasons.append("positive owner daily execution limit is missing")
         allowed_venues = {
@@ -397,7 +401,6 @@ class ExecutionGateway:
         }
         if proposal.venue not in allowed_venues:
             reasons.append("venue is not explicitly allowlisted")
-        authority = self._resolve_authority(proposal.mission_id)
         if not isinstance(authority, PredictionExecutionAuthority):
             reasons.append("separate mission execution authority is absent")
         else:
@@ -513,7 +516,7 @@ class ExecutionGateway:
         authority: PredictionExecutionAuthority,
     ) -> bool:
         request_hash = self._hash(payload)
-        cap = self._decimal(os.getenv("NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD", "0")) or Decimal(0)
+        cap = self._owner_daily_notional_cap(authority) or Decimal(0)
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if conn.execute("SELECT 1 FROM execution_gateway_requests WHERE proposal_id=?",
@@ -768,6 +771,53 @@ class ExecutionGateway:
                 # Provider errors and malformed responses are not evidence of failure.
                 counts["unchanged"] += 1
         return counts
+
+    def _owner_daily_notional_cap(self, authority: object) -> Decimal | None:
+        """Explicit owner cap wins. Otherwise use the mission authority's daily limit."""
+        raw = os.getenv("NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD")
+        if raw is not None and str(raw).strip() != "":
+            return self._decimal(raw)
+        if isinstance(authority, PredictionExecutionAuthority):
+            limit = authority.daily_limit_usd
+            if isinstance(limit, Decimal) and limit.is_finite():
+                return limit
+        return None
+
+    def request_row(self, proposal_id: str) -> dict[str, Any] | None:
+        if not Path(self.db_path).is_file():
+            return None
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT * FROM execution_gateway_requests WHERE proposal_id=?",
+                    (proposal_id,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        return None if row is None else dict(row)
+
+    def request_status(self, proposal_id: str) -> str | None:
+        row = self.request_row(proposal_id)
+        if row is None:
+            return None
+        status = row.get("status")
+        return None if status is None else str(status)
+
+    def pending_prediction_orders(self) -> list[dict[str, Any]]:
+        if not Path(self.db_path).is_file():
+            return []
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT * FROM execution_gateway_requests WHERE route='prediction' "
+                    "AND tier='execution' AND status IN ('reserved','submitted','partial','unknown') "
+                    "ORDER BY created_at"
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        return [dict(row) for row in rows]
 
     def _mission_exposure(self, mission_id: str, exclude_id: str) -> Decimal:
         with sqlite3.connect(self.db_path) as conn:

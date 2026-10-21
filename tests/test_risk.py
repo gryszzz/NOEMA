@@ -49,6 +49,14 @@ def test_small_edge_passes() -> None:
     assert action.decision.value == "pass"
 
 
+def test_missing_dollar_cap_sizes_from_bankroll_fraction() -> None:
+    action = RiskEngine(RiskPolicy(max_stake_usd=None, max_fraction_of_bankroll=0.01)).decide(
+        opportunity(), bankroll_usd=10_000,
+    )
+    assert action.decision.value == "paper_buy_yes"
+    assert action.stake_usd == 100
+
+
 def test_live_mode_is_explicit() -> None:
     action = RiskEngine(RiskPolicy(mode=Mode.LIVE)).decide(opportunity(), bankroll_usd=2_000)
     assert action.decision.value == "live_buy_yes"

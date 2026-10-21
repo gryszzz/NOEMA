@@ -29,7 +29,10 @@ successful connection until a cycle actually checks it.
 7. **Paper evaluation:** Collect many independent, later-resolved markets,
    compare to the market baseline over time, and measure costs and drawdown.
    Repeated observations of one market count once in the comparison.
-8. **Live capital:** Locked in the ladder. It needs a separate review of real
+8. **Live capital:** Locked until the owner sets `NOEMA_LIVE_REQUIRES_OWNER_REVIEW=0`.
+   Earning MICRO or higher does not unlock live while that flag stays at its
+   default. Live orders still need the execution-gateway flags, and
+   `NOEMA_MASTER_HALT=1` stops them immediately. The review should cover real
    out-of-sample performance, venue rules, execution behavior, and bounded risk.
 
 The dashboard binds to localhost by default. Running the dashboard publicly

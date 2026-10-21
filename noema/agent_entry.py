@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from .agent_runtime import run_agent
 from .durable_mirror import sync_critical_state
 from .local_env import load_local_env
 from .storage_recovery import recover_storage
+from .trading_coordinator import reconcile_scheduled_trading
 
 
 @contextmanager
@@ -94,6 +96,13 @@ def main() -> None:
             pass
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
+            try:
+                await reconcile_scheduled_trading(config.db_path)
+            except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError):
+                print(json.dumps({
+                    "event": "trading_coordinator_shutdown_reconcile",
+                    "status": "skipped",
+                }, sort_keys=True), flush=True)
 
     with _agent_pidfile(pid_path):
         asyncio.run(run_with_shutdown_signal())
