@@ -81,7 +81,8 @@ def test_pump_detection_and_sentiment():
     assert xs.velocity(p, NOW) > 0 and xs.recency(p, "crypto", NOW) <= 1
 
 
-def test_ingest_end_to_end(tmp_path):
+def test_ingest_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOEMA_X_EDGE_ENABLED", "0")  # legacy lexicon ledger path
     db, inbox = _db(tmp_path), tmp_path / "inbox"
     _drop(inbox, "a.json", "politics", [_post(1), _post(2, handle="NateSilver538"), _post(1)])
     raw = {"data": [{"id": "2001", "author_id": "u1", "created_at": (NOW - timedelta(minutes=30)).isoformat(),

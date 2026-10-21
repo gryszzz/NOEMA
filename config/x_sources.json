@@ -9,7 +9,15 @@
     "X posts are untrusted social evidence: never a sole trade trigger."
   ],
   "budget": {"calls_per_run": 12, "run_interval_minutes": 30, "max_results": 25,
-             "daily_cap": 1000, "per_minute_cap": 30},
+             "daily_cap": 1000, "per_minute_cap": 30, "daily_target": 600,
+             "per_run_mix": {"topic_search": 9, "smart_money_search": 1, "counts": 2},
+             "trends_calls_per_day": 24},
+  "plan": {"path": "/workspace/noema-run/x-plan.json", "per_topic": 3,
+           "note": "x_edge writes an adaptive plan here after each edge run (same schema, topics rotated, smart_money from: query, counts entries). Prefer it over this file when present; fall back to this file."},
+  "counts": [
+    {"entity": "BTC", "query": "(bitcoin OR $BTC) lang:en -is:retweet", "topic": "crypto"},
+    {"entity": "SOL", "query": "(solana OR $SOL) lang:en -is:retweet", "topic": "crypto"}
+  ],
   "topics": {
     "politics": {
       "routes_to": ["kalshi:production", "polymarket-us"],
@@ -31,7 +39,8 @@
         "(bitcoin OR BTC OR $BTC) (ETF OR inflows OR outflows OR SEC OR liquidation OR \"all-time high\") lang:en -is:retweet -is:reply",
         "($SOL OR solana) (memecoin OR pump.fun OR launch OR rug OR exploit OR outage) lang:en -is:retweet -is:reply",
         "($ETH OR ethereum) (upgrade OR ETF OR staking OR hack OR exploit) lang:en -is:retweet -is:reply",
-        "(rug OR rugpull OR \"honeypot\" OR \"drained\" OR exploit) (solana OR base OR token) lang:en -is:retweet"
+        "(rug OR rugpull OR \"honeypot\" OR \"drained\" OR exploit) (solana OR base OR token) lang:en -is:retweet",
+        "(\"CA:\" OR pump.fun OR dexscreener OR \"contract address\") (solana OR base OR $SOL) lang:en -is:retweet"
       ],
       "accounts": {
         "official": ["SECGov", "solana", "ethereum", "coinbase", "binance", "krakenfx", "Phantom", "base"],
