@@ -5,8 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from noema.solana_live_gate import solana_desk_live_enabled
 from noema.solana_research import PoolCandidate
-from noema.trench_desk_runtime import DeskRuntimeConfig, assert_paper_only, run_desk_cycle
+from noema.trench_desk_runtime import DeskRuntimeConfig, run_desk_cycle
 from noema.trench_desks import (
     HARD_STOP_CEILING,
     CostModel,
@@ -108,10 +109,9 @@ def test_cost_model_slippage_scales_with_size():
     assert price < 1.0 and fee > 0 and slip > 0
 
 
-def test_runtime_refuses_live_flags(monkeypatch):
+def test_runtime_stays_paper_until_solana_live_gate(monkeypatch):
     monkeypatch.setenv("NOEMA_ALLOW_LIVE_ORDERS", "1")
-    with pytest.raises(RuntimeError):
-        assert_paper_only()
+    assert solana_desk_live_enabled() is False
 
 
 class _Gecko:

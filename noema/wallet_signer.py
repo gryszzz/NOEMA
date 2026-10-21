@@ -58,8 +58,68 @@ class DisabledWalletSigner:
         )
 
 
+_SOLANA_CHILD_ENV = (
+    "NOEMA_SOLANA_WALLET_ADDRESS",
+    "NOEMA_SOLANA_RPC_URL",
+    "NOEMA_JUPITER_SWAP_API_URL",
+    "NOEMA_SOLANA_SIGNER_ENABLED",
+    "NOEMA_SOLANA_OWNER_REVIEWED",
+    "NOEMA_ALLOW_LIVE_ORDERS",
+    "NOEMA_LIVE_VENUES",
+    "NOEMA_MASTER_HALT",
+    "NOEMA_SOLANA_MASTER_HALT",
+    "NOEMA_WALLET_MASTER_HALT",
+    "NOEMA_SOLANA_MAX_TRADE_USD",
+    "NOEMA_SOLANA_MAX_DAILY_USD",
+    "NOEMA_SOLANA_BANKROLL_USD",
+    "NOEMA_AUTONOMY_LEVEL",
+    "NOEMA_AUTONOMY_AUTHORITY_PATH",
+    "NOEMA_SOLANA_MAX_SLIPPAGE_BPS",
+    "NOEMA_SOLANA_MINT_DENYLIST",
+    "NOEMA_SOLANA_MINT_DENYLIST_PATH",
+    "NOEMA_SOLANA_FEE_RESERVE_LAMPORTS",
+    "NOEMA_SOLANA_PRIORITY_FEE_LAMPORTS",
+    "NOEMA_SOLANA_PRICE_USD",
+    "NOEMA_SOLANA_SIGNER_STATE_PATH",
+    "NOEMA_SOLANA_CONFIRM_ATTEMPTS",
+    "NOEMA_SOLANA_CONFIRM_INTERVAL_SECONDS",
+    "PYTHONPATH",
+)
+_JUPITER_SWAP_FIELDS = ("side", "mint", "amount", "max_slippage_bps", "min_out", "idempotency_key")
+_EVM_SWAP_FIELDS = ("chain", "side", "token", "amount", "max_slippage_bps", "min_out", "idempotency_key")
+_EVM_SWAP_CHILD_ENV = (
+    "NOEMA_EVM_ADDRESS",
+    "NOEMA_EVM_SIGNER_ENABLED",
+    "NOEMA_EVM_OWNER_REVIEWED",
+    "NOEMA_ALLOW_LIVE_ORDERS",
+    "NOEMA_LIVE_VENUES",
+    "NOEMA_MASTER_HALT",
+    "NOEMA_EVM_MASTER_HALT",
+    "NOEMA_WALLET_MASTER_HALT",
+    "NOEMA_EVM_MAX_TRADE_USD",
+    "NOEMA_EVM_MAX_DAILY_USD",
+    "NOEMA_EVM_BANKROLL_USD",
+    "NOEMA_AUTONOMY_LEVEL",
+    "NOEMA_AUTONOMY_AUTHORITY_PATH",
+    "NOEMA_EVM_MAX_SLIPPAGE_BPS",
+    "NOEMA_EVM_TOKEN_ALLOWLIST",
+    "NOEMA_EVM_TOKEN_DENYLIST",
+    "NOEMA_EVM_TOKEN_DENYLIST_PATH",
+    "NOEMA_EVM_FEE_RESERVE_WEI",
+    "NOEMA_EVM_MAX_FEE_WEI",
+    "NOEMA_EVM_MAX_GAS_PRICE_WEI",
+    "NOEMA_EVM_NATIVE_PRICES_USD",
+    "NOEMA_EVM_SIGNER_STATE_PATH",
+    "NOEMA_EVM_CONFIRM_ATTEMPTS",
+    "NOEMA_EVM_CONFIRM_INTERVAL_SECONDS",
+    "NOEMA_KYBERSWAP_API_URL",
+    "NOEMA_KYBERSWAP_CLIENT_ID",
+    "PYTHONPATH",
+)
+
+
 class LocalSolanaWalletSigner:
-    """One-shot Keychain-backed signer; key material stays in its child process."""
+    """One-shot signer. Key material stays in the child process."""
 
     DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 
@@ -104,6 +164,28 @@ class LocalSolanaWalletSigner:
         payload = self._intent_payload(intent)
         payload["operation"] = "solana_sign_dry_run"
         return await self._run(payload)
+
+    def jupiter_swap_sync(
+        self, *, side: str, mint: str, amount: int, max_slippage_bps: int,
+        min_out: int, idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Ask the child to swap SOL for one SPL mint. The secret is not in this payload."""
+        payload = {
+            "operation": "solana_jupiter_swap",
+            "side": side,
+            "mint": mint,
+            "amount": amount,
+            "max_slippage_bps": max_slippage_bps,
+            "min_out": min_out,
+            "idempotency_key": idempotency_key,
+        }
+        unexpected = set(payload) - {"operation", *_JUPITER_SWAP_FIELDS}
+        if unexpected:
+            raise RuntimeError("swap request is invalid")
+        return self._run_sync(payload)
+
+    async def jupiter_swap(self, **kwargs: Any) -> dict[str, Any]:
+        return await asyncio.to_thread(self.jupiter_swap_sync, **kwargs)
 
     async def execute(self, intent: WalletIntent) -> WalletExecutionReceipt:
         if not self.enabled or self.master_halt:
@@ -152,12 +234,37 @@ class LocalSolanaWalletSigner:
         return await asyncio.to_thread(self._run_sync, request)
 
     def _run_sync(self, request: dict[str, Any]) -> dict[str, Any]:
-        # The child receives no parent environment credentials. It can read only
-        # its own Keychain item and the explicit structured request.
+        # The child receives no parent environment credentials except the Solana
+        # swap secret, and only on the Jupiter swap operation. The secret is an
+        # environment variable, never a field of the JSON request.
         child_env = {
-            "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/opt/homebrew/bin"),
             "HOME": os.environ.get("HOME", ""),
         }
+        for name in _SOLANA_CHILD_ENV:
+            if name in os.environ:
+                child_env[name] = os.environ[name]
+        operation = request.get("operation")
+        if operation == "solana_jupiter_swap":
+            secret = os.environ.get("NOEMA_SOLANA_SIGNER_SECRET")
+            if secret:
+                child_env["NOEMA_SOLANA_SIGNER_SECRET"] = secret
+            jupiter_key = os.environ.get("NOEMA_JUPITER_API_KEY")
+            if jupiter_key:
+                child_env["NOEMA_JUPITER_API_KEY"] = jupiter_key
+        elif operation == "evm_aggregator_swap":
+            for name in _EVM_SWAP_CHILD_ENV:
+                if name in os.environ:
+                    child_env[name] = os.environ[name]
+            for name, value in os.environ.items():
+                if name.startswith("NOEMA_EVM_RPC_URL"):
+                    child_env[name] = value
+            secret = os.environ.get("NOEMA_EVM_SIGNER_SECRET")
+            if secret:
+                child_env["NOEMA_EVM_SIGNER_SECRET"] = secret
+            kyber_key = os.environ.get("NOEMA_KYBERSWAP_API_KEY")
+            if kyber_key:
+                child_env["NOEMA_KYBERSWAP_API_KEY"] = kyber_key
         try:
             result = subprocess.run(
                 [self.python_executable, "-m", "noema.wallet_signer_process"],
@@ -165,7 +272,7 @@ class LocalSolanaWalletSigner:
                 text=True,
                 capture_output=True,
                 env=child_env,
-                timeout=45,
+                timeout=90 if operation in {"solana_jupiter_swap", "evm_aggregator_swap"} else 45,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -221,6 +328,29 @@ class LocalEvmWalletSigner:
             or default_url
         )
         return chain_id, endpoint, name
+
+    def evm_swap_sync(
+        self, *, chain: str, side: str, token: str, amount: int, max_slippage_bps: int,
+        min_out: int, idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Ask the child to swap native gas for one ERC-20. The secret is not in this payload."""
+        payload = {
+            "operation": "evm_aggregator_swap",
+            "chain": chain,
+            "side": side,
+            "token": token,
+            "amount": amount,
+            "max_slippage_bps": max_slippage_bps,
+            "min_out": min_out,
+            "idempotency_key": idempotency_key,
+        }
+        unexpected = set(payload) - {"operation", *_EVM_SWAP_FIELDS}
+        if unexpected:
+            raise RuntimeError("swap request is invalid")
+        return LocalSolanaWalletSigner._run_sync(self, payload)
+
+    async def evm_swap(self, **kwargs: Any) -> dict[str, Any]:
+        return await asyncio.to_thread(self.evm_swap_sync, **kwargs)
 
     async def inspect(self) -> dict[str, Any]:
         return await self._run({"operation": "evm_inspect"})

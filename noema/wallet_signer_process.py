@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -43,6 +44,110 @@ def _rpc(client: httpx.Client, endpoint: str, method: str, params: list[Any]) ->
     if "result" not in body:
         raise RuntimeError("Solana RPC response was incomplete")
     return body["result"]
+
+
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58decode(text: str) -> bytes:
+    number = 0
+    for character in text:
+        number = number * 58 + _B58_ALPHABET.index(character)
+    body = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
+    pad = 0
+    for character in text:
+        if character != "1":
+            break
+        pad += 1
+    return b"\x00" * pad + body
+
+
+def load_solana_keypair_from_env() -> Any:
+    """Load NOEMA_SOLANA_SIGNER_SECRET inside this process only.
+
+    Accepts a Phantom-style base58 secret or a JSON byte array (64-byte keypair
+    or 32-byte seed). The secret is never included in an exception or return value.
+    """
+    raw = os.environ.get("NOEMA_SOLANA_SIGNER_SECRET", "").strip()
+    if not raw:
+        raise RuntimeError("solana signer secret is not configured")
+    try:
+        from solders.keypair import Keypair
+
+        if raw.startswith("["):
+            data = json.loads(raw)
+            if (not isinstance(data, list) or not data
+                    or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 or item > 255
+                           for item in data)):
+                raise ValueError
+            blob = bytes(data)
+            if len(blob) == 64:
+                return Keypair.from_bytes(blob)
+            if len(blob) == 32:
+                return Keypair.from_seed(blob)
+            raise ValueError
+        try:
+            return Keypair.from_base58_string(raw)
+        except ValueError:
+            decoded = _b58decode(raw)
+            if len(decoded) == 64:
+                return Keypair.from_bytes(decoded)
+            if len(decoded) == 32:
+                return Keypair.from_seed(decoded)
+            raise ValueError
+    except (ValueError, TypeError):
+        raise RuntimeError("solana signer secret is not a valid keypair") from None
+
+
+def load_evm_account_from_env() -> Any:
+    """Load NOEMA_EVM_SIGNER_SECRET inside this process only.
+
+    Accepts a 32-byte hex private key (optional 0x prefix) or a JSON byte array.
+    The secret is never included in an exception or return value.
+    """
+    raw = os.environ.get("NOEMA_EVM_SIGNER_SECRET", "").strip()
+    if not raw:
+        raise RuntimeError("evm signer secret is not configured")
+    try:
+        from eth_account import Account
+
+        if raw.startswith("["):
+            data = json.loads(raw)
+            if (not isinstance(data, list) or len(data) != 32
+                    or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 or item > 255
+                           for item in data)):
+                raise ValueError
+            blob = bytes(data)
+        else:
+            text = raw[2:] if raw[:2].lower() == "0x" else raw
+            if len(text) != 64:
+                raise ValueError
+            blob = bytes.fromhex(text)
+        return Account.from_key(blob)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raise RuntimeError("evm signer secret is not a valid private key") from None
+
+
+def execute_evm_swap(request: dict[str, Any]) -> dict[str, Any]:
+    """Sign and submit one allowlisted EVM aggregator swap.
+
+    The IPC body is not a transaction. Caps, the wallet, and the RPC endpoint
+    are read from this process environment.
+    """
+    from .evm_swap import perform_evm_swap
+
+    return perform_evm_swap(request, load_evm_account_from_env())
+
+
+def execute_jupiter_swap(request: dict[str, Any]) -> dict[str, Any]:
+    """Sign and submit one allowlisted Jupiter SOL<->SPL swap.
+
+    The IPC body is not a transaction. Caps, the wallet, and the RPC endpoint
+    are read from this process environment.
+    """
+    from .solana_swap import perform_jupiter_swap
+
+    return perform_jupiter_swap(request, load_solana_keypair_from_env())
 
 
 def _public_keypair() -> Any:
@@ -753,6 +858,10 @@ def main() -> int:
             result = sign_dry_run_solana_transfer(request)
         elif operation == "execute_native_transfer":
             result = execute_native_transfer(request)
+        elif operation == "solana_jupiter_swap":
+            result = execute_jupiter_swap(request)
+        elif operation == "evm_aggregator_swap":
+            result = execute_evm_swap(request)
         else:
             raise RuntimeError("unsupported signer operation")
         sys.stdout.write(json.dumps(result, separators=(",", ":")))
@@ -819,6 +928,65 @@ def main() -> int:
             "broadcast transaction confirmation timed out",
             "broadcast transaction returned no signature",
             "canonical wallet authority gate is not wired",
+            "solana signer secret is not configured",
+            "solana signer secret is not a valid keypair",
+            "configured solana wallet does not match signer keypair",
+            "solana live swaps are disabled",
+            "solana owner review is required",
+            "owner master halt is active",
+            "solana master halt is active",
+            "wallet master halt is active",
+            "solana venue is not allowlisted",
+            "swap request is invalid",
+            "swap side is not allowed",
+            "mint is not a valid token address",
+            "mint is denylisted",
+            "mint retains freeze authority",
+            "mint retains mint authority",
+            "token program is not an allowed SPL token",
+            "token extension is not allowed",
+            "slippage exceeds signer maximum",
+            "minimum output is invalid",
+            "quote is below minimum output",
+            "quote does not match the requested swap",
+            "jupiter quote failed",
+            "jupiter swap build failed",
+            "jupiter api endpoint is not configured",
+            "per-trade cap exceeded",
+            "daily cap exceeded",
+            "swap caps are not configured",
+            "autonomy level does not permit live swaps",
+            "solana price is not configured",
+            "solana reserve would be breached",
+            "swap transaction fee payer is not the signer",
+            "swap transaction requires an unexpected signer",
+            "priority fee exceeds signer maximum",
+            "idempotency key is invalid",
+            "prior swap outcome is unknown; not retrying with a new transaction",
+            "broadcast transaction identity mismatch",
+            "swap fill could not be reconciled",
+            "signer limit configuration is invalid",
+            "evm signer secret is not configured",
+            "evm signer secret is not a valid private key",
+            "configured evm wallet does not match signer",
+            "evm live swaps are disabled",
+            "evm owner review is required",
+            "evm master halt is active",
+            "evm venue is not allowlisted",
+            "evm chain is not configured",
+            "EVM RPC endpoint is not configured",
+            "EVM RPC response was incomplete",
+            "token is not allowlisted",
+            "token is denylisted",
+            "token contract is invalid",
+            "token allowance is insufficient",
+            "aggregator quote failed",
+            "aggregator swap build failed",
+            "aggregator api endpoint is not configured",
+            "swap router is not allowlisted",
+            "evm native price is not configured",
+            "evm reserve would be breached",
+            "evm fee exceeds signer maximum",
         }
         if message not in safe_messages:
             message = "signer operation failed"
