@@ -95,7 +95,7 @@ def autonomy_status(conn: sqlite3.Connection) -> dict[str, Any]:
     days = 0
     if first:
         try:
-            start = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+            start = datetime.fromisoformat(str(first))
             if start.tzinfo is None:
                 start = start.replace(tzinfo=UTC)
             days = max(0, (datetime.now(UTC) - start).days)

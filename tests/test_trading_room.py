@@ -76,7 +76,6 @@ def test_command_center_empty_db_is_explicit(tmp_path):
 
 
 def test_command_center_real_tables(tmp_path):
-    import sqlite3
     from noema.command_center import build_command_center
     db = tmp_path / "x.db"
     c = sqlite3.connect(db)
