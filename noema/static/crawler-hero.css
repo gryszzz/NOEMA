@@ -41,7 +41,7 @@
 /* the hero owns the whole centre-top panel */
 .center-top{display:flex!important;flex-direction:column}
 .center-top>#chain{flex:0 0 auto}
-/* full-size layout (any screen the laptop dock does not take): 4 columns so nothing is hidden */
+/* full-size layout (screens above laptop size): 4 columns so nothing is hidden */
 body:not(.v7-laptop) .app{grid-template-columns:minmax(260px,.85fr) minmax(0,2.3fr) minmax(300px,1fr) minmax(300px,1fr)!important;
  grid-template-rows:44px 24px 30px minmax(0,1.9fr) minmax(0,1fr) minmax(0,.8fr)!important}
 body:not(.v7-laptop) .app>header,body:not(.v7-laptop) #v7-tape,body:not(.v7-laptop) #v7-pulse{grid-column:1/-1!important}

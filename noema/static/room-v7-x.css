@@ -33,17 +33,17 @@
 #xe7 .bl{animation:xe7b 2.2s ease-in-out infinite}@keyframes xe7b{0%,100%{opacity:.5}50%{opacity:1}}
 #xe7 .lb{font-size:9.5px;overflow:hidden}#xe7 .lb div{display:flex;justify-content:space-between;gap:4px;white-space:nowrap}
 #xe7 .lb h5,#xe7 .sd h5{margin:0;font-size:9px;letter-spacing:2px;color:var(--m);font-weight:400}
-/* laptop dock tab 2: the pane is tall, so cards stack in a vertical feed with a wider side column */
-body.v7-laptop #v7-dock .xw{height:100%}
-body.v7-laptop #v7-dock #xe7{overflow-y:auto}
-body.v7-laptop #v7-dock #xe7 .al{flex-direction:column;min-height:0}
-body.v7-laptop #v7-dock #xe7 .al .a{max-width:100%}
-body.v7-laptop #v7-dock #xe7 .bd{display:flex;flex-direction:column-reverse}
-body.v7-laptop #v7-dock #xe7 .sd{display:grid;grid-template-columns:150px minmax(0,1fr);gap:6px;overflow:visible}
-body.v7-laptop #v7-dock #xe7 .sd h5:first-child{display:none}
-body.v7-laptop #v7-dock #xe7 .st{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow:visible;align-content:start}
-body.v7-laptop #v7-dock #xe7 .rd{height:150px}
-body.v7-laptop #v7-dock #xe7 .tx{-webkit-line-clamp:5}
-body.v7-laptop #v7-dock #xe7,body.v7-laptop #v7-dock #xe7 .bd,body.v7-laptop #v7-dock #xe7 .st,body.v7-laptop #v7-dock #xe7 .sd{flex:none;min-height:auto;height:auto}
-body.v7-laptop #v7-dock #xe7 .pc{min-height:104px;flex:none}
-body.v7-laptop #v7-dock .xw{overflow-y:auto}
+/* one-page laptop layout: the X wire gets its own tile, so cards stack in a vertical feed with a wider side column */
+body.v7-one #ch-wires .xw{height:auto}
+body.v7-one #ch-wires #xe7{overflow-y:auto}
+body.v7-one #ch-wires #xe7 .al{flex-direction:column;min-height:0}
+body.v7-one #ch-wires #xe7 .al .a{max-width:100%}
+body.v7-one #ch-wires #xe7 .bd{display:flex;flex-direction:column-reverse}
+body.v7-one #ch-wires #xe7 .sd{display:grid;grid-template-columns:150px minmax(0,1fr);gap:6px;overflow:visible}
+body.v7-one #ch-wires #xe7 .sd h5:first-child{display:none}
+body.v7-one #ch-wires #xe7 .st{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow:visible;align-content:start}
+body.v7-one #ch-wires #xe7 .rd{height:150px}
+body.v7-one #ch-wires #xe7 .tx{-webkit-line-clamp:5}
+body.v7-one #ch-wires #xe7,body.v7-laptop #v7-dock #xe7 .bd,body.v7-laptop #v7-dock #xe7 .st,body.v7-laptop #v7-dock #xe7 .sd{flex:none;min-height:auto;height:auto}
+body.v7-one #ch-wires #xe7 .pc{min-height:104px;flex:none}
+body.v7-laptop #ch-wires .xw{overflow-y:auto}

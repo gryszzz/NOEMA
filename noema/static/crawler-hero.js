@@ -35,9 +35,10 @@ function scaffold(){const top=q(".center-top");if(!top||byId("ch"))return!!byId(
  <div class="ch-srcs" id="ch-srcs"></div></div>`;
  (h2||top.firstChild).insertAdjacentHTML(h2?"afterend":"beforebegin",html);return true}
 function wires(){const app=q(".app");if(!app)return;let w=byId("ch-wires");if(!w){app.insertAdjacentHTML("beforeend",'<div id="ch-wires"></div>');w=byId("ch-wires")}
- const sp=byId("strat-pnl");if(document.body.classList.contains("v7-laptop")){const pane=q('#v7-dock .v7-pane[data-i="2"]');if(sp&&pane&&sp.parentElement!==pane)pane.appendChild(sp);return}
- if(sp&&sp.parentElement!==w)w.appendChild(sp);for(const s of [".wire",".xw"]){const el=q(s);if(el&&!el.closest("#v7-dock")&&el.parentElement!==w)w.appendChild(el)}
- const hp=byId("health")&&byId("health").closest(".pnl");if(hp&&!hp.closest("#v7-dock")&&hp.parentElement!==w)w.appendChild(hp)}
+ /* one page everywhere: news, X wire, strategies and health always live in #ch-wires (no tabs) */
+ for(const s of [".wire",".xw"]){const el=q(s);if(el&&el.parentElement!==w)w.appendChild(el)}
+ const sp=byId("strat-pnl");if(sp&&sp.parentElement!==w)w.appendChild(sp);
+ const hp=byId("health")&&byId("health").closest(".pnl");if(hp&&hp.parentElement!==w)w.appendChild(hp)}
 function adoptScan(){const s=byId("v7-scan"),st=byId("ch-stage");if(s&&st&&s.parentElement!==st)st.appendChild(s)}
 function counters(d,now){const c=(d.crawl||{}).counters||{},f=d.funnel||{},lt=f.latest||{},st=H.state(d,now);
  const cell=(k,v,t)=>`<div title="${E(t)}"><span>${k}</span><b>${E(v??"—")}</b></div>`;
@@ -59,7 +60,11 @@ function feed(d,now){const hits=((d.crawl||{}).hits)||[],rows=byId("ch-rows");if
  rows.querySelectorAll(".ch-r").forEach(r=>{const t=ts(r.dataset.at);r.firstElementChild.textContent=t?ago(now-t):""});
  if(H.blips.length>200)H.blips.splice(0,H.blips.length-200);
  byId("ch-fh").textContent=fresh.length&&H.booted?`+${fresh.length} new`:`${hits.length} recorded fetches · newest first`}
-function sources(d,now){const hits=((d.crawl||{}).hits)||[],by={};for(const h of hits){const k=H.kindOf(h);if(!by[k])by[k]=h}
+/* source light for a fetch: venue/provider name wins over the kind (DexScreener boosts are "culture" fetches) */
+H.lightOf=h=>{const s=(String(h.source||"")+" "+String(h.url||"")).toLowerCase();if(h.kind==="x")return"x";
+ if(h.kind==="pumpfun"||/pump\.?fun/.test(s))return"pumpfun";if(/dexscreener/.test(s))return"dexscreener";if(/geckoterminal/.test(s))return"geckoterminal";return H.kindOf(h)};
+H.latestBy=c=>{const by=Object.assign({},(c&&c.latest)||{});for(const h of (c&&c.hits)||[]){const k=H.lightOf(h);if(!by[k]||ts(h.at)>ts(by[k].at))by[k]=h}return by};
+function sources(d,now){const by=H.latestBy(d.crawl||{});
  const order=["news","x","culture","dexscreener","geckoterminal","pumpfun","kalshi","polymarket","rpc"];
  const lab={news:"NEWS",x:"X",culture:"CULTURE",dexscreener:"DEXSCREENER",geckoterminal:"GECKOTERMINAL",pumpfun:"PUMP.FUN",kalshi:"KALSHI",polymarket:"POLYMARKET",rpc:"DATA APIs"};
  byId("ch-srcs").innerHTML=order.map(k=>{const h=by[k],t=h&&ts(h.at),fresh=t&&now-t<10*60e3;

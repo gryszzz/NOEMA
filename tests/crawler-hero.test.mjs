@@ -36,3 +36,11 @@ test('sources map to venue lanes', () => {
   assert.equal(H.kindOf({ kind: 'pool', source: 'geckoterminal · BONK' }), 'geckoterminal');
   assert.equal(H.kindOf({ kind: 'news', source: 'bbc' }), 'news');
 });
+
+test('source lights use the newest fetch per provider, including DexScreener culture pulls and X', () => {
+  const by = H.latestBy({ latest: { x: { at: '2026-10-21T19:40:00Z', source: 'X read' } },
+    hits: [{ at: '2026-10-21T20:05:00Z', kind: 'culture', source: 'dexscreener_boosts_top' },
+      { at: '2026-10-21T20:06:00Z', kind: 'pool', source: 'geckoterminal · BONK' }] });
+  assert.equal(Object.keys(by).sort().join(','), 'dexscreener,geckoterminal,x');
+  assert.equal(H.lightOf({ kind: 'rpc', source: 'dexscreener_market' }), 'dexscreener');
+});

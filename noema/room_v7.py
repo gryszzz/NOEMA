@@ -315,6 +315,38 @@ def _host(url: str) -> str:
     return u.split("://", 1)[-1].split("/", 1)[0]
 
 
+LIGHTS = ("news", "x", "culture", "dexscreener", "geckoterminal", "pumpfun", "kalshi", "polymarket", "rpc")
+
+
+def light_of(h: dict[str, Any]) -> str:
+    """Which source light a recorded fetch belongs to (venue/provider names win over the kind)."""
+    s = f"{h.get('source') or ''} {h.get('url') or ''}".lower()
+    kind = h.get("kind")
+    if kind == "x":
+        return "x"
+    if kind == "pumpfun" or "pump.fun" in s or "pumpfun" in s:
+        return "pumpfun"
+    if "dexscreener" in s:
+        return "dexscreener"
+    if "geckoterminal" in s:
+        return "geckoterminal"
+    if kind == "prediction" and "kalshi" in s:
+        return "kalshi"
+    if kind == "prediction" and "polymarket" in s:
+        return "polymarket"
+    return str(kind)
+
+
+def _latest_by_light(hits: list[dict[str, Any]]) -> dict[str, Any]:
+    """Newest recorded fetch per source light over ALL hits, not just the truncated feed list."""
+    out: dict[str, Any] = {}
+    for h in hits:  # already newest first
+        k = light_of(h)
+        if k in LIGHTS and k not in out:
+            out[k] = {"at": h["at"], "source": h["source"], "url": h["url"], "status": h["status"]}
+    return out
+
+
 def crawl_feed(conn: sqlite3.Connection, fun: dict[str, Any] | None = None, limit: int = 60) -> dict[str, Any]:
     """Every real fetch the crawlers recorded, newest first, plus counters and next-due times.
 
@@ -379,7 +411,7 @@ def crawl_feed(conn: sqlite3.Connection, fun: dict[str, Any] | None = None, limi
     xl = _rows(conn, "SELECT MAX(at) FROM x_ingest_runs")
     if xl and xl[0][0]:
         nxt["x"] = (datetime.fromisoformat(_iso(xl[0][0])) + timedelta(minutes=30)).isoformat()
-    return {"hits": hits[:limit],
+    return {"hits": hits[:limit], "latest": _latest_by_light(hits),
             "counters": {"fetches_1h": sum(1 for h in hits if h["at"] >= hour),
                          "sources": len({h["source"] for h in hits if h["kind"] != "pool"}),
                          "sweeps_24h": sweeps_24h[0][0] if sweeps_24h else 0,
