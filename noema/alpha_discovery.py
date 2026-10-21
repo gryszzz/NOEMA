@@ -108,6 +108,17 @@ class Candidate:
     liquidity_growth: float = 0.0
     screens: dict[str, dict[str, Any]] = field(default_factory=dict)
     score: float = 0.0
+    volume_h1: float | None = None
+    buys_h24: int = 0
+    sells_h24: int = 0
+    catalyst: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def has_catalyst(self) -> bool:
+        """Safety screens make a coin *tradeable*; only a real catalyst makes it a buy."""
+        if os.getenv("NOEMA_ALPHA_CATALYST_GATE", "1") == "0":
+            return True
+        return bool(self.catalyst) and all(s["pass"] for s in self.catalyst.values())
 
     @property
     def passed(self) -> bool:
@@ -141,6 +152,9 @@ def apply_pair(c: Candidate, pairs: list[dict[str, Any]], now: datetime) -> None
     c.h1, c.h6, c.h24 = _f(pc.get("h1")), _f(pc.get("h6")), _f(pc.get("h24"))
     tx = (best.get("txns") or {}).get("h1") or {}
     c.buys_h1, c.sells_h1 = int(_f(tx.get("buys")) or 0), int(_f(tx.get("sells")) or 0)
+    tx24 = (best.get("txns") or {}).get("h24") or {}
+    c.buys_h24, c.sells_h24 = int(_f(tx24.get("buys")) or 0), int(_f(tx24.get("sells")) or 0)
+    c.volume_h1 = _f((best.get("volume") or {}).get("h1"))
     created = _f(best.get("pairCreatedAt"))
     if created:
         c.age_hours = max(0.0, (now.timestamp() - created / 1000) / 3600)
@@ -416,7 +430,8 @@ def enter(conn: sqlite3.Connection, c: Candidate, book: dict[str, Any], now: dat
     conn.execute("INSERT INTO alpha_positions (chain, address, symbol, cap_class, opened_at, entry_price, qty, "
                  "cost_usd, peak_price, last_price, score, exits_json, forecast_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (c.chain, c.address, c.symbol, c.cap_class, now.isoformat(), fill_price, qty, notional, fill_price,
-                  c.price, c.score, json.dumps(EXITS.as_dict()), fid))
+                  c.price, c.score, json.dumps({**EXITS.as_dict(), "gate": "catalyst_v1", "entry_cost_usd": notional,
+                              "catalyst": c.catalyst}, default=str), fid))
     conn.execute("UPDATE alpha_book SET cash_usd=cash_usd-? WHERE id=1", (notional,))
     book["cash_usd"] -= notional
     _event(conn, now, "paper_entry", symbol=c.symbol, address=c.address, chain=c.chain, notional_usd=notional,
@@ -474,22 +489,31 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
                            ).fetchone()
         c.liquidity_growth = (c.liquidity / old[0] - 1) if old and old[0] else 0.0
         c.screens = market_screens(c, lim)
+        report = None
         if all(s["pass"] for s in c.screens.values()):  # only spend safety-API calls on liquid tokens
             if c.chain == "solana":
-                c.screens.update(solana_screens(
-                    client.get_json(f"https://api.rugcheck.xyz/v1/tokens/{c.address}/report"), lim))
+                report = client.get_json(f"https://api.rugcheck.xyz/v1/tokens/{c.address}/report")
+                c.screens.update(solana_screens(report, lim))
             else:
                 data = client.get_json(f"https://api.gopluslabs.io/api/v1/token_security/{GOPLUS_CHAINS[c.chain]}"
                                        f"?contract_addresses={c.address}")
                 res = ((data or {}).get("result") or {}) if isinstance(data, dict) else {}
                 c.screens.update(evm_screens(res.get(c.address.lower()) or next(iter(res.values()), None), lim))
         c.score = rank_score(c)
+        safe = c.passed
+        if safe:
+            from .edge_strategies import catalyst_screen
+
+            c.catalyst = catalyst_screen(c, conn, now, report if isinstance(report, dict) else None)
         conn.execute(
             "INSERT OR REPLACE INTO alpha_candidates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (c.chain, c.address, c.symbol, now.isoformat(), int(c.passed), c.score, c.cap_class, c.price, c.liquidity,
              c.volume_24h, c.mcap, c.age_hours, c.h1, c.h6, c.h24, c.buzz_velocity, c.liquidity_growth,
-             json.dumps(c.screens, default=str)))
-        if c.passed:
+             json.dumps({**c.screens, **({"catalyst_gate": {
+                 "pass": c.has_catalyst, "value": {k: v["pass"] for k, v in c.catalyst.items()},
+                 "rule": "entry needs: no wash/bundle, healthy flow, volume accel, >=2 catalysts"}}
+                 if c.catalyst else {})}, default=str)))
+        if safe:
             conn.execute("INSERT OR IGNORE INTO alpha_allowlist (chain, address, symbol, added_at, screens_json) "
                          "VALUES (?,?,?,?,?)", (c.chain, c.address, c.symbol, now.isoformat(),
                                                 json.dumps(c.screens, default=str)))
@@ -501,7 +525,8 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
     book = mark_book(conn, now)
     entries = []
     held = {r[0] for r in conn.execute("SELECT address FROM alpha_positions WHERE status='open'")}
-    for c in sorted((c for c in cands if c.passed and c.address not in held and c.score > 0.1),
+    # Safety screens only make a token tradeable; an entry also needs a real catalyst.
+    for c in sorted((c for c in cands if c.passed and c.has_catalyst and c.address not in held and c.score > 0.1),
                     key=lambda c: c.score, reverse=True)[:max_new]:
         n = enter(conn, c, book, now)
         if n:

@@ -143,9 +143,11 @@ def test_run_cycle_paper_entry_ledger_and_allowlist():
     conn = _conn()
     conn.execute("INSERT INTO culture_signals (kind, entity, chain, buzz_velocity, score, updated_at) "
                  "VALUES ('token', ?, 'solana', 1.5, 2, ?)", (f"solana:{MINT}", NOW.isoformat()))
-    pair = {"baseToken": {"address": MINT, "symbol": "MOON"}, "priceUsd": "0.01", "liquidity": {"usd": 200000},
-            "volume": {"h24": 900000}, "marketCap": 3e6, "priceChange": {"h1": 12, "h6": 30, "h24": 40},
-            "txns": {"h1": {"buys": 300, "sells": 100}}, "pairCreatedAt": (NOW - timedelta(days=2)).timestamp() * 1000}
+    # Established token on a second leg with accelerating volume and rising buyers (catalyst gate).
+    pair = {"baseToken": {"address": MINT, "symbol": "MOON"}, "priceUsd": "0.01", "liquidity": {"usd": 600000},
+            "volume": {"h24": 900000, "h1": 90000}, "marketCap": 3e6, "priceChange": {"h1": 12, "h6": 30, "h24": 40},
+            "txns": {"h1": {"buys": 300, "sells": 100}, "h24": {"buys": 2400, "sells": 1900}},
+            "pairCreatedAt": (NOW - timedelta(days=4)).timestamp() * 1000}
 
     class Fake:
         def get_json(self, url):
@@ -172,3 +174,22 @@ def test_room_v6_surfaces_culture_and_alpha(tmp_path):
     conn.close()
     out = build_room_v6(str(db), fetch=False)
     assert out["culture"]["blocked"] and out["alpha"]["live_supported"] is False
+
+
+def test_safe_but_no_catalyst_is_not_a_buy():
+    """A coin that passes every rug screen is tradeable, not a buy: fresh launch, flat volume -> no entry."""
+    conn = _conn()
+    conn.execute("INSERT INTO culture_signals (kind, entity, chain, buzz_velocity, score, updated_at) "
+                 "VALUES ('token', ?, 'solana', 1.5, 2, ?)", (f"solana:{MINT}", NOW.isoformat()))
+    pair = {"baseToken": {"address": MINT, "symbol": "MOON"}, "priceUsd": "0.01", "liquidity": {"usd": 200000},
+            "volume": {"h24": 900000, "h1": 30000}, "marketCap": 3e6, "priceChange": {"h1": 12, "h6": 30, "h24": 40},
+            "txns": {"h1": {"buys": 300, "sells": 100}, "h24": {"buys": 7000, "sells": 6000}},
+            "pairCreatedAt": (NOW - timedelta(days=2)).timestamp() * 1000}
+
+    class Fake:
+        def get_json(self, url):
+            return [pair] if "dexscreener" in url else _rug() if "rugcheck" in url else None
+    res = ad.run_cycle(conn, Fake(), now=NOW)
+    assert res["passed"] == 1 and res["entries"] == []
+    screens = json.loads(conn.execute("SELECT screens_json FROM alpha_candidates").fetchone()[0])
+    assert screens["catalyst_gate"]["pass"] is False
