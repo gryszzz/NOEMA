@@ -25,6 +25,7 @@ from .openai_config import OpenAIConfig
 from .opportunity_radar import RadarRow
 from .provenance import EvidenceStore
 from .research_queue import ResearchQueueStore
+from .x_signal import attach_x_context, x_context_for_market
 
 
 async def maybe_run_cognition(
@@ -108,11 +109,13 @@ async def maybe_run_cognition(
         # Matched news is appended as clearly-labelled untrusted quotes to every request body
         # this client builds (cost estimate and the real call alike).
         news = news_context_for_market(db_path, getattr(target, "venue", None), target.market_id)
-        if news:
+        xctx = x_context_for_market(db_path, getattr(target, "venue", None), target.market_id)
+        if news or xctx:
             base_body = client.request_body
 
-            def _with_news(row, *, evidence_context, _base=base_body, _news=news):
-                return attach_news_context(_base(row, evidence_context=evidence_context), _news)
+            def _with_news(row, *, evidence_context, _base=base_body, _news=news, _x=xctx):
+                body = attach_news_context(_base(row, evidence_context=evidence_context), _news)
+                return attach_x_context(body, _x)
 
             client.request_body = _with_news
         body = client.request_body(target, evidence_context=context)
