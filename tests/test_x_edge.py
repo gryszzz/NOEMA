@@ -222,6 +222,12 @@ def test_push_to_alpha_withholds_shilled(tmp_path):
     assert xe.push_to_alpha(c, NOW) == 1
     assert c.execute("SELECT entity, sources FROM culture_signals").fetchall() == [
         ("solana:CleanMint1111111111111111111111111111", "x")]
+    # later flagged as shilled -> our own X row is withdrawn from the alpha screens
+    c.execute("INSERT INTO x_shill_warnings (entity, kind, score, reasons) VALUES (?,?,?,?)",
+              ("solana:CleanMint1111111111111111111111111111", "contract", 0.7, "[]"))
+    xe.push_to_alpha(c, NOW)
+    assert c.execute("SELECT COUNT(*) FROM culture_signals").fetchone()[0] == 0
+    assert c.execute("SELECT pushed FROM x_contracts WHERE address LIKE 'Clean%'").fetchone()[0] == -1
 
 
 def test_contrarian_fades_one_sided_crowd(tmp_path):

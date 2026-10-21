@@ -432,7 +432,9 @@ def zscore(series: list[float], *, baseline: int = 48) -> tuple[float, float, fl
     return round((cur - mu) / sd, 2), cur, round(mu, 2)
 
 
-_ENTITY_STOP = {"the", "this", "that", "breaking", "just", "new", "today", "here", "why", "what", "rt", "join",
+_ENTITY_STOP = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+                "november", "december", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                "president", "breaking news", "the", "this", "that", "breaking", "just", "new", "today", "here", "why", "what", "rt", "join",
                 "claim", "make", "check", "don't", "dont", "big", "one", "how", "who", "now", "and", "but", "for"}
 _CASHTAG = re.compile(r"\$[A-Za-z][A-Za-z0-9]{1,9}\b")
 _QUERY_TERMS = {"solana", "bitcoin", "ethereum", "fed", "fomc", "powell", "trump", "senate", "congress", "polymarket",
@@ -512,8 +514,9 @@ def price_burst(conn: sqlite3.Connection, b: dict[str, Any], now: datetime, pric
     if len(needle) >= 3:
         for venue, mid, title in conn.execute(
                 "SELECT l.venue, l.market_id, MAX(l.title) FROM x_market_links l JOIN x_posts p USING (post_id) "
-                "WHERE p.created_at>=? AND p.text LIKE ? AND l.venue!='token' GROUP BY 1, 2 ORDER BY COUNT(*) DESC "
-                "LIMIT 3", ((now - timedelta(hours=6)).isoformat(), f"%{needle}%")).fetchall():
+                "WHERE p.created_at>=? AND p.text LIKE ? AND l.title LIKE ? AND l.venue!='token' GROUP BY 1, 2 "
+                "ORDER BY COUNT(*) DESC LIMIT 3",
+                ((now - timedelta(hours=6)).isoformat(), f"%{needle}%", f"%{needle}%")).fetchall():
             if (venue, mid) not in {(v, m) for v, m, _ in targets}:
                 targets.append((venue, mid, title))
     out = []
@@ -962,14 +965,21 @@ def check_contracts(conn: sqlite3.Connection, now: datetime, *, fetch: bool = Tr
 
 
 def push_to_alpha(conn: sqlite3.Connection, now: datetime) -> int:
-    """Hand clean X contract mentions (>=2 authors) to the alpha screens. Shilled / dumped ones are withheld."""
+    """Hand clean X contract mentions (>=2 authors) to the alpha screens. Shilled / dumped ones are withheld,
+    and an X-sourced row we pushed earlier is withdrawn if the contract is later flagged."""
     if not _has(conn, "culture_signals"):
         return 0
+    for chain, addr in conn.execute("SELECT chain, address FROM x_contracts WHERE pushed=1 AND (shill_score>=0.5 OR "
+                                    "verdict='early_buyers_dumped_into_hype' OR (chain||':'||address) IN "
+                                    "(SELECT entity FROM x_shill_warnings WHERE score>=0.5))").fetchall():
+        ch = "solana" if chain == "solana" else "base"
+        conn.execute("DELETE FROM culture_signals WHERE kind='token' AND entity=? AND sources='x'", (f"{ch}:{addr}",))
+        conn.execute("UPDATE x_contracts SET pushed=-1 WHERE chain=? AND address=?", (chain, addr))
     n = 0
     for chain, addr, sym, first_at, mentions, authors, shill, verdict in conn.execute(
             "SELECT chain, address, symbol, first_at, mentions, authors, shill_score, verdict FROM x_contracts "
             "WHERE pushed=0 AND authors>=2 AND verdict IS NOT NULL").fetchall():
-        if (shill or 0) >= 0.5 or verdict in ("early_buyers_dumped_into_hype", "no_pool_found"):
+        if (shill or 0) >= 0.3 or verdict in ("early_buyers_dumped_into_hype", "no_pool_found"):
             continue
         ch = "solana" if chain == "solana" else "base"
         try:
@@ -1243,7 +1253,7 @@ def x_signal_board(db_path: str, *, now: datetime | None = None) -> dict[str, An
         q = conn.execute
         h48 = (now - timedelta(hours=48)).isoformat()
         lb = q("SELECT author, n, hits, brier, skill, shrunk, early_share, posts, shill_rate, status FROM x_author_scores "
-               "WHERE n>0 OR status!='neutral' ORDER BY (status='promoted') DESC, (status='demoted') ASC, shrunk DESC, "
+               "WHERE status!='demoted' AND (n>0 OR status='promoted') ORDER BY (status='promoted') DESC, shrunk DESC, "
                "n DESC LIMIT 15").fetchall()
         demoted = q("SELECT author, posts, shill_rate FROM x_author_scores WHERE status='demoted' ORDER BY shill_rate DESC, "
                     "posts DESC LIMIT 8").fetchall()
@@ -1296,7 +1306,8 @@ def x_signal_board(db_path: str, *, now: datetime | None = None) -> dict[str, An
                    "signal": s, "contrarian": "fade"} for a, v, t, ti, n, m, o, s in cr],
         "contracts": [{"chain": c, "address": a, "symbol": s, "mentions": m, "authors": au, "kol_authors": k,
                        "shill_score": sh, "verdict": v, "dump": json.loads(d) if d else None, "price": p,
-                       "liquidity": lq, "sent_to_alpha": bool(pu)} for c, a, s, m, au, k, sh, v, d, p, lq, pu in ca],
+                       "liquidity": lq, "sent_to_alpha": pu == 1,
+                       "withdrawn_from_alpha": pu == -1} for c, a, s, m, au, k, sh, v, d, p, lq, pu in ca],
         "rotation": rotation, "agents": agents, "stance": dict(st),
     }
 
