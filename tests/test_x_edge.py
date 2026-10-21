@@ -149,8 +149,8 @@ def test_zscore_and_counts_burst_not_priced_in(tmp_path):
 
 def test_narratives_cluster_and_phase(tmp_path):
     c, _ = _db(tmp_path)
-    ai = ["AI agents tokens rally hard as $VIRTUAL leads agentic season", "agentic season: AI agents tokens and "
-          "$VIRTUAL outperform majors", "$VIRTUAL up again, AI agents tokens are the rotation trade",
+    ai = ["AI agents tokens rally hard as $VIRTUAL leads agentic season", "agentic season: AI agents tokens and $VIRTUAL "
+          "outperform majors", "$VIRTUAL up again, AI agents tokens are the rotation trade",
           "Funds rotating into AI agents tokens, $VIRTUAL volume record", "AI agents tokens season, $VIRTUAL breakout"]
     for i, t in enumerate(ai):
         _post(c, 400 + i, f"n{i}", t, age_h=1 + i * 0.3, topic="crypto", link=None)
