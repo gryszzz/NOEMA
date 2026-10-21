@@ -1088,6 +1088,14 @@ async def x_signal_api() -> dict[str, Any]:
     return await asyncio.to_thread(x_signal_board, _db_path())
 
 
+@app.get("/api/strategies")
+async def strategies_api() -> dict[str, Any]:
+    """Read-only structural-edge strategy book (paper): per-strategy P&L, n, EV, backtest verdict,
+    allocator weight/status and recent signals. UI module: /static/strategies-panel.js."""
+    from .edge_strategies import strategies_board
+    return await asyncio.to_thread(strategies_board, _db_path())
+
+
 _TEV_BRAND = Path(__file__).with_name("static") / "brand" / "tev"
 
 
