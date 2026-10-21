@@ -110,9 +110,13 @@ The logo source is a single vector file: [`noema/static/brand/tev/tev-logo.svg`]
 
 `noema-news` (`noema/news_crawler.py`) is a free, read-only evidence crawler for the prediction-market agents:
 
-- **Sources:** public RSS/Atom (BBC, NPR, Federal Reserve, BEA, SEC press releases, CourtListener SCOTUS), National Weather Service severe alerts, Google News RSS queries and the GDELT doc API.
-- **Polite:** outbound HTTPS only, per-host spacing, `robots.txt` respected, conditional GET caching.
-- **Matching:** deterministic keyword/IDF scoring against watched Kalshi and Polymarket markets — no model spend.
+- **Primary sources (often what *resolves* a market):** Federal Reserve, SEC, White House, Federal Register (presidential documents + significant rules, plus targeted search), GovInfo bills and public laws, Congress.gov, DOJ, CDC, NOAA National Hurricane Center, ECB, Bank of England, CourtListener SCOTUS. FRED release calendar when `NOEMA_FRED_API_KEY` is set.
+- **Outlets (RSS their robots.txt allows):** BBC, NPR, Guardian, Al Jazeera, CNBC, Politico, The Hill, plus the GDELT doc API.
+- **Skipped because they block or have no free feed:** BEA RSS and Google News (robots.txt), BLS and SEC EDGAR (403), the Treasury press feed (404), NWS alerts (robots), and AP/Reuters (no free RSS).
+- **Market-targeted crawling:** each cycle picks the soonest-closing liquid non-sports markets (strike ladders collapsed), builds a query from names in the title/rules plus the resolving event, and searches GDELT and the Federal Register for it.
+- **Cadence:** a 5-minute loop. Every feed has its own interval (5 min for breaking/official feeds, up to 30 min for dockets) with exponential per-feed backoff. GDELT has a 30 s host spacing and a cooldown. Conditional GET caching.
+- **Dedupe and weighting:** canonical URLs (tracking params stripped) plus headline fingerprints catch syndicated copies. Evidence handed to agents is ranked by relevance × source reliability (primary 1.0, outlets 0.75–0.85, GDELT 0.6) × recency half-life by category.
+- **Matching:** deterministic entity overlap (with aliases such as Fed/FOMC/Powell) **plus resolution criteria**. When a market resolves on a specific event (a departure, meeting, candidacy, ruling, nomination…), the article must describe that event. Mention markets and party-label-only overlaps are never linked. No model spend.
 - **Safe by construction:** every crawled string is untrusted; it is cut to short snippets, instruction-like phrases are redacted, and it is only ever quoted as data. The crawler cannot place orders, call tools or change configuration.
 
 ## Trench desks (paper only)

@@ -133,9 +133,12 @@ def news_lane(db_path: str) -> dict[str, Any]:
             "status": "active" if hits.get("articles") else "no data",
             "articles": hits.get("articles", 0), "matched_articles": hits.get("matched_articles", 0),
             "markets_linked": hits.get("markets_linked", 0), "by_source": hits.get("by_source", {}),
+            "sources": hits.get("sources", []), "targets": hits.get("targets", []),
+            "sources_configured": len(FEEDS),
             "recent": [{"ts": h["published_at"], "title": h["headline"], "market_id": h["market"],
                         "url": h["url"], "source": h["source"], "venue": h["venue"],
-                        "relevance": h["relevance"], "category": h.get("category")}
+                        "relevance": h["relevance"], "category": h.get("category"),
+                        "reliability": h.get("reliability"), "weight": h.get("weight")}
                        for h in hits.get("hits", [])],
             "note": None if hits.get("articles") else "news crawler has not stored any articles yet"}
 
@@ -159,6 +162,32 @@ def _accuracy_rows(command_center: dict[str, Any]) -> list[dict[str, Any]] | Non
     return ledger_board if isinstance(ledger_board, list) else None
 
 
+def capital_panel(db_path: str) -> dict[str, Any]:
+    """Capital guard state plus the latest equity-feed reading. Read-only."""
+    from .capital_guard import CapitalGuard, daily_stop_fraction, max_equity_age
+    from .equity_feed import latest_reading
+
+    out: dict[str, Any] = {"guard": None, "feed": latest_reading(db_path)}
+    if not Path(db_path).exists():
+        return out
+    try:
+        state = CapitalGuard(db_path).state()
+    except sqlite3.Error:
+        state = None
+    if state is not None:
+        now = datetime.now(UTC)
+        day_start = state.day_start_equity if state.day == now.date().isoformat() else state.equity
+        out["guard"] = {
+            "equity_usd": str(state.equity), "peak_usd": str(state.peak_equity),
+            "floor_usd": str(state.floor), "day_start_usd": str(day_start),
+            "daily_stop_usd": str(day_start * (1 - daily_stop_fraction())),
+            "tripped": state.tripped, "trip_reason": state.trip_reason,
+            "updated_at": state.updated_at.isoformat(),
+            "fresh": now - state.updated_at <= max_equity_age(),
+        }
+    return out
+
+
 def build_room_v6(db_path: str, *, fetch: bool = True,
                   command_center: dict[str, Any] | None = None) -> dict[str, Any]:
     now = datetime.now(UTC)
@@ -174,6 +203,7 @@ def build_room_v6(db_path: str, *, fetch: bool = True,
     cc = command_center or {}
     out["accuracy_leaderboard"] = _accuracy_rows(cc)
     out["brier_by_model"] = (cc.get("ledger") or {}).get("brier")
+    out["capital"] = capital_panel(db_path)
     if Path(db_path).exists():
         conn = _ro(db_path)
         try:

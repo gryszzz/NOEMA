@@ -183,3 +183,71 @@ def test_crawl_skips_gdelt_during_cooldown(tmp_path, monkeypatch):
     pc = nc.PoliteClient(conn, httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
     stats = nc.crawl_once(db, client=pc)
     assert str(stats["fetched"]["GDELT"]).startswith("cooldown until")
+
+
+def test_resolution_criteria_required_for_specific_events():
+    idx = nc.MarketIndex([
+        ("pm", "wit", ("Steve Witkoff. This market will settle to Yes if Steve Witkoffs departure as Special "
+                       "Envoy to the Middle East is officially announced by December 31, 2026."), 1),
+        ("pm", "dt28", ("Donald Trump. This market will settle to Yes if Donald Trump announces they will run "
+                        "for President of the United States in the 2028 United States Presidential election."), 2),
+        ("k", "say", "What will Donald Trump say during the roundtable?. If Donald Trump says Tariff.", 3),
+    ])
+    assert idx.match("Russia releases U.S. citizen after request by envoy Steve Witkoff in Moscow talks") == []
+    hit = idx.match("Steve Witkoff to resign as Middle East envoy, White House officially announces departure")
+    assert [m["market_id"] for m in hit] == ["wit"] and "departure" in hit[0]["criteria"]
+    assert idx.match("President Donald Trump blames Ukraine as Republicans fear election losses") == []
+    assert idx.match("Donald Trump says Tariff at roundtable with President Trump") == []
+
+
+def test_aliases_canonical_url_and_headline_dedupe():
+    assert "@fed" in nc.entities("FOMC holds") and "@fed" in nc.entities("Powell speaks")
+    assert nc.canonical_url("https://X.com/a/?utm_source=rss&id=3#top") == "https://x.com/a?id=3"
+    assert nc.headline_key("Fed holds rates steady amid inflation fears") == \
+        nc.headline_key("Inflation fears: Fed holds rates steady amid")
+    assert nc.headline_key("Short one") == ""
+
+
+def test_reliability_and_recency_weighting():
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    assert nc.reliability("Federal Reserve") == 1.0 > nc.reliability("Guardian World") > nc.reliability("GDELT:x.com")
+    fresh = nc.evidence_weight(0.8, "Federal Reserve", "2026-10-21T11:00:00+00:00", "economics", now)
+    stale = nc.evidence_weight(0.8, "Federal Reserve", "2026-10-19T12:00:00+00:00", "economics", now)
+    assert fresh > 0.75 and abs(stale - 0.2) < 0.01
+
+
+def test_feed_schedule_backoff(tmp_path):
+    conn = sqlite3.connect(tmp_path / "s.db")
+    nc.ensure_schema(conn)
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    nc.mark_feed(conn, "BBC World", 200, 3, now)
+    assert not nc.feed_due(conn, "BBC World", now) and nc.feed_due(conn, "BBC World", now + nc.timedelta(minutes=6))
+    nc.mark_feed(conn, "BBC World", 503, 0, now)
+    nc.mark_feed(conn, "BBC World", 503, 0, now)
+    due = conn.execute("SELECT next_due, failures FROM news_feed_schedule").fetchone()
+    assert due[1] == 2 and due[0] >= (now + nc.timedelta(minutes=19)).isoformat()
+
+
+def test_market_targets_and_queries(tmp_path):
+    db = tmp_path / "t.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE forecast_ledger (id INTEGER PRIMARY KEY, created_at TEXT, venue TEXT, "
+              "market_id TEXT, snapshot_json TEXT)")
+    soon = (datetime.now(UTC) + nc.timedelta(days=2)).isoformat()
+    later = (datetime.now(UTC) + nc.timedelta(days=20)).isoformat()
+    rows = [("a", {"title": "Will Steve Witkoff leave?", "resolution_rules": "If Steve Witkoffs departure as "
+             "Special Envoy is announced.", "closes_at": later, "liquidity_usd": 900}),
+            ("b", {"title": "Will average gas prices be above $4.10?", "resolution_rules": "Per AAA.",
+                   "closes_at": soon, "liquidity_usd": 5000}),
+            ("b2", {"title": "Will average gas prices be above $4.20?", "resolution_rules": "Per AAA.",
+                    "closes_at": soon, "liquidity_usd": 5000}),
+            ("c", {"title": "Jets vs Bills game winner", "resolution_rules": "NFL game.", "closes_at": soon,
+                   "liquidity_usd": 9000})]
+    for mid, snap in rows:
+        c.execute("INSERT INTO forecast_ledger (created_at, venue, market_id, snapshot_json) VALUES "
+                  "(datetime('now'),'k',?,?)", (mid, json.dumps(snap)))
+    c.commit()
+    t = nc.market_targets(c)
+    assert [x["market_id"] for x in t] == ["b", "a"]  # soonest first, strike ladder collapsed, sports skipped
+    assert nc.market_query(t[1]["title"], t[1]["rules"]) == '"Steve Witkoff" Envoy resign'
+    assert nc.market_query(t[0]["title"], t[0]["rules"]).startswith('"average gas prices"')
