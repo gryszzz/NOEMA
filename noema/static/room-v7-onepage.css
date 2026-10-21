@@ -1,0 +1,18 @@
+/* one-page laptop layout (body.v7-one): hero first screen, everything else below, page scrolls */
+html:has(body.v7-one),body.v7-one{overflow-y:auto!important;height:auto!important}
+body.v7-one .app{height:auto!important;min-height:100vh;
+ grid-template-columns:minmax(220px,.75fr) minmax(0,2.1fr) minmax(320px,1.1fr)!important;
+ grid-template-rows:44px 24px 30px max(600px,calc(100vh - 122px)) 380px auto auto!important}
+body.v7-one .left{grid-column:1!important;grid-row:4!important;min-height:0}
+body.v7-one .center-top{grid-column:2!important;grid-row:4!important;min-height:0}
+body.v7-one .right{grid-column:3!important;grid-row:4!important;display:flex!important;flex-direction:column;gap:6px;overflow-y:auto;min-height:0}
+body.v7-one .right>.pnl{flex:0 0 auto}
+body.v7-one .center-bot{grid-column:1/-1!important;grid-row:5!important;display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr)!important;min-height:0}
+body.v7-one #ch-wires{grid-column:1/-1!important;grid-row:6!important;display:grid!important;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:6px;align-items:start}
+body.v7-one #ch-wires>*{max-height:520px;overflow:auto;border:1px solid var(--ln);background:var(--p);padding:4px;min-height:0}
+body.v7-one #ch-wires .cards,body.v7-one #ch-wires .xcards,body.v7-one #ch-wires .xfx{grid-template-columns:1fr!important;height:auto!important;max-height:none!important}
+body.v7-one #ch-wires .cards>*,body.v7-one #ch-wires .xcards>*{display:block!important}
+body.v7-one #ch-wires .xfx{display:grid!important}
+body.v7-one #ch-wires .body{max-height:none!important}
+body.v7-one .culture-row{grid-column:1/-1!important;grid-row:7!important;min-height:340px}
+body.v7-one .center-top .v7cand-t{max-height:150px}

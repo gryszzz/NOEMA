@@ -161,10 +161,12 @@ const hm=t=>{if(!t)return"—";const d=new Date(String(t).replace(" ","T")+(/[zZ
 const ago=t=>{const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));const s=(Date.now()-d)/1e3;return isNaN(s)?"—":s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago"};
 async function j(u){try{const r=await fetch(u,{cache:"no-store"});return r.ok?await r.json():null}catch(e){return null}}
 function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes,wire,xwire,culture,alpha]){try{f()}catch(e){console.error(e)}}}
-async function load(){let n=0;
- const go=(u,k)=>j(u).then(d=>{if(d){S[k]=d;n++}render();if(k==="tr"&&S.fi===0)flipNext()});
+async function load(){const bad=[];
+ const go=(u,k)=>j(u).then(d=>{if(d){S[k]=d;S.ok=S.ok||{};S.ok[k]=Date.now()}else bad.push(k);render();if(k==="tr"&&S.fi===0)flipNext()});
  await Promise.all([go("/api/trading-room","tr"),go("/api/command-center","cc"),go("/api/room-v4","v4"),go("/api/room-v6","v6"),go("/api/accuracy","accuracy")]);
- $("h-upd").textContent="data "+hm(new Date().toISOString())+(n===5?"":" ("+n+"/5 feeds)");
+ /* name the feeds that failed this round; earlier good data stays on screen */
+ $("h-upd").textContent="data "+hm(new Date().toISOString())+(bad.length?" · "+bad.length+" feed"+(bad.length>1?"s":"")+" failed: "+bad.join(", "):" · 5/5 feeds");
+ $("h-upd").className="pill "+(bad.length?"warn":"dim");
 }
 function header(){const t=S.tr||{},b=(S.cc||{}).budget||{};
  $("h-lvl").textContent=(t.autonomy||{}).level||"—";
@@ -326,7 +328,7 @@ load();setInterval(load,15000);setTimeout(flipNext,300);
 </script>
 <link rel="stylesheet" href="/static/room-v7.css"><script src="/static/room-v7.js" defer></script>
 <script src="/static/strategies-panel.js" defer></script>
-<link rel="stylesheet" href="/static/room-v7-dock.css"><script src="/static/room-v7-dock.js" defer></script>
 <link rel="stylesheet" href="/static/room-v7-x.css"><script src="/static/room-v7-x.js" defer></script>
 <link rel="stylesheet" href="/static/crawler-hero.css"><script src="/static/crawler-hero.js" defer></script>
+<link rel="stylesheet" href="/static/room-v7-onepage.css"><script src="/static/room-v7-onepage.js" defer></script>
 </body></html>

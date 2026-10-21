@@ -101,25 +101,27 @@ function link(fromId,toEl){const a=byId(fromId),svg=byId("v7-links");if(!a||!svg
  const p=document.createElementNS("http://www.w3.org/2000/svg","path");p.setAttribute("d",`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);svg.appendChild(p);vote(fromId.slice(3));setTimeout(()=>p.remove(),1600);while(svg.childNodes.length>6)svg.firstChild.remove()}
 function pumpfun(){const f=(V.d||{}).funnel||{},el=byId("v7-pf");if(!el)return;const txt=f.pumpfun_new!=null?`PUMP.FUN · ${f.pumpfun_new} new launches seen in sweep #${f.cycle_id} (${HM(f.ts)}) · research feed only, never auto-bought`:"pump.fun: no sweep yet";if(el.textContent!==txt)el.textContent=txt}
 
-/* ---------- funnel (replaces the old box row) ---------- */
-const ST=[["crawled","CRAWLED"],["filters","FILTERS"],["holders","HOLDERS"],["judged","JUDGED"],["entered","ENTERED"]];
-function sparkline(v){if(v.length<2)return"";const hi=Math.max(...v,1),pts=v.map((x,i)=>`${(i/(v.length-1)*56).toFixed(1)},${(11-x/hi*10).toFixed(1)}`).join(" ");return`<polyline fill="none" stroke="#27e7ff" stroke-width="1" points="${pts}"/>`}
-function chainV7(){const el=byId("chain");if(!el)return;const f=(V.d||{}).funnel||{},lt=f.latest,ser=f.series||[];
- if(!el.querySelector(".v7f")){el.className="chain";el.innerHTML=`<div class="v7f"><div class="pipe"><canvas id="v7-pc"></canvas>${ST.map((s,i)=>`<div class="st" data-k="${s[0]}" style="left:${i*20}%;width:20%">${s[1]}<b>—</b><svg viewBox="0 0 56 12"></svg></div>`).join("")}</div><div class="rj" id="v7-rj"></div></div>`}
- for(const [k] of ST){const n=el.querySelector(`.st[data-k="${k}"]`);n.querySelector("b").textContent=lt?lt[k]:"—";n.querySelector("svg").innerHTML=sparkline(ser.map(s=>s[k]));n.title=`${k}: last ${ser.length} sweeps`}
- const R=f.rejects||[],mx=Math.max(1,...R.map(r=>r.count));
- byId("v7-rj").innerHTML=R.length?R.slice(0,5).map(r=>`<div title="${E(r.reason)}"><i style="width:${r.count/mx*100}%"></i><span>${E(r.reason)}</span><b>${r.count}</b></div>`).join(""):'<span class="dim">no rejects in the last sweep</span>';
- if(lt&&V.lastFunnelId!==f.cycle_id){V.lastFunnelId=f.cycle_id;spawn(lt)}
- const iv=(SS().tr||{}).interval_seconds;const bt=byId("bay-tag");if(bt&&f.ts)bt.textContent=`sweep ${HM(f.ts)} · ${N((lt.crawled||0)/(iv||120)*60,1)} pools/min`}
-/* one particle per real item that reached each stage in the latest sweep (capped for perf) */
-function spawn(lt){const cnt=ST.map(s=>lt[s[0]]||0);for(let i=0;i<4;i++){const n=Math.min(cnt[i+1],40);for(let k=0;k<n;k++)V.parts.push({s:i,t:-k*.06,v:.004+Math.random()*.003,y:Math.random()})}
- const drop=Math.min(cnt[0]-cnt[1],60);for(let k=0;k<drop;k++)V.parts.push({s:0,t:-k*.03,v:.005,y:Math.random(),drop:1});if(V.parts.length>400)V.parts.splice(0,V.parts.length-400);if(!V.raf)V.raf=requestAnimationFrame(draw)}
-function draw(){V.raf=0;const cv=byId("v7-pc");if(!cv||document.hidden){if(V.parts.length)V.raf=requestAnimationFrame(draw);return}
- const W=cv.clientWidth,H=cv.clientHeight,dpr=window.devicePixelRatio||1;if(cv.width!==W*dpr){cv.width=W*dpr;cv.height=H*dpr}const x=cv.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
- const lt=((V.d||{}).funnel||{}).latest||{},c0=Math.max(1,lt.crawled||1);
- for(let i=0;i<5;i++){const w=W/5,hgt=H*(.35+.6*Math.sqrt((lt[ST[i][0]]||0)/c0));x.fillStyle="rgba(39,231,255,.07)";x.strokeStyle="rgba(39,231,255,.35)";x.beginPath();x.rect(i*w+4,(H-hgt)/2,w-8,hgt);x.fill();x.stroke()}
- V.parts=V.parts.filter(p=>{p.t+=p.v*3;if(p.t<0)return true;if(p.t>1)return false;const w=W/5,X=(p.s+.5)*w+p.t*w,Y=p.drop?H/2+p.t*H*.6*(p.y>.5?1:-1):H*(.3+.4*p.y);x.fillStyle=p.drop?"rgba(255,59,107,"+(1-p.t)+")":"rgba(57,255,156,.9)";x.fillRect(X,Y,2,2);return true});
- if(V.parts.length)V.raf=requestAnimationFrame(draw)}
+/* ---------- latest candidates (replaces the CRAWLED/FILTERS/... box row) ----------
+ * One row per real pool from the latest sweep: what it is, how it trades, and exactly which
+ * filter cut it or what the judge said. Reject reasons are the sweep's own counts. */
+T.verdict=it=>{const st=String(it.stage||""),r=String(it.reason||""),ent=/enter|entry|approved|opened/i.test(st)||/^(entered|approved)/i.test(r);
+ if(it.probability!=null)return{cls:ent?"ok":"warn",txt:`judge p ${N(it.probability)}${it.confidence!=null?" · conf "+N(it.confidence):""}${r&&!/^model pass/i.test(r)?" · "+r:""}`,out:ent?"ENTERED":/^model pass/i.test(r)?"JUDGE SKIP":st==="rejected"?"VETOED":"JUDGED"};
+ if(ent)return{cls:"ok",txt:r||st,out:"ENTERED"};
+ if(st!=="rejected"&&(/^passed/i.test(r)||/queued/i.test(r)))return{cls:"ok",txt:r,out:/holder/i.test(r)?"→ HOLDERS":"PASSED"};
+ return{cls:"bad",txt:r||st||"—",out:"CUT"}};
+T.candRows=(scan,n=12)=>{const rank=it=>it.probability!=null?0:T.verdict(it).cls==="ok"?1:2;
+ return (scan||[]).slice().sort((a,b)=>rank(a)-rank(b)||(+b.liquidity_usd||0)-(+a.liquidity_usd||0)).slice(0,n)};
+const age=h=>h==null||isNaN(h)?"—":h<1?Math.round(h*60)+"m":h<48?N(h,1)+"h":Math.round(h/24)+"d";
+function chainV7(){const el=byId("chain");if(!el)return;const f=(V.d||{}).funnel||{},lt=f.latest;
+ if(!el.querySelector(".v7cand")){el.className="v7chain";el.innerHTML=`<div class="v7cand"><div class="v7cand-h" id="v7-cand-h"></div><div class="v7cand-t"><table id="v7-cand"></table></div><div class="v7rj" id="v7-rj"></div></div>`}
+ byId("v7-cand-h").innerHTML=lt?`<b>LATEST CANDIDATES</b> · sweep #${E(f.cycle_id)} ${HM(f.ts)} · ${lt.crawled} pools scanned → ${lt.filters} passed filters → ${lt.holders} holder-checked → ${lt.judged} judged → <b class="${lt.entered?"ok":"dim"}">${lt.entered} entered</b>`:"<b>LATEST CANDIDATES</b> · no sweep recorded yet";
+ const rows=T.candRows(f.scan),sc=(f.scan||[]).length;
+ const h=`<tr><th>token</th><th>age</th><th>liq</th><th>vol 1h</th><th>5m</th><th>filter cut / judge</th><th>outcome</th></tr>`+(rows.map(it=>{const v=T.verdict(it);
+  return `<tr title="${E(it.mint)} · ${E(it.source)}"><td><b>${E(it.symbol||"?")}</b></td><td>${age(it.pool_age_hours)}</td><td>${U(it.liquidity_usd)}</td><td>${U(it.volume_h1_usd)}</td><td class="${it.price_change_m5<0?"bad":"ok"}">${N(it.price_change_m5,1)}%</td><td class="v7why" title="${E(v.txt)}">${E(v.txt)}</td><td class="${v.cls}">${v.out}</td></tr>`}).join("")||'<tr><td colspan=7 class="dim">no candidates in the latest sweep</td></tr>')
+  +(sc>rows.length?`<tr><td colspan=7 class="dim">+${sc-rows.length} more pools in this sweep (judged and passing first, then by liquidity)</td></tr>`:"");
+ const t=byId("v7-cand");if(t.dataset.h!==h){t.dataset.h=h;t.innerHTML=h}
+ const R=f.rejects||[];byId("v7-rj").innerHTML=R.length?`<span class="dim">TOP CUTS</span>`+R.slice(0,6).map(r=>`<span class="v7cut" title="${E(r.reason)}">${E(r.reason)} <b>${r.count}</b></span>`).join(""):'<span class="dim">no rejects in the last sweep</span>';
+ const iv=(SS().tr||{}).interval_seconds;const bt=byId("bay-tag");if(bt&&f.ts&&lt)bt.textContent=`sweep ${HM(f.ts)} · ${N((lt.crawled||0)/(iv||120)*60,1)} pools/min`}
 
 /* ---------- CHIEF dial: never dead ---------- */
 const dial0=window.dial;window.dial=function(p){const c=(V.d||{}).chief||{};const use=p||c.last;if(typeof dial0==="function")dial0(use);

@@ -1,7 +1,7 @@
 /* TEV room: X edge upgrade of the X wire panel (.xw). Reads /api/x-signal (read-only).
  * Real post cards (author, credibility badge, smart-money score, stance toward YES per matched market),
  * NOT-PRICED-IN / burst alerts and shill warnings on top, a narrative radar and smart-money board.
- * Works in place, so the v7 laptop dock (tab 2) carries it along when it moves the .xw node.
+ * Works in place, so it follows the .xw node wherever the layout places it.
  * All X text is untrusted: rendered with textContent only. X is evidence, never a trade trigger. */
 (function(){"use strict";
 const SEEN=new Set();let first=true;

@@ -45,18 +45,32 @@ test('rulebook boilerplate target queries are hidden', () => {
   assert.equal(V.isBoilerplateQuery('"average gas prices" AAA'), false);
 });
 
-test('laptop dock engages on MacBook-sized screens only', () => {
+test('one-page layout engages on MacBook-sized screens only', () => {
   const noop = () => {};
-  const ctx = { document: { readyState: 'complete', querySelector: () => null, querySelectorAll: () => [],
-    getElementById: () => null, addEventListener: noop }, localStorage: {}, setTimeout: () => 0,
-    clearTimeout: noop, addEventListener: noop, innerWidth: 1512, innerHeight: 982 };
+  const ctx = { document: { readyState: 'complete', body: { classList: { toggle: noop } }, addEventListener: noop },
+    setTimeout: () => 0, clearTimeout: noop, addEventListener: noop, dispatchEvent: noop, Event: class {},
+    innerWidth: 1512, innerHeight: 982 };
   ctx.window = ctx;
   vm.createContext(ctx);
-  vm.runInContext(readFileSync(new URL('../noema/static/room-v7-dock.js', import.meta.url), 'utf8'), ctx);
-  const D = ctx.TEV_V7_DOCK;
-  assert.equal(D.isLaptop(1512, 982), true);
-  assert.equal(D.isLaptop(1728, 1117), true);
-  assert.equal(D.isLaptop(2560, 1440), false);
+  vm.runInContext(readFileSync(new URL('../noema/static/room-v7-onepage.js', import.meta.url), 'utf8'), ctx);
+  const O = ctx.TEV_V7_ONEPAGE;
+  assert.equal(O.isLaptop(1512, 982), true);
+  assert.equal(O.isLaptop(1440, 900), true);
+  assert.equal(O.isLaptop(2560, 1440), false);
+});
+
+test('candidate rows say exactly which filter cut a pool or what the judge said', () => {
+  const cut = V.verdict({ stage: 'rejected', reason: 'liquidity below desk floor' });
+  assert.equal(cut.out, 'CUT'); assert.equal(cut.txt, 'liquidity below desk floor');
+  const q = V.verdict({ stage: 'filters', reason: 'passed filters; queued for holder check' });
+  assert.equal(q.out, '→ HOLDERS');
+  const j = V.verdict({ stage: 'rejected', reason: 'model pass p=0.38', probability: 0.38, confidence: 0.6 });
+  assert.equal(j.out, 'JUDGE SKIP'); assert.match(j.txt, /judge p 0.38/);
+  const rows = V.candRows([{ symbol: 'A', stage: 'rejected', reason: 'x', liquidity_usd: 9e6 },
+    { symbol: 'B', stage: 'rejected', reason: 'model pass p=0.5', probability: 0.5 },
+    { symbol: 'C', stage: 'filters', reason: 'passed filters', liquidity_usd: 1 }]);
+  assert.equal(rows.map((r) => r.symbol).join(''), 'BCA');
+  assert.equal(V.candRows(undefined).length, 0);
 });
 
 test('pools without candles chart their real metrics', () => {

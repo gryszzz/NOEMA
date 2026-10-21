@@ -107,3 +107,15 @@
 /* card flips in like a terminal tile when a new real pool is scanned */
 .v7c{transform:translateX(-110%) rotateY(70deg)}.v7c.in{transform:translateX(0) rotateY(0)}
 #v7-scan{perspective:900px}
+
+/* latest-candidates table (replaces the funnel boxes) */
+.v7cand{display:flex;flex-direction:column;gap:3px;font-size:10.5px}
+.v7cand-h{color:var(--d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.v7cand-h b{color:var(--c);letter-spacing:1px}
+.v7cand-t{max-height:190px;overflow:auto}
+.v7cand table{width:100%;border-collapse:collapse;table-layout:fixed}
+.v7cand th{text-align:left;color:var(--d);font-weight:normal;font-size:9px;letter-spacing:1px;position:sticky;top:0;background:var(--p)}
+.v7cand th:nth-child(1){width:15%}.v7cand th:nth-child(2),.v7cand th:nth-child(5){width:7%}.v7cand th:nth-child(3),.v7cand th:nth-child(4){width:9%}.v7cand th:nth-child(7){width:11%}
+.v7cand td{padding:1px 4px;border-top:1px solid #071823;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v7rj{display:flex;flex-wrap:wrap;gap:3px;align-items:center}
+.v7rj .v7cut{border:1px solid #4a1f2a;border-radius:9px;padding:0 7px;font-size:10px;color:#ffb3c4}.v7rj .v7cut b{color:var(--r)}
+#chain.v7chain{display:block;padding:0 6px 6px;flex:0 0 auto}
