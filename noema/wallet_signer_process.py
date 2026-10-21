@@ -99,6 +99,46 @@ def load_solana_keypair_from_env() -> Any:
         raise RuntimeError("solana signer secret is not a valid keypair") from None
 
 
+def load_evm_account_from_env() -> Any:
+    """Load NOEMA_EVM_SIGNER_SECRET inside this process only.
+
+    Accepts a 32-byte hex private key (optional 0x prefix) or a JSON byte array.
+    The secret is never included in an exception or return value.
+    """
+    raw = os.environ.get("NOEMA_EVM_SIGNER_SECRET", "").strip()
+    if not raw:
+        raise RuntimeError("evm signer secret is not configured")
+    try:
+        from eth_account import Account
+
+        if raw.startswith("["):
+            data = json.loads(raw)
+            if (not isinstance(data, list) or len(data) != 32
+                    or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 or item > 255
+                           for item in data)):
+                raise ValueError
+            blob = bytes(data)
+        else:
+            text = raw[2:] if raw[:2].lower() == "0x" else raw
+            if len(text) != 64:
+                raise ValueError
+            blob = bytes.fromhex(text)
+        return Account.from_key(blob)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raise RuntimeError("evm signer secret is not a valid private key") from None
+
+
+def execute_evm_swap(request: dict[str, Any]) -> dict[str, Any]:
+    """Sign and submit one allowlisted EVM aggregator swap.
+
+    The IPC body is not a transaction. Caps, the wallet, and the RPC endpoint
+    are read from this process environment.
+    """
+    from .evm_swap import perform_evm_swap
+
+    return perform_evm_swap(request, load_evm_account_from_env())
+
+
 def execute_jupiter_swap(request: dict[str, Any]) -> dict[str, Any]:
     """Sign and submit one allowlisted Jupiter SOL<->SPL swap.
 
@@ -820,6 +860,8 @@ def main() -> int:
             result = execute_native_transfer(request)
         elif operation == "solana_jupiter_swap":
             result = execute_jupiter_swap(request)
+        elif operation == "evm_aggregator_swap":
+            result = execute_evm_swap(request)
         else:
             raise RuntimeError("unsupported signer operation")
         sys.stdout.write(json.dumps(result, separators=(",", ":")))
@@ -923,6 +965,27 @@ def main() -> int:
             "broadcast transaction identity mismatch",
             "swap fill could not be reconciled",
             "signer limit configuration is invalid",
+            "evm signer secret is not configured",
+            "evm signer secret is not a valid private key",
+            "configured evm wallet does not match signer",
+            "evm live swaps are disabled",
+            "evm owner review is required",
+            "evm master halt is active",
+            "evm venue is not allowlisted",
+            "evm chain is not configured",
+            "EVM RPC endpoint is not configured",
+            "EVM RPC response was incomplete",
+            "token is not allowlisted",
+            "token is denylisted",
+            "token contract is invalid",
+            "token allowance is insufficient",
+            "aggregator quote failed",
+            "aggregator swap build failed",
+            "aggregator api endpoint is not configured",
+            "swap router is not allowlisted",
+            "evm native price is not configured",
+            "evm reserve would be breached",
+            "evm fee exceeds signer maximum",
         }
         if message not in safe_messages:
             message = "signer operation failed"
