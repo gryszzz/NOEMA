@@ -19,6 +19,7 @@ from .cognition_policy import CognitionPolicy, assess_cognition
 from .cognition_store import CognitionStore
 from .foundry_client import FoundryCognitionClient
 from .llm_evidence import context_for_row
+from .news_crawler import attach_news_context, news_context_for_market
 from .openai_client import OpenAICognitionClient
 from .openai_config import OpenAIConfig
 from .opportunity_radar import RadarRow
@@ -104,6 +105,16 @@ async def maybe_run_cognition(
         )
 
     try:
+        # Matched news is appended as clearly-labelled untrusted quotes to every request body
+        # this client builds (cost estimate and the real call alike).
+        news = news_context_for_market(db_path, getattr(target, "venue", None), target.market_id)
+        if news:
+            base_body = client.request_body
+
+            def _with_news(row, *, evidence_context, _base=base_body, _news=news):
+                return attach_news_context(_base(row, evidence_context=evidence_context), _news)
+
+            client.request_body = _with_news
         body = client.request_body(target, evidence_context=context)
         # Include structured-output schema and request framing, not only prose.
         # UTF-8 bytes plus a framing allowance conservatively estimate input tokens.
