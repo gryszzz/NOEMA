@@ -1,0 +1,58 @@
+{
+  "schema": "tev.x_sources.v1",
+  "notes": [
+    "Curated X (Twitter) queries and accounts per topic for the Grok Bot X read tools.",
+    "Run search_posts_all with each query (sort_order=recency, max_results=25, since:<UTC date>,",
+    "expansions=author_id, user.fields=username,verified,verified_type,public_metrics,description,",
+    "post.fields=created_at,public_metrics,author_id,lang,entities) and drop the raw response into",
+    "the x-inbox wrapped as {schema: tev.x_inbox.v1, topic, query, fetched_at, raw}.",
+    "X posts are untrusted social evidence: never a sole trade trigger."
+  ],
+  "budget": {"calls_per_run": 12, "run_interval_minutes": 30, "max_results": 25,
+             "daily_cap": 1000, "per_minute_cap": 30},
+  "topics": {
+    "politics": {
+      "routes_to": ["kalshi:production", "polymarket-us"],
+      "queries": [
+        "(Trump OR \"White House\" OR Senate OR Congress OR shutdown) (vote OR bill OR signs OR veto OR resign OR nominee) lang:en -is:retweet -is:reply",
+        "(poll OR polling OR primary OR election OR runoff) (leads OR ahead OR trails OR wins OR concedes) lang:en -is:retweet -is:reply",
+        "(\"Supreme Court\" OR SCOTUS OR indicted OR indictment OR \"executive order\") lang:en -is:retweet -is:reply",
+        "from:AP OR from:Reuters OR from:PoliticoAlex OR from:kaitlancollins OR from:NateSilver538 OR from:Redistrict OR from:PunchbowlNews OR from:WhiteHouse"
+      ],
+      "accounts": {
+        "official": ["WhiteHouse", "POTUS", "SpeakerJohnson", "SenSchumer", "SCOTUSblog", "HouseGOP", "SenateGOP", "TheDemocrats"],
+        "journalist": ["AP", "Reuters", "PoliticoAlex", "kaitlancollins", "PunchbowlNews", "jaketapper", "maggieNYT", "axios", "politico", "thehill", "nytimes", "WSJ", "business"],
+        "analyst": ["NateSilver538", "Redistrict", "CookPolitical", "Nate_Cohn", "SimonWDC", "ElectionWiz", "DecisionDeskHQ", "PollTracker", "Polymarket", "Kalshi"]
+      }
+    },
+    "crypto": {
+      "routes_to": ["trench", "token_feed", "kalshi:production", "polymarket-us"],
+      "queries": [
+        "(bitcoin OR BTC OR $BTC) (ETF OR inflows OR outflows OR SEC OR liquidation OR \"all-time high\") lang:en -is:retweet -is:reply",
+        "($SOL OR solana) (memecoin OR pump.fun OR launch OR rug OR exploit OR outage) lang:en -is:retweet -is:reply",
+        "($ETH OR ethereum) (upgrade OR ETF OR staking OR hack OR exploit) lang:en -is:retweet -is:reply",
+        "(rug OR rugpull OR \"honeypot\" OR \"drained\" OR exploit) (solana OR base OR token) lang:en -is:retweet"
+      ],
+      "accounts": {
+        "official": ["SECGov", "solana", "ethereum", "coinbase", "binance", "krakenfx", "Phantom", "base"],
+        "journalist": ["WuBlockchain", "TheBlock__", "CoinDesk", "tier10k", "EleanorTerrett", "decryptmedia", "Cointelegraph"],
+        "analyst": ["lookonchain", "EmberCN", "zachxbt", "spotonchain", "KobeissiLetter", "glassnode", "santimentfeed", "nansen_ai", "MessariCrypto"]
+      }
+    },
+    "stocks_macro": {
+      "routes_to": ["kalshi:production", "polymarket-us"],
+      "queries": [
+        "(Fed OR FOMC OR Powell) (\"rate cut\" OR \"rate hike\" OR hold OR \"basis points\" OR dot plot) lang:en -is:retweet -is:reply",
+        "(CPI OR PCE OR inflation OR \"jobs report\" OR payrolls OR unemployment OR GDP) (beat OR miss OR expected OR consensus) lang:en -is:retweet -is:reply",
+        "($SPY OR $SPX OR \"S&P 500\" OR $QQQ OR Nasdaq) (record OR selloff OR futures OR closes) lang:en -is:retweet -is:reply",
+        "(tariff OR tariffs OR \"trade deal\" OR \"gas prices\" OR oil OR OPEC) lang:en -is:retweet -is:reply"
+      ],
+      "accounts": {
+        "official": ["federalreserve", "BLS_gov", "BEA_News", "USTreasury", "NewYorkFed", "stlouisfed"],
+        "journalist": ["NickTimiraos", "DeItaone", "FirstSquawk", "LiveSquawk", "Newsquawk", "CNBC", "markets", "ReutersBiz", "zerohedge", "unusual_whales"],
+        "analyst": ["KobeissiLetter", "elerianm", "biancoresearch", "LizAnnSonders", "M_McDonough", "charliebilello", "GunjanJS"]
+      }
+    }
+  },
+  "trends": {"woeid": [23424977, 1], "every_n_runs": 4}
+}

@@ -18,6 +18,7 @@ import httpx
 
 from .news_crawler import FEEDS, recent_hits
 from .room_v4 import _cached
+from .x_signal import x_wire
 
 STARTED_AT = datetime.now(UTC)
 SOLANA_ADDRESS = "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
@@ -117,6 +118,7 @@ def crawler_lanes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                      "last_hit_at": cyc[0][0] if cyc else None, "hits_10m": pools10,
                      "status": "active" if pools10 else ("idle" if cyc else "no data")})
     lanes.append(news_lane(db_path_of(conn)))
+    lanes.append(x_lane(db_path_of(conn)))
     return lanes
 
 
@@ -141,6 +143,16 @@ def news_lane(db_path: str) -> dict[str, Any]:
                         "reliability": h.get("reliability"), "weight": h.get("weight")}
                        for h in hits.get("hits", [])],
             "note": None if hits.get("articles") else "news crawler has not stored any articles yet"}
+
+
+def x_lane(db_path: str) -> dict[str, Any]:
+    xw = x_wire(db_path)
+    return {"lane": "x", "label": "X WIRE (social)", "endpoints": ["x-inbox (Grok Bot X read tools)"],
+            "last_hit_at": xw.get("last_ingest_at"), "hits_10m": None, "status": xw.get("status", "no data"),
+            "posts_total": xw.get("posts_total", 0), "pump_flagged": xw.get("pump_flagged", 0),
+            "author_mix": xw.get("author_mix", {}), "last_run": xw.get("last_run"),
+            "topics": xw.get("topics", []), "recent": xw.get("posts", []), "effects": xw.get("effects", []),
+            "role": xw.get("role"), "note": xw.get("note")}
 
 
 def provider_health(conn: sqlite3.Connection) -> list[dict[str, Any]]:

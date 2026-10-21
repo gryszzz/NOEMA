@@ -937,6 +937,12 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
         except sqlite3.IntegrityError:
             pass
     store.conn.close()
+    if os.getenv("NOEMA_X_INGEST_ENABLED", "1") == "1":
+        from .x_signal import ingest_inbox
+        try:
+            stats["x"] = ingest_inbox(db_path)
+        except Exception as exc:  # noqa: BLE001 - X drops must never stop the news crawl
+            stats["x"] = {"error": type(exc).__name__}
     return stats
 
 

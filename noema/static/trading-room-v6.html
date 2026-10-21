@@ -89,7 +89,22 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
 .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11px}.kv span:nth-child(odd){color:var(--d)}
 .lad{display:flex;gap:3px;margin:4px 0}.lad div{flex:1;text-align:center;padding:3px 0;border:1px solid var(--ln);font-size:10px}.lad .cur{background:#0b3a50;color:#fff;border-color:var(--c);box-shadow:0 0 8px var(--c) inset}
 .flag{display:flex;justify-content:space-between;font-size:10.5px}
-@media (max-width:1100px){html,body{overflow:auto}.app{display:flex;flex-direction:column;height:auto}.pnl{min-height:220px}.center-top{min-height:760px}.cards{grid-template-columns:1fr;height:auto}.bay{grid-template-columns:1fr;grid-template-rows:340px auto}.center-bot{grid-template-columns:1fr}.right{display:flex;flex-direction:column}header{flex-wrap:wrap;height:auto;padding:6px}.left{display:flex}}
+.xw{padding:0 6px 6px;display:flex;flex-direction:column;gap:4px}
+.xw .wh{display:flex;gap:10px;align-items:center;white-space:nowrap;overflow:hidden;font-size:11px;letter-spacing:2px;color:var(--m)}
+.xw .wh span{letter-spacing:0;color:var(--d);overflow:hidden;text-overflow:ellipsis}
+.xtp{display:flex;gap:6px;flex-wrap:wrap;font-size:10px}.xtp b{border:1px solid var(--m);color:var(--t);padding:1px 6px;border-radius:2px;font-weight:400}
+.xtp b i{font-style:normal;color:var(--m);margin-right:4px;text-transform:uppercase}.xtp .up{color:var(--g)}.xtp .dn{color:var(--r)}
+.xcards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;height:112px}
+.xc{border:1px solid #4a2a7a;background:linear-gradient(180deg,#140a24,#07040f);padding:6px 8px;display:flex;flex-direction:column;gap:3px;overflow:hidden;animation:ncin .6s}
+.xc .src{display:flex;gap:6px;align-items:center;font-size:10px;color:var(--d)}.xc .src b{color:#0b0414;background:var(--m);padding:1px 5px;border-radius:2px}
+.xc .cl{font-size:9px;letter-spacing:1px;color:var(--y)}.xc .pf{font-size:9px;color:var(--r);border:1px solid var(--r);padding:0 3px}
+.xc .tx{font-size:12px;line-height:1.25;color:#fff;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.xc .mk{font-size:10.5px;color:var(--g);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.xc .mk.none{color:var(--d)}
+.xc .sc{display:flex;gap:8px;font-size:9.5px;color:var(--d);margin-top:auto}
+.xfx{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;font-size:10px}
+.xfx div{border:1px solid var(--ln);padding:3px 6px;overflow:hidden}.xfx .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--t)}
+.xfx svg{width:100%;height:26px;display:block}
+@media (max-width:1100px){.xcards,.xfx{grid-template-columns:1fr;height:auto}html,body{overflow:auto}.app{display:flex;flex-direction:column;height:auto}.pnl{min-height:220px}.center-top{min-height:760px}.cards{grid-template-columns:1fr;height:auto}.bay{grid-template-columns:1fr;grid-template-rows:340px auto}.center-bot{grid-template-columns:1fr}.right{display:flex;flex-direction:column}header{flex-wrap:wrap;height:auto;padding:6px}.left{display:flex}}
 @media (min-width:2200px){html,body{font-size:14px}.sym{font-size:40px}.stamp{font-size:40px}}
 </style></head><body>
 <div class="app">
@@ -109,6 +124,7 @@ table{width:100%;border-collapse:collapse;font-size:11px}td,th{padding:2px 4px;t
   <div class="lanes" id="lanes"></div>
  </div>
  <div class="wire"><div class="wh"><span class="dot on" id="wire-dot"></span>NEWS / EVIDENCE WIRE <span id="wire-tag">loading…</span></div><div class="cards" id="wire"></div><div class="wsrc" id="wire-src"></div><div class="wtgt" id="wire-tgt"></div></div>
+ <div class="xw"><div class="wh"><span class="dot off" id="xw-dot"></span>X WIRE · POLITICS / CRYPTO / FINTWIT <span id="xw-tag">loading…</span></div><div class="xtp" id="xw-topics"></div><div class="xcards" id="xw"></div><div class="xfx" id="xw-fx" title="EFFECTS: X buzz (purple) vs market price (green) per snapshot"></div></div>
  <div class="chain" id="chain"></div>
 </section>
 
@@ -133,7 +149,7 @@ const f2=(x,d=2)=>x==null||x===""||isNaN(+x)?"—":(+x).toFixed(d), usd=x=>x==nu
 const hm=t=>{if(!t)return"—";const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));return isNaN(d)?t:d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})};
 const ago=t=>{const d=new Date(String(t).replace(" ","T")+(/[zZ]|[+-]\d\d:?\d\d$/.test(t)?"":"Z"));const s=(Date.now()-d)/1e3;return isNaN(s)?"—":s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago"};
 async function j(u){try{const r=await fetch(u,{cache:"no-store"});return r.ok?await r.json():null}catch(e){return null}}
-function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes,wire]){try{f()}catch(e){console.error(e)}}}
+function render(){for(const f of [header,agents,stream,pm,treas,safety,acc,health,chain,lanes,wire,xwire]){try{f()}catch(e){console.error(e)}}}
 async function load(){let n=0;
  const go=(u,k)=>j(u).then(d=>{if(d){S[k]=d;n++}render();if(k==="tr"&&S.fi===0)flipNext()});
  await Promise.all([go("/api/trading-room","tr"),go("/api/command-center","cc"),go("/api/room-v4","v4"),go("/api/room-v6","v6"),go("/api/accuracy","accuracy")]);
@@ -198,11 +214,22 @@ function wire(){const ev=((S.v6||{}).lanes||[]).find(l=>l.lane==="evidence"),el=
  const m=R.filter(r=>r.market_id),u=R.filter(r=>!r.market_id);S.wi=(S.wi||0);const pick=[];
  const pool=m.length>=3?m:m.concat(u);for(let k=0;k<Math.min(3,pool.length);k++)pick.push(pool[(S.wi+k)%pool.length]);S.wi+=1;
  el.innerHTML=pick.map(r=>`<div class="nc"><div class="src"><b>${esc(r.source)}</b>${r.category?`<span class="cat">${esc(r.category)}</span>`:""}${r.reliability!=null?`<span class="rl">${r.reliability>=1?"PRIMARY":"REL "+f2(r.reliability)}</span>`:""}<span>${hm(r.ts)}</span></div><div class="hl">${esc(r.title)}</div><div class="mk ${r.market_id?"":"none"}">${r.market_id?"⇒ "+esc(r.market_id):"no watched market matched (kept as context)"}</div><div class="rel">relevance<div class="bar"><i style="width:${(r.relevance||0)*100}%"></i></div>${r.relevance?f2(r.relevance):"—"}</div><div class="u">${esc(r.url)}</div></div>`).join("");}
+function spark(pts,key,col){const v=pts.map(p=>p[key]).filter(x=>x!=null);if(v.length<2)return"";const lo=Math.min(...v),hi=Math.max(...v),r=(hi-lo)||1;
+ return `<polyline fill="none" stroke="${col}" stroke-width="1.5" points="${v.map((x,i)=>`${(i/(v.length-1)*100).toFixed(1)},${(24-(x-lo)/r*22).toFixed(1)}`).join(" ")}"/>`}
+function xwire(){const x=((S.v6||{}).lanes||[]).find(l=>l.lane==="x"),el=$("xw");if(!el)return;
+ if(!x){el.innerHTML='<div class="empty" style="grid-column:1/-1">X lane unavailable (/api/room-v6).</div>';return}
+ $("xw-dot").className="dot "+(x.status==="active"?"on":"off");const lr=x.last_run||{};
+ $("xw-tag").textContent=`${x.posts_total||0} posts · ${x.pump_flagged||0} pump-flagged · last drop ${x.last_hit_at?ago(x.last_hit_at):"never"}${lr.linked!=null?" · "+lr.linked+" links last run":""} · evidence only, never a sole trigger`;
+ $("xw-topics").innerHTML=(x.topics||[]).map(t=>`<b><i>${esc(t.topic.replace("_","/"))}</i>${t.posts} posts · buzz ${f2(t.buzz||0)} · <span class="${t.sentiment>0.1?"up":t.sentiment<-0.1?"dn":""}">sent ${t.sentiment>0?"+":""}${f2(t.sentiment||0)}</span>${t.pump_share?` · pump ${Math.round(t.pump_share*100)}%`:""}</b>`).join("");
+ const R=x.recent||[];if(!R.length){el.innerHTML=`<div class="empty" style="grid-column:1/-1">${esc(x.note||"No X posts yet.")}</div>`}else{
+ S.xi=(S.xi||0);const pick=[];for(let k=0;k<Math.min(3,R.length);k++)pick.push(R[(S.xi+k)%R.length]);S.xi+=1;
+ el.innerHTML=pick.map(r=>`<div class="xc"><div class="src"><b>@${esc(r.author)}</b><span class="cl">${esc((r.author_class||"unknown").toUpperCase())}</span>${r.pump_risk>=0.5?`<span class="pf">PUMP ${f2(r.pump_risk)}</span>`:""}<span>${esc(r.topic||"")}</span><span>${hm(r.created_at)}</span></div><div class="tx">${esc(r.text)}</div><div class="mk ${r.market?"":"none"}">${r.market?"⇒ "+esc(r.market):"no market matched (topic buzz only)"}</div><div class="sc"><span>cred ${f2(r.credibility||0)}</span><span>vel ${f2(r.velocity||0)}</span><span>sent ${f2(r.sentiment||0)}</span><span>wt ${f2(r.weight||0)}</span></div></div>`).join("")}
+ const E=x.effects||[];$("xw-fx").innerHTML=E.slice(0,4).map(e=>`<div><div class="t">${esc(e.title||e.market_id)}</div><svg viewBox="0 0 100 26" preserveAspectRatio="none">${spark(e.series,"buzz","#b67bff")}${spark(e.series,"price","#39ff9c")}</svg><span class="dim">${e.posts} posts${e.price_change!=null?` · Δp ${e.price_change>0?"+":""}${f2(e.price_change)}`:" · price n/a"}</span></div>`).join("")}
 function wireSources(){const ev=((S.v6||{}).lanes||[]).find(l=>l.lane==="evidence");if(!ev)return;
  const Sx=ev.sources||[];$("wire-src").innerHTML=Sx.length?Sx.map(x=>{const st=String(x.status||"");const ok=st==="200"||st==="304";
   return `<b class="${ok?"ok":"bad"}${x.reliability>=1?" pri":""}" title="${esc(st)} · every ${Math.round((x.interval_s||0)/60)}m · reliability ${x.reliability}">${esc(x.name)}${ok?"":" ("+esc(st==="999"?"robots":st)+")"}</b>`}).join(""):"";
  const T=ev.targets||[];$("wire-tgt").innerHTML=T.slice(0,4).map(t=>`<div><i>TARGET</i> ${esc(t.market||"")} ⟵ <i>${esc(t.backend)}</i> “${esc(t.query||"")}” · ${t.results??0} results · ${t.linked??0} linked</div>`).join("");}
-setInterval(()=>{try{wire();wireSources()}catch(e){console.error(e)}},4200);
+setInterval(()=>{try{wire();wireSources();xwire()}catch(e){console.error(e)}},4200);
 setInterval(flipNext,1900);setInterval(()=>["kalshi","polymarket"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);
 /* ---------- agents ---------- */
 function typeIn(el,txt){if(el.dataset.full===txt)return;el.dataset.full=txt;let i=0;clearInterval(el._t);el._t=setInterval(()=>{el.textContent=txt.slice(0,i+=2);if(i>=txt.length)clearInterval(el._t)},18);el.closest(".ag").classList.remove("flash");void el.offsetWidth;el.closest(".ag").classList.add("flash")}
