@@ -1,5 +1,8 @@
 # Hosting the paper research agent
 
+> **Legacy:** NOEMA is now self-hosted on a single box; this Render guide is kept for reference only.
+
+
 `render.yaml` provisions one paid Render background worker with a 1 GB persistent
 disk. It starts `noema-agent` every deploy, storing heartbeats, snapshots,
 forecasts, and outcomes in the same SQLite database. It runs a cycle every five

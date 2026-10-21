@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#07060f"/><stop offset="1" stop-color="#140a26"/></linearGradient>
+<linearGradient id="neon" x1="0" x2="1"><stop offset="0" stop-color="#ff2bd6"/><stop offset="1" stop-color="#22e3ff"/></linearGradient>
+<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#22e3ff" stroke-opacity=".08"/></pattern>
+<filter id="glow"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="1200" height="300" fill="url(#bg)"/><rect width="1200" height="300" fill="url(#grid)"/>
+<polyline filter="url(#glow)" fill="none" stroke="#2bff88" stroke-width="3" points="620,230 660,210 700,220 740,180 780,195 820,140 860,160 900,110 940,125 980,80 1020,95 1060,60 1100,70 1160,40"/>
+<g fill="#2bff88" opacity=".55"><rect x="650" y="240" width="10" height="30"/><rect x="690" y="250" width="10" height="20"/><rect x="730" y="230" width="10" height="40"/><rect x="770" y="245" width="10" height="25"/><rect x="810" y="225" width="10" height="45"/><rect x="850" y="240" width="10" height="30"/><rect x="890" y="220" width="10" height="50"/></g>
+<text x="60" y="150" font-family="Courier New,monospace" font-weight="700" font-size="110" fill="url(#neon)" filter="url(#glow)">TEV</text>
+<text x="300" y="150" font-family="Courier New,monospace" font-size="34" fill="#e8e6ff">// NOEMA</text>
+<text x="62" y="200" font-family="Courier New,monospace" font-size="22" fill="#22e3ff">Observe. Infer. Verify. Act.</text>
+<text x="62" y="245" font-family="Courier New,monospace" font-size="16" fill="#ff2bd6">KALSHI · POLYMARKET US · SOLANA TRENCH DESKS — FAIL-CLOSED · PAPER FIRST</text>
+</svg>

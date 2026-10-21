@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="noema/static/brand/noema-v2-hero.svg" alt="NOEMA — Autonomous Agent Ecosystem" width="100%" />
+<img src="docs/images/tev-banner.svg" alt="TEV // NOEMA" width="100%" />
 
 <br />
 
@@ -15,6 +15,9 @@
 ![Mode](https://img.shields.io/badge/mode-reality--first-7957d5)
 ![Authority](https://img.shields.io/badge/live%20authority-fail--closed-cb4b50)
 ![Audit](https://img.shields.io/badge/state-persistent%20audit-4f8dd6)
+![Autonomy](https://img.shields.io/badge/autonomy-SHADOW-555)
+![Venues](https://img.shields.io/badge/venues-Kalshi%20%7C%20Polymarket%20US%20%7C%20Solana%20(paper)-22e3ff)
+![Hosting](https://img.shields.io/badge/hosting-self--hosted%20box-2bff88)
 
 [Public experience](https://gryszzz.github.io/NOEMA/) ·
 [Quick start](docs/quick-connect.md) ·
@@ -25,6 +28,14 @@
 [Meridian](https://github.com/gryszzz/Meridian-Intel)
 
 </div>
+
+## Contents
+
+- [The mission](#the-mission) · [Reality-first status](#reality-first-status)
+- [TEV trading room](#tev-trading-room) · [Venues](#venues) · [Trench desks](#trench-desks-paper-only)
+- [Decision pipeline: TEV JUDGE + CHIEF](#decision-pipeline-tev-judge--chief) · [Earned-autonomy ladder](#earned-autonomy-ladder)
+- [Fail-closed execution flags](#fail-closed-execution-flags) · [Swap signers (in progress)](#swap-signers-in-progress) · [Self-hosting](#self-hosting)
+- [System architecture](#system-architecture) · [Start with one cycle](#start-with-one-cycle) · [Repository map](#repository-map)
 
 ---
 
@@ -94,13 +105,99 @@ Active Work Packets reconstruct mission routes from exact assignments and persis
 
 Read the full contract in [Economic Habitat](docs/economic-habitat.md).
 
+## TEV trading room
+
+TEV is NOEMA's private, read-only war-room dashboard served by `noema-dashboard`. Every panel renders real crawler/desk records (replays are labelled); none of these pages can place orders.
+
+<p align="center"><img src="docs/images/trading-room-v5.png" alt="TEV trading room v5" width="100%" /></p>
+
+| Page | What it shows | API |
+| --- | --- | --- |
+| `/trading-room` (v5) | TEV CRAWLER flipping through real per-pool GeckoTerminal candles, decision graph, CHIEF dial, pool hex map, telemetry ticker | `/api/trading-room` |
+| `/trading-room-v4` | Neon pixel room: 8 agent panels, crawler radar, agent floor, balance ribbon, `terminal.py` feed | `/api/room-v4` |
+| `/command-center` (v3) | 4×4 grid: prediction scanner, forecast ledger / Brier / calibration, gateway, ladder progress, model budget, system health | `/api/command-center` |
+| `/trench-desks` | Original paper-desk panel | — |
+
+<details><summary>v4 and phone views</summary>
+
+<img src="docs/images/trading-room-v4.png" alt="TEV trading room v4" width="100%" />
+<img src="docs/images/trading-room-v5-phone.png" alt="TEV trading room on phone" width="320" />
+
+</details>
+
+## Venues
+
+| Venue | Status in code |
+| --- | --- |
+| Kalshi | Market + authenticated account observation; live orders only through the fail-closed gateway |
+| Polymarket US | Market observation; gated live adapter in review (#106) |
+| Solana memecoins | Trench crawler (GeckoTerminal, DexScreener, pump.fun) feeding **paper-only** desks |
+| Kraken / Robinhood | Not integrated |
+
+## Trench desks (paper only)
+
+Five parallel paper desks — **VET, RISK, FILLS, TAPE, FLOOR** seats — each with its own bankroll slice. A desk holds a ~10% core leg and trades bounces with the rest; it is fired after **2 consecutive losses** and replaced by a mutated successor.
+
+| Entry filter (`trench_risk.py`) | Default |
+| --- | --- |
+| Top-10 holder concentration | ≤ 60% |
+| Pool age | ≥ 1 hour |
+| Liquidity | ≥ $12,000 |
+| Mid-spike guard | no entry if 5m move > 15% or accelerating |
+| Stops (bounce & core) | hard ceiling < 8% |
+
+## Decision pipeline: TEV JUDGE + CHIEF
+
+`CRAWLER → FILTERS → VET → TEV JUDGE → CHIEF → FILLS / RISK / SIZE`
+
+- **TEV JUDGE** — optional typed model judgement that only picks among candidates already passing deterministic rules; budget-capped (`NOEMA_DESK_JUDGEMENT_MAX_USD_PER_DAY`).
+- **CHIEF** — approves a pick only if probability ≥ `0.60` and confidence ≥ `0.55` (`NOEMA_CHIEF_MIN_PROBABILITY`, `NOEMA_CHIEF_MIN_CONFIDENCE`).
+- **SOCIAL** — research-only seat; currently a placeholder.
+
+## Earned-autonomy ladder
+
+Autonomy is computed from evidence (`noema/autonomy.py`), never granted by config.
+
+| Level | Evidence required | Live sizing (per trade / per day, #107) |
+| --- | --- | --- |
+| SHADOW | < 30 resolved forecasts | none |
+| PAPER | ≥ 30 resolved | none |
+| DEMO | ≥ 100 resolved, ≥ 7 live-observation days | none |
+| MICRO | ≥ 250 resolved, ≥ 21 days (plus further gates) | 1% / 10% |
+| PROVEN | ≥ 1000 resolved, ≥ 60 days, ≥ 30 profitable days | 3% / 30% |
+
+#107 also defines SELF_FUNDED (5% / 50%) and EXPANSION (8% / 80%) tiers. Nothing trades live below MICRO, and `NOEMA_LIVE_REQUIRES_OWNER_REVIEW=1` by default.
+
+## Fail-closed execution flags
+
+Every flag defaults to off; all must be set for any live order.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `NOEMA_EXECUTION_GATEWAY_ENABLED` | `0` | Gateway accepts nothing unless `1` |
+| `NOEMA_ALLOW_LIVE_ORDERS` | `0` | Second independent live switch |
+| `NOEMA_LIVE_VENUES` | empty | Explicit venue allowlist |
+| `NOEMA_MAX_LIVE_DAILY_NOTIONAL_USD` | unset | Daily notional cap |
+| `NOEMA_MASTER_HALT` | `0` | `1` halts everything |
+| `NOEMA_SOLANA_SIGNER_ENABLED` | `0` | Solana signing off |
+| `NOEMA_TREASURY_ACTIONS_ENABLED` | `0` | Treasury moves off |
+
+## Swap signers (in progress)
+
+Solana and EVM (ETH/Base/Polygon) swap signers are being built as a **separate signer process**. Keys are read only from its environment, never from the agent, LLM context, or repo; the design refuses keys that don't match NOEMA's configured wallet address, ships **disabled**, and enforces a daily cap. Not merged yet.
+
+## Self-hosting
+
+NOEMA now runs self-hosted on a single box (`noema-agent` + `noema-dashboard` behind a private authenticated proxy). `render.yaml` and Render docs are **legacy** and not the current deployment.
+
 ## System architecture
 
 ```mermaid
 flowchart LR
     A[Market / Web3 / World Sources] --> B[Perception + Research]
     M[Meridian Context] --> B
-    T[Trench On-chain Research] --> B
+    T[Trench Crawler: GeckoTerminal / DexScreener / pump.fun] --> B
+    T --> TD[Paper Trench Desks] --> J[TEV JUDGE] --> K[CHIEF gate]
 
     B --> C[Specialist Ecosystem]
     C --> D[Autonomous Desk]
@@ -225,7 +322,7 @@ See [Meridian ↔ NOEMA contract](docs/meridian-noema-contract.md).
 | `docs/` | Architecture, operating contracts, evidence/economic boundaries, setup |
 | `tests/` | Python + Node regression and truth-contract tests |
 | `scripts/` | Browser QA and build/verification tooling |
-| `render.yaml` | Hosted deployment blueprint/configuration; configuration is not proof of current deployed health |
+| `render.yaml` | **Legacy** Render blueprint; current deployment is self-hosted |
 
 ## Read next
 
