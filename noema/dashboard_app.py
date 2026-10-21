@@ -1097,6 +1097,14 @@ async def strategies_api() -> dict[str, Any]:
     return await asyncio.to_thread(strategies_board, _db_path())
 
 
+@app.get("/api/opportunities")
+async def opportunities_api() -> dict[str, Any]:
+    """Read-only unified OPPORTUNITY FEED: deduped finds across every crawler source with first-seen
+    time, expiry and price-since-found history. Estimates only; never places orders."""
+    from .opportunity_feed import opportunity_feed
+    return await asyncio.to_thread(opportunity_feed, _db_path())
+
+
 _TEV_BRAND = Path(__file__).with_name("static") / "brand" / "tev"
 
 
@@ -1142,7 +1150,7 @@ def versioned_assets(html: str, static_dir: Path = _STATIC_DIR) -> str:
 async def _no_stale_room_assets(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path.startswith(("/static/", "/trading-room")) or path == "/api/room-v7":
+    if path.startswith(("/static/", "/trading-room")) or path in ("/api/room-v7", "/api/opportunities"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
