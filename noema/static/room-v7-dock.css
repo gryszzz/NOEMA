@@ -1,0 +1,31 @@
+/* laptop dock layout (active when body.v7-laptop) */
+body.v7-laptop .app{grid-template-columns:minmax(230px,.8fr) minmax(0,2fr) minmax(330px,1.15fr)!important;grid-template-rows:44px 24px 30px minmax(0,1.25fr) minmax(0,1fr)!important}
+body.v7-laptop .left{grid-column:1;grid-row:4/6!important}
+body.v7-laptop .center-top{grid-column:2;grid-row:4!important;display:flex!important;flex-direction:column}
+body.v7-laptop .center-top .bay{flex:1 1 auto;min-height:0}
+body.v7-laptop .center-bot{grid-column:2;grid-row:5!important;grid-template-columns:1fr!important}
+body.v7-laptop #v7-dock{grid-column:3;grid-row:4/6;min-height:0}
+#v7-dock{display:none}body.v7-laptop #v7-dock{display:flex}
+#v7-dock .v7-tabs{display:flex;flex-wrap:wrap;gap:3px;padding:4px;letter-spacing:1px}
+#v7-dock .v7-tabs button{flex:1 1 auto;background:#03101a;border:1px solid var(--ln);color:var(--d);font:inherit;font-size:10px;padding:3px 5px;cursor:pointer;white-space:nowrap}
+#v7-dock .v7-tabs button.on{color:#fff;border-color:var(--c);box-shadow:0 0 8px rgba(39,231,255,.35) inset}
+#v7-dock .v7-tabs kbd{color:var(--c);margin-right:4px}
+#v7-dock .v7-panes{flex:1;min-height:0;position:relative}
+#v7-dock .v7-pane{position:absolute;inset:0;overflow:auto;padding:4px;display:none}
+#v7-dock .v7-pane.on{display:block}
+#v7-dock .v7-pane>.right,#v7-dock .v7-pane>.culture-row{display:flex!important;flex-direction:column;gap:6px;height:auto}
+#v7-dock .v7-pane>.pnl,#v7-dock .v7-pane>*>.pnl{min-height:0;flex:0 0 auto;overflow:visible}
+#v7-dock .v7-pane .body{max-height:none!important;overflow:visible}
+#v7-dock .v7-pane .cards,#v7-dock .v7-pane .xcards,#v7-dock .v7-pane .xfx{grid-template-columns:1fr!important;height:auto!important;max-height:none!important}
+#v7-dock .v7-pane .cards>*,#v7-dock .v7-pane .xcards>*{display:block!important}
+#v7-dock .v7-pane .xfx{display:grid!important}
+/* no clipped labels in the hero at laptop sizes */
+body.v7-laptop .v7f{grid-template-columns:minmax(0,1fr)!important}
+body.v7-laptop .v7f .pipe{height:60px}
+body.v7-laptop .v7f .st{font-size:9px;letter-spacing:1px;white-space:nowrap}
+body.v7-laptop .v7f .rj{flex-direction:row;flex-wrap:wrap;gap:3px}
+body.v7-laptop .v7f .rj div{display:inline-flex;gap:4px;border:1px solid #4a1f2a;padding:1px 6px;border-radius:9px;grid-template-columns:none}
+body.v7-laptop .v7f .rj div i{display:none}body.v7-laptop .v7f .rj div span{padding:0;overflow:visible}
+body.v7-laptop .v7c{grid-template-columns:1fr 128px;right:72px}
+body.v7-laptop .v7c .stp{right:140px}
+body.v7-laptop #v7-hp{max-height:30%!important}
