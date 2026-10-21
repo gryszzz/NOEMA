@@ -61,6 +61,7 @@ from .trench_dashboard import build_trench_overview
 from .trench_desks import desk_overview
 from .trading_room import build_trading_room
 from .command_center import build_command_center
+from .room_v4 import build_room_v4
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_diagnostics import live_wallet_networks, public_wallet_policy
 
@@ -1046,8 +1047,19 @@ async def command_center() -> dict[str, Any]:
     return await asyncio.to_thread(build_command_center, _db_path(), desks_pnl=pnl)
 
 
+@app.get("/api/room-v4")
+async def room_v4() -> dict[str, Any]:
+    """Read-only v4 extras: real GeckoTerminal candles for held tokens, CHIEF/SOCIAL log."""
+    return await asyncio.to_thread(build_room_v4, _db_path())
+
+
 @app.get("/trading-room", response_class=HTMLResponse)
 async def trading_room_page() -> str:
+    return (Path(__file__).with_name("static") / "trading-room-v4.html").read_text()
+
+
+@app.get("/command-center", response_class=HTMLResponse)
+async def command_center_page() -> str:
     return (Path(__file__).with_name("static") / "trading-room.html").read_text()
 
 

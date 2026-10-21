@@ -90,3 +90,9 @@ def test_command_center_real_tables(tmp_path):
     assert d["markets"]["independent"][0]["edge"] == 0.1
     assert d["autonomy"]["resolved"] == 1
     assert "not wired" in d["coordinator"]["status"] or d["coordinator"]["coordinator_module_present"]
+
+
+def test_room_v4_offline(tmp_path):
+    from noema.room_v4 import build_room_v4
+    d = build_room_v4(str(tmp_path / "none.db"), fetch=False)
+    assert d["charts"] == [] and d["social"]["status"] == "unavailable"
