@@ -620,3 +620,216 @@ class DexScreenerTrenchPriceClient:
             if prior is None or liquidity > float(prior_liquidity):
                 selected[mint] = pair
         return selected
+
+
+class SlidingWindowRateLimiter:
+    """Async limiter: at most ``max_calls`` acquisitions per ``period_seconds``.
+
+    GeckoTerminal's free API allows roughly 10 calls/minute; callers share one limiter.
+    ``clock``/``sleep`` are injectable so tests never wait on wall time.
+    """
+
+    def __init__(
+        self, max_calls: int, period_seconds: float, *,
+        clock: Any = time.monotonic, sleep: Any = asyncio.sleep,
+    ) -> None:
+        if max_calls <= 0 or period_seconds <= 0:
+            raise ValueError("rate limit must be positive")
+        self.max_calls = max_calls
+        self.period = period_seconds
+        self._clock = clock
+        self._sleep = sleep
+        self._calls: list[float] = []
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            while True:
+                now = self._clock()
+                self._calls = [t for t in self._calls if now - t < self.period]
+                if len(self._calls) < self.max_calls:
+                    self._calls.append(now)
+                    return
+                await self._sleep(self.period - (now - self._calls[0]) + 0.01)
+
+
+@dataclass(frozen=True)
+class PoolCandidate:
+    """One DEX pool observation used by paper trench desks (research input only)."""
+
+    mint: str
+    symbol: str
+    pool_address: str
+    pool_created_at: datetime | None
+    price_usd: float
+    liquidity_usd: float
+    fdv_usd: float | None
+    price_change_m5: float | None
+    price_change_h1: float | None
+    trades_m5: int | None
+    trades_h1: int | None
+    volume_h1_usd: float | None
+    source: str
+
+
+def _gecko_change(attrs: dict[str, Any], key: str) -> float | None:
+    changes = attrs.get("price_change_percentage")
+    if not isinstance(changes, dict):
+        return None
+    return _optional_float(changes.get(key))
+
+
+def _gecko_trades(attrs: dict[str, Any], key: str) -> int | None:
+    tx = attrs.get("transactions")
+    window = tx.get(key) if isinstance(tx, dict) else None
+    if not isinstance(window, dict):
+        return None
+    try:
+        return int(window.get("buys", 0) or 0) + int(window.get("sells", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_gecko_pool(item: dict[str, Any]) -> PoolCandidate | None:
+    attrs = item.get("attributes") if isinstance(item, dict) else None
+    if not isinstance(attrs, dict):
+        return None
+    base = (((item.get("relationships") or {}).get("base_token") or {}).get("data") or {})
+    base_id = base.get("id") if isinstance(base, dict) else None
+    if not isinstance(base_id, str) or "_" not in base_id:
+        return None
+    mint = base_id.split("_", 1)[1]
+    price = _optional_float(attrs.get("base_token_price_usd"))
+    liquidity = _optional_float(attrs.get("reserve_in_usd"))
+    if price is None or price <= 0 or liquidity is None or liquidity < 0:
+        return None
+    created: datetime | None = None
+    raw_created = attrs.get("pool_created_at")
+    if isinstance(raw_created, str):
+        try:
+            created = datetime.fromisoformat(raw_created)
+        except ValueError:
+            created = None
+    volume = attrs.get("volume_usd")
+    name = str(attrs.get("name") or "")
+    return PoolCandidate(
+        mint=mint,
+        symbol=name.split("/")[0].strip()[:32] or mint[:6],
+        pool_address=str(attrs.get("address") or ""),
+        pool_created_at=created,
+        price_usd=price,
+        liquidity_usd=liquidity,
+        fdv_usd=_optional_float(attrs.get("fdv_usd")),
+        price_change_m5=_gecko_change(attrs, "m5"),
+        price_change_h1=_gecko_change(attrs, "h1"),
+        trades_m5=_gecko_trades(attrs, "m5"),
+        trades_h1=_gecko_trades(attrs, "h1"),
+        volume_h1_usd=_optional_float(volume.get("h1")) if isinstance(volume, dict) else None,
+        source="geckoterminal",
+    )
+
+
+class GeckoTerminalPoolClient:
+    """Free, keyless GeckoTerminal pool discovery, rate limited to ~10 calls/minute."""
+
+    base_url = "https://api.geckoterminal.com/api/v2"
+
+    def __init__(
+        self, *, network: str = "solana", timeout_seconds: float = 10.0,
+        limiter: SlidingWindowRateLimiter | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.network = network
+        self.timeout = timeout_seconds
+        self.limiter = limiter or SlidingWindowRateLimiter(10, 60.0)
+        self.transport = transport
+
+    async def _pools(self, path: str) -> list[PoolCandidate]:
+        await self.limiter.acquire()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
+                response = await client.get(
+                    f"{self.base_url}/networks/{self.network}/{path}",
+                    headers={"accept": "application/json"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            error_class, _ = _http_error_class(exc.response.status_code)
+            raise ProviderFailure("geckoterminal", path, error_class,
+                                  http_status=exc.response.status_code) from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderFailure("geckoterminal", path, "timeout") from exc
+        except httpx.TransportError as exc:
+            raise ProviderFailure("geckoterminal", path, "transport_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise ProviderFailure("geckoterminal", path, "malformed_json") from exc
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            raise ProviderFailure("geckoterminal", path, "invalid_response")
+        return [pool for item in data if (pool := parse_gecko_pool(item)) is not None]
+
+    async def new_pools(self) -> list[PoolCandidate]:
+        return await self._pools("new_pools?page=1")
+
+    async def trending_pools(self) -> list[PoolCandidate]:
+        return await self._pools("trending_pools?page=1&duration=1h")
+
+
+class PumpFunLaunchClient:
+    """Keyless pump.fun frontend listing of newest launches (no login required).
+
+    The endpoint is unofficial; failures are classified and never fatal.
+    """
+
+    url = "https://frontend-api-v3.pump.fun/coins"
+
+    def __init__(self, *, timeout_seconds: float = 8.0,
+                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self.timeout = timeout_seconds
+        self.transport = transport
+
+    async def newest(self, limit: int = 20) -> list[dict[str, Any]]:
+        params = {"offset": 0, "limit": max(1, min(limit, 50)),
+                  "sort": "created_timestamp", "order": "DESC", "includeNsfw": "false"}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
+                response = await client.get(self.url, params=params)
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            error_class, _ = _http_error_class(exc.response.status_code)
+            raise ProviderFailure("pumpfun", "newest", error_class,
+                                  http_status=exc.response.status_code) from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderFailure("pumpfun", "newest", "transport_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise ProviderFailure("pumpfun", "newest", "malformed_json") from exc
+        if not isinstance(payload, list):
+            raise ProviderFailure("pumpfun", "newest", "invalid_response")
+        return [
+            {"mint": item["mint"], "symbol": str(item.get("symbol") or "")[:32],
+             "created_timestamp": item.get("created_timestamp"),
+             "usd_market_cap": _optional_float(item.get("usd_market_cap")),
+             "complete": bool(item.get("complete"))}
+            for item in payload
+            if isinstance(item, dict) and isinstance(item.get("mint"), str)
+        ]
+
+
+class XChatterSource:
+    """Research-only social chatter interface.
+
+    No keyless, ToS-compliant public X search path exists, so this source is a stub that
+    reports ``unavailable``. Chatter is never an entry trigger: desks may only record it
+    as context next to a decision that rules already made.
+    """
+
+    def __init__(self, *, enabled: bool = False) -> None:
+        self.enabled = enabled
+
+    async def chatter(self, symbol: str, mint: str) -> dict[str, Any]:
+        del symbol, mint
+        return {"status": "disabled" if not self.enabled else "unavailable",
+                "detail": "no keyless public X search path; research-only stub",
+                "mentions": None}
