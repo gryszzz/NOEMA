@@ -256,15 +256,15 @@ def load_samples(db: str, timing_db: str) -> list[dict[str, Any]]:
             if r[0] in seen:
                 continue
             seen.add(r[0])
-            p = cc.execute("SELECT pool FROM pools WHERE mint=?", (r["token_mint"],)).fetchone()
+            p = cc.execute("SELECT pool FROM pools WHERE mint=?", (r[0],)).fetchone()
             if not p or not p[0]:
                 continue
-            t0 = int(datetime.fromisoformat(r["captured_at"]).timestamp())
+            t0 = int(datetime.fromisoformat(r[1]).timestamp())
             cs = tc.load(cc, p[0], t0 - 3600, t0 + 3 * 3600)
             if len(cs) < 10:
                 continue
-            out.append({"mint": r["token_mint"], "t0": t0, "px": r["reference_price_usd"] or cs[0][4],
-                        "liq": r["reference_liquidity_usd"] or 0.0, "cs": cs})
+            out.append({"mint": r[0], "t0": t0, "px": r[2] or cs[0][4],
+                        "liq": r[3] or 0.0, "cs": cs})
         return out
     finally:
         src.close()
