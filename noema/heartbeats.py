@@ -207,8 +207,14 @@ def _launch_sources(main: str) -> list[dict[str, Any]]:
     got = {s: to_epoch(t) for s, t in _q(
         main, "SELECT source, MAX(received_at) FROM (SELECT source, received_at FROM launch_trades "
               "ORDER BY rowid DESC LIMIT 20000) GROUP BY source")}
-    label = {"helius": "helius (pump.fun trades via logsSubscribe)", "pumpportal": "pumpportal (keyed trades)"}
-    return [_rec(f"feed:{s}", "feed", 30, got.get(s), detail=label[s]) for s in ("helius", "pumpportal")]
+    label = {"helius": "helius (pump.fun trades via logsSubscribe, free)", "pumpportal": "pumpportal (keyed trades, paid)"}
+    srcs = ("helius", "pumpportal") if os.getenv("NOEMA_STREAM_TRADES", "0") == "1" else ("helius",)
+    out = [_rec(f"feed:{s}", "feed", 30, got.get(s), detail=label[s]) for s in srcs]
+    if len(srcs) == 1:  # keyed trades off: PumpPortal only supplies free creates/migrations
+        cr = {s: to_epoch(t) for s, t in _q(main, "SELECT source, MAX(received_at) FROM launch_stream GROUP BY source")}
+        out.append(_rec("feed:pumpportal", "feed", 120, cr.get("pumpportal"),
+                        detail="pumpportal (free new-token + migration stream; trades from helius)"))
+    return out
 
 
 def _provider_health(main: str) -> list[dict[str, Any]]:

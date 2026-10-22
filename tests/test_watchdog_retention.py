@@ -64,6 +64,7 @@ def test_reconcile_fixes_stale_pidfile(tmp_path, monkeypatch):
 
 def test_pumpportal_low_balance(monkeypatch):
     monkeypatch.setenv("NOEMA_PUMPPORTAL_WALLET_ADDRESS", "Addr1111")
+    monkeypatch.setenv("NOEMA_STREAM_TRADES", "1")  # thresholds only matter for the paid keyed stream
     assert watchdog.pumpportal_wallet_check(fetch=lambda a: 0.1)[0] is True
     monkeypatch.delenv("NOEMA_PUMPPORTAL_WARN_SOL", raising=False)
     assert watchdog.pumpportal_wallet_check(fetch=lambda a: 0.0308)[0] is True
