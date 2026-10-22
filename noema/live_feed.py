@@ -26,7 +26,11 @@ def _cached(key: str, ttl: float, fn: Any) -> Any:
     try:
         val = fn()
     except Exception as exc:  # noqa: BLE001 - a panel degrades to an explicit error, never breaks the stream
-        val = {"error": f"{type(exc).__name__}: {str(exc)[:120]}", "as_of": None}
+        err = f"{type(exc).__name__}: {str(exc)[:120]}"
+        # keep the last good panel (its as_of shows the staleness) and retry in ~5 s, never cache an error for long
+        val = {**hit[1], "last_error": err} if hit and "error" not in hit[1] else {"error": err, "as_of": None}
+        _CACHE[key] = (time.monotonic() - max(0.0, ttl - 5), val)
+        return val
     _CACHE[key] = (time.monotonic(), val)
     return val
 
