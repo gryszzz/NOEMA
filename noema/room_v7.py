@@ -259,7 +259,8 @@ def _parse_ts(v: Any) -> datetime:
         return datetime.now(UTC)
 
 
-def scan_novelty(conn: sqlite3.Connection, feed: list, *, now: datetime | None = None) -> dict[str, Any]:
+def scan_novelty(conn: sqlite3.Connection, feed: list, *, now: datetime | None = None,
+                 wall_clock: bool = False) -> dict[str, Any]:
     """Order the latest sweep newest-find first and age out the replay.
 
     The desk sweep pulls GeckoTerminal *trending* pools every cycle; those are the same
@@ -301,7 +302,8 @@ def scan_novelty(conn: sqlite3.Connection, feed: list, *, now: datetime | None =
         fresh.append(it | {"first_seen_at": fs.isoformat(), "shown_count": n,
                            "is_new": age <= NOVELTY_NEW_S, "retriggered": bool(re_trig and n > NOVELTY_MAX_SHOWN)})
     fresh.sort(key=lambda r: r["first_seen_at"], reverse=True)  # stable: ties keep sweep order
-    ago = round((now - newest_first).total_seconds() / 60, 1) if newest_first else None
+    wall = datetime.now(UTC) if wall_clock else now  # "Xm ago" is vs. the real clock, not the sweep
+    ago = round(max(0.0, (wall - newest_first).total_seconds()) / 60, 1) if newest_first else None
     return {"items": fresh, "stats": {
         "last_new_token_at": newest_first.isoformat() if newest_first else None,
         "last_new_token_min_ago": ago, "new_unique_tokens_1h": new_1h,
@@ -339,7 +341,7 @@ def funnel(conn: sqlite3.Connection, cycles: int = 30, *, fetch: bool = False) -
     rej = latest.get("rejections") or {}
     rejects = sorted(({"reason": k, "count": int(v)} for k, v in rej.items() if isinstance(v, (int, float))),
                      key=lambda r: -r["count"])
-    nov = scan_novelty(conn, latest.get("feed") or [], now=_parse_ts(latest.get("_ts")))
+    nov = scan_novelty(conn, latest.get("feed") or [], now=_parse_ts(latest.get("_ts")), wall_clock=True)
     scan = []
     for it in nov["items"][:40]:
         scan.append({k: it.get(k) for k in ("symbol", "mint", "source", "stage", "reason", "price_usd",
