@@ -22,3 +22,13 @@
  #lv-cv{height:280px}
 }
 #lv .lvred .lvdot{background:#e74c3c}#lv .lvamber .lvdot{background:#f5a623}#lv-treas .lvkv{grid-template-columns:auto 1fr}
+
+/* connections heartbeat chip (header, compact) */
+#hb-wrap{position:relative;display:inline-flex;margin-left:auto;align-self:center;font:11px ui-monospace,Menlo,monospace}
+#hb-chip{display:inline-flex;gap:6px;align-items:center;background:transparent;border:1px solid #2a3340;color:#9fb0c0;border-radius:10px;padding:2px 8px;cursor:pointer;font:inherit}
+#hb-chip .lvdot{background:#3fb950}#hb-chip.lvamber .lvdot{background:#d29922}#hb-chip.lvred .lvdot{background:#f85149}
+#hb-pop{position:absolute;right:0;top:calc(100% + 4px);z-index:80;background:#0d1117;border:1px solid #2a3340;border-radius:6px;padding:6px 8px;max-height:70vh;overflow:auto;min-width:430px;box-shadow:0 6px 20px #0008}
+#hb-pop table{border-collapse:collapse;width:100%}#hb-pop td{padding:1px 6px;white-space:nowrap}
+#hb-pop .hb-fresh .lvdot{background:#3fb950}#hb-pop .hb-amber .lvdot{background:#d29922}#hb-pop .hb-red .lvdot{background:#f85149}
+#hb-pop .hb-red td:nth-child(2){color:#f85149}#hb-pop .hb-amber td:nth-child(2){color:#d29922}
+#hb-wrap .lvdot{width:8px;height:8px;border-radius:50%;display:inline-block}#hb-pop .lvm{color:#7d8590}

@@ -359,6 +359,8 @@ def looking_section(dd: str, main_db: str, smart_db: str, now: float) -> dict[st
                            "features": {"lead_s": lead, "bid": bid, "ask": ask, "vol10": vol}})
         finally:
             c.close()
+    from .heartbeats import recent_skips
+    ev.extend(recent_skips(8))  # freshness-gate skips: "skip: stale <source>"
     ev.sort(key=lambda e: e.get("at") or "", reverse=True)
     return {"as_of": ev[0]["at"] if ev else None, "cadence_s": 60, "events": ev[:40]}
 
@@ -472,6 +474,14 @@ def xv_section(db: str) -> dict[str, Any]:
          "gate": "clears 1¢ gate" if (e or 0) >= 0.01 else "below 1¢ fee+buffer gate"} for a, b, v, s, g, co, e in rows]}
 
 
+def heartbeats_section(main_db: str) -> dict[str, Any]:
+    """Central connection heartbeat registry; also published to heartbeats.json for bots (no noema.db writes)."""
+    from .heartbeats import snapshot, write_json
+    snap = snapshot(main_db)
+    write_json(snap)
+    return snap
+
+
 def build_live(main_db: str) -> dict[str, Any]:
     now = time.time()
     dd = os.path.dirname(os.path.abspath(main_db))
@@ -486,7 +496,8 @@ def build_live(main_db: str) -> dict[str, Any]:
            "treasury": _cached("treasury", 5, lambda: treasury_section(main_db, now)),
            "pm_history": _cached("pmh", 300, lambda: pm_history_section(dd)),
            "near_close": _cached("near", 30, lambda: near_close_section(dd)),
-           "xv": _cached("xv", 30, lambda: xv_section(main_db))}
+           "xv": _cached("xv", 30, lambda: xv_section(main_db)),
+           "heartbeats": _cached("heartbeats", 10, lambda: heartbeats_section(main_db))}
     for v in out.values():
         if isinstance(v, dict):
             v.setdefault("as_of", None)

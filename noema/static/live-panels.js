@@ -46,7 +46,23 @@
     info.innerHTML=`<b class="lvy">${esc(c.sym||sh(c.mint))}</b><span class="lvm">${esc(c.name||"")}</span><span class="lvchip">found ${ago(Date.now()-T(c.found_at))} ago</span><span class="lvchip">${c.n_trades} trades · tf ${c.tf_s}s</span><span class="lvm">${ci%C.length+1}/${C.length}</span>`;
     if(window.TEVCandles)TEVCandles.draw(cv,c.rows,{interval:c.tf_s,label:"mcap ◎ · our captured trades",markers:[{t:Math.floor(T(c.found_at)/1e3),kind:"find"}],volLabel:"◎ vol"});
   }
-  function onData(d){const t=Date.now();if(lastPush)gaps=gaps.concat([t-lastPush]).slice(-10);lastPush=t;D=d;window.TEVLive=d;try{render()}catch(e){console.error(e)}}
+  /* Connections heartbeat: compact header chip -> popover (tev.heartbeats.v1). Ages tick live client-side. */
+  function hbMount(){ if($("#hb-chip"))return; const h=document.querySelector(".app header")||document.querySelector("header");
+    const w=document.createElement("span");w.id="hb-wrap";
+    w.innerHTML='<button id="hb-chip" type="button" title="connection heartbeats"><i class="lvdot"></i><span>Connections …</span></button><div id="hb-pop" hidden></div>';
+    if(h)h.appendChild(w);else{w.style.cssText="position:fixed;top:6px;right:8px;z-index:60";document.body.appendChild(w)}
+    $("#hb-chip").onclick=(e)=>{e.stopPropagation();const p=$("#hb-pop");p.hidden=!p.hidden;hbRender()};
+    document.addEventListener("click",(e)=>{const p=$("#hb-pop");if(p&&!p.hidden&&!w.contains(e.target))p.hidden=true});}
+  function hbRender(){ const H=D&&D.heartbeats;if(!H||!H.connections)return;hbMount();const now=Date.now();
+    const st=(c)=>{if(!c.last_success_at)return"red";const a=(now-T(c.last_success_at))/1e3;return a>6*c.cadence_s?"red":(a>2*c.cadence_s||c.last_error)?"amber":"fresh"};
+    const C=H.connections.map(c=>({...c,st:st(c)})),k={fresh:0,amber:0,red:0};C.forEach(c=>k[c.st]++);
+    const worst=k.red?"lvred":k.amber?"lvamber":"";const chip=$("#hb-chip");chip.className=worst;
+    chip.lastChild.textContent=`Connections ${k.fresh}/${C.length} fresh`+(k.red?` · ${k.red} red`:"")+(k.amber?` · ${k.amber} amber`:"");
+    const p=$("#hb-pop");if(p.hidden)return;const ord={red:0,amber:1,fresh:2};
+    p.innerHTML=`<div class="lvm">heartbeat per connection · amber &gt;2× cadence · red &gt;6× · also /api/heartbeats</div><table>`+
+      C.sort((a,b)=>ord[a.st]-ord[b.st]||a.group.localeCompare(b.group)||a.name.localeCompare(b.name)).map(c=>`<tr class="hb-${c.st}"><td><i class="lvdot"></i></td><td title="${esc(c.detail||"")}">${esc(c.name)}</td><td>${c.last_success_at?ago(now-T(c.last_success_at)):"never"}</td><td class="lvm">/${c.cadence_s>=3600?(c.cadence_s/3600)+"h":c.cadence_s>=60?(c.cadence_s/60)+"m":c.cadence_s+"s"}</td><td class="lvm" title="${esc(c.last_error||"")}">${esc((c.last_error||"").slice(0,40))}</td></tr>`).join("")+`</table>`;}
+  setInterval(()=>{try{hbRender()}catch(e){}},1000);
+  function onData(d){const t=Date.now();if(lastPush)gaps=gaps.concat([t-lastPush]).slice(-10);lastPush=t;D=d;window.TEVLive=d;try{render()}catch(e){console.error(e)}try{hbRender()}catch(e){console.error(e)}}
   let poll=null; function startPoll(){if(poll)return;mode="poll /api/live 5s";const f=()=>fetch("/api/live",{cache:"no-store"}).then(r=>r.json()).then(onData).catch(()=>{});f();poll=setInterval(f,5000)}
   function startSSE(){ if(!window.EventSource)return startPoll(); const es=new EventSource("/api/live/stream"); let ok=false;
     es.onmessage=(e)=>{ok=true;mode="SSE push";if(poll){clearInterval(poll);poll=null}onData(JSON.parse(e.data))};

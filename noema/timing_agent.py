@@ -421,11 +421,15 @@ def watch_new(c: sqlite3.Connection, db: str, max_age_s: int = 1800) -> int:
     return n
 
 
+TIMING_FRESHNESS_DEPS = ["feed:candles", "feed:launch_stream"]
+
+
 def tick(c: sqlite3.Connection, now: float) -> dict[str, int]:
     """Refresh candles for active candidates and let every agent decide; score once the window + hold is over."""
     agents = c.execute("SELECT agent_id, genome_json FROM t_agents WHERE status IN ('shadow','earning')").fetchall()
     horizon = 3 * 3600
     done = scored = 0
+    stale: list[str] | None = None
     for w in c.execute("SELECT * FROM t_watch").fetchall():
         if now - w["t0"] > horizon + 600:
             cs = tc.load(c, w["pool"], w["t0"] - 3600, w["t0"] + horizon)
@@ -448,6 +452,11 @@ def tick(c: sqlite3.Connection, now: float) -> dict[str, int]:
         if now - last >= CANDLE_REFRESH_S:                          # 1m paths stored for every passed candidate
             tc.minute_candles(c, w["pool"], int(now), 60 if last else 300)
         cs = tc.load(c, w["pool"], w["t0"] - 3600, int(now))
+        if stale is None:
+            from .heartbeats import gate as _fresh_gate
+            stale = _fresh_gate("timing", TIMING_FRESHNESS_DEPS, "live intents")
+        if stale:
+            continue                                               # skip: stale source (logged once per tick)
         for a in agents:                                           # live intent log (what it would do right now)
             g = Genome.of(json.loads(a["genome_json"]))
             if not cs or now - w["t0"] > g.window_min * 60:
