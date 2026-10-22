@@ -1109,6 +1109,31 @@ def resolve_x_tokens(conn: sqlite3.Connection, now: datetime, prices: Prices, db
 
 # ======================================================================= planner (adaptive queries)
 
+CASHTAG_NAMES = {"BTC": '"bitcoin"', "ETH": '"ethereum"', "SOL": '"solana"', "SPY": '"S&P 500"',
+                 "SPX": '"S&P 500"', "QQQ": '"Nasdaq 100"', "XRP": '"XRP"', "DOGE": '"dogecoin"'}
+_Q_CASHTAG = re.compile(r"\$([A-Za-z][A-Za-z0-9]{1,11})\b")
+
+
+def precise_query(q: str) -> str:
+    """X search strips '$' from cashtags, so '$SOL' degrades to the bare word 'SOL' (matches 'sol', 'SOL' the
+    sun, etc.). Replace each cashtag with a quoted name (known majors) or a quoted ticker, then drop OR
+    alternatives that became duplicates. Precision over recall."""
+    def sub(m: re.Match[str]) -> str:
+        t = m.group(1).upper()
+        return CASHTAG_NAMES.get(t, f'"{t}"')
+    out = _Q_CASHTAG.sub(sub, q)
+
+    def dedupe(m: re.Match[str]) -> str:
+        parts, seen = [], set()
+        for a in (x.strip() for x in m.group(1).split(" OR ")):
+            k = a.strip('"').lower()
+            if k not in seen:
+                seen.add(k)
+                parts.append(a)
+        return "(" + " OR ".join(parts) + ")"
+    return re.sub(r"\(([^()]*)\)", dedupe, out)
+
+
 def plan_queries(conn: sqlite3.Connection, cfg: dict[str, Any], now: datetime, *, calls_per_run: int = 12,
                  per_topic: int = 3) -> dict[str, Any]:
     """Same ``tev.x_sources.v1`` format. Base queries are rotated to ``per_topic`` per topic each 30-min slot,
@@ -1155,7 +1180,9 @@ def plan_queries(conn: sqlite3.Connection, cfg: dict[str, Any], now: datetime, *
                     ("SOL", "(solana OR $SOL) lang:en -is:retweet")):
         if len(counts) < 2:
             counts.append({"entity": ent, "query": cq, "topic": "crypto"})
-    plan["counts"] = counts[:2]
+    plan["counts"] = [{**x, "query": precise_query(x["query"])} for x in counts[:2]]
+    for t in (plan.get("topics") or {}).values():
+        t["queries"] = [precise_query(x) for x in t.get("queries") or []]
     n_search = sum(len(t.get("queries") or []) for t in (plan.get("topics") or {}).values()) + len(sm_q)
     plan["budget"] = {**(plan.get("budget") or {}), "calls_per_run": calls_per_run, "daily_target": 600,
                       "planned": {"search": n_search, "counts": len(plan["counts"]),
