@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS news_quote_marks (item_kind TEXT NOT NULL, item_id TE
     due_at TEXT NOT NULL, captured_at TEXT, bid REAL, ask REAL, mid REAL, status TEXT,
     PRIMARY KEY (item_kind, item_id, venue, market_id, offset_s));
 CREATE INDEX IF NOT EXISTS nqm_due ON news_quote_marks(captured_at, due_at);
+CREATE TABLE IF NOT EXISTS fs_paper_trades (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
+    agent_id TEXT NOT NULL, ticker TEXT NOT NULL, side TEXT NOT NULL, price REAL NOT NULL, fee REAL NOT NULL,
+    prob REAL NOT NULL, edge REAL NOT NULL, contracts INTEGER NOT NULL, result TEXT, pnl REAL, settled_at TEXT,
+    UNIQUE (agent_id, ticker));
 CREATE TABLE IF NOT EXISTS fs_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
     summary_json TEXT NOT NULL);
 """
@@ -248,7 +252,82 @@ def forecasts_for(c: sqlite3.Connection, api: Api, row: sqlite3.Row, mid: float,
             if p is not None:
                 out["fs-spot-vol"] = (p, {"rule": "lognormal from Coinbase spot + 4h realized vol",
                                           "spot": sv[0], "vol_per_sqrt_s": sv[1], "seconds_to_close": secs})
+    out.update(pm_forecasts(row, mid, now))
     return out
+
+
+class _PMContext:
+    """Trained per-category agents from pm_models (read from the training DB, refreshed every 5 min)."""
+
+    def __init__(self) -> None:
+        self.loaded_at = 0.0
+        self.fs: Any = None
+        self.agents: list[dict[str, Any]] = []
+        self.quotes: dict[str, tuple[float, float]] = {}
+
+
+PM = _PMContext()
+PM_DB = os.environ.get("NOEMA_PM_TRAIN_DB", "/workspace/NOEMA/data/pm_train.db")
+
+
+def pm_refresh(force: bool = False) -> None:
+    if not os.path.isfile(PM_DB) or (not force and time.monotonic() - PM.loaded_at < 300):
+        return
+    from .pm_history import refresh_live
+    from .pm_models import FeatureSource
+    c = sqlite3.connect(PM_DB, timeout=30)
+    try:
+        refresh_live(c)
+        c.execute("CREATE TABLE IF NOT EXISTS pm_agents (agent_id TEXT PRIMARY KEY, genome_json TEXT NOT NULL,"
+                  " status TEXT NOT NULL, generation INTEGER NOT NULL, parent_id TEXT, hired_at TEXT NOT NULL,"
+                  " fired_at TEXT, fire_reason TEXT, stats_json TEXT, weights_json TEXT, trade_enabled INTEGER DEFAULT 0)")
+        PM.fs = FeatureSource(c)
+        PM.agents = [{"id": a, "g": json.loads(g), "w": json.loads(w) if w else None, "trade": bool(t)}
+                     for a, g, w, t in c.execute("SELECT agent_id, genome_json, weights_json, trade_enabled FROM"
+                                                 " pm_agents WHERE status != 'fired'")]
+    finally:
+        c.close()
+    PM.loaded_at = time.monotonic()
+
+
+def pm_forecasts(row: sqlite3.Row, mid: float, now: datetime) -> dict[str, tuple[float, dict]]:
+    if not PM.agents or PM.fs is None:
+        return {}
+    from .pm_models import predict
+    secs = (_dt(row["close_time"]) - now).total_seconds()
+    lead = 6 * 3600 if row["category"] in ("weather", "economics") else 2 * 3600
+    if secs > lead:  # agents were trained on quotes at most `lead` before close; wait until comparable
+        return {}
+    b, a = PM.quotes.get(row["ticker"], (mid, mid))
+    r = {"series": row["series"], "event_ticker": row["event_ticker"] or "", "snap_at": now.isoformat(),
+         "close_time": row["close_time"], "strike_type": row["strike_type"], "floor_strike": row["floor_strike"],
+         "cap_strike": row["cap_strike"], "category": row["category"], "snap_mid": mid, "snap_bid": b, "snap_ask": a}
+    m = PM.fs.model(r)
+    r["model_kind"], r["model_p"] = m if m else (None, None)
+    out: dict[str, tuple[float, dict]] = {}
+    for ag in PM.agents:
+        if ag["g"]["category"] != row["category"]:
+            continue
+        p = predict(ag["g"]["model"], ag["w"], r)
+        if p is not None:
+            out[ag["id"]] = (p, {"rule": f"pm_models {ag['g']['model']}", "genome": ag["g"], "model_p": r["model_p"],
+                                 "trade_enabled": ag["trade"]})
+    return out
+
+
+def paper_trade(c: sqlite3.Connection, agent: str, why: dict, ticker: str, p: float, b: float, a: float, now: datetime) -> None:
+    """Paper only: record a 10-contract trade when the trained agent is cleared (OOS P&L CI > 0) and edge > fee."""
+    if not why.get("trade_enabled"):
+        return
+    from .pm_models import kalshi_fee
+    if p - a > kalshi_fee(a):
+        side, price, edge = "yes", a, p - a - kalshi_fee(a)
+    elif (1 - p) - (1 - b) > kalshi_fee(1 - b):
+        side, price, edge = "no", 1 - b, (1 - p) - (1 - b) - kalshi_fee(1 - b)
+    else:
+        return
+    c.execute("INSERT OR IGNORE INTO fs_paper_trades (at, agent_id, ticker, side, price, fee, prob, edge, contracts)"
+              " VALUES (?,?,?,?,?,?,?,?,?)", (now.isoformat(), agent, ticker, side, price, kalshi_fee(price), p, edge, 10))
 
 
 def forecast(c: sqlite3.Connection, api: Api, live: dict[str, dict[str, Any]], now: datetime) -> int:
@@ -262,6 +341,7 @@ def forecast(c: sqlite3.Connection, api: Api, live: dict[str, dict[str, Any]], n
             continue
         b, a, _ = _quote(m)
         mid = round((b + a) / 2, 4)
+        PM.quotes[row["ticker"]] = (b, a)
         done = {r[0] for r in c.execute("SELECT agent_id FROM fs_forecasts WHERE ticker=?", (row["ticker"],))}
         for agent, (p, why) in forecasts_for(c, api, row, mid, now).items():
             if agent in done:
@@ -274,6 +354,8 @@ def forecast(c: sqlite3.Connection, api: Api, live: dict[str, dict[str, Any]], n
                 metadata={"kind": "binary", "source": "fast_settle", "category": row["category"],
                           "close_time": row["close_time"], "bid": b, "ask": a, "paper_only": True})
             c.execute("INSERT INTO fs_forecasts VALUES (?,?,?,?)", (row["ticker"], agent, fid, now.isoformat()))
+            if agent.startswith("pm-"):
+                paper_trade(c, agent, why, row["ticker"], p, b, a, now)
             written += 1
     c.row_factory = None
     return written
@@ -295,6 +377,9 @@ def settle(c: sqlite3.Connection, api: Api, now: datetime, db_path: str | None) 
             if m.get("status") in ("finalized", "settled") and res:
                 c.execute("UPDATE fs_markets SET result=?, settled_at=? WHERE ticker=?", (res, now.isoformat(), t))
             continue
+        y = 1 if res == "yes" else 0
+        c.execute("UPDATE fs_paper_trades SET result=?, settled_at=?, pnl=contracts*((CASE side WHEN 'yes' THEN ?"
+                  " ELSE ? END) - price - fee) WHERE ticker=? AND result IS NULL", (res, now.isoformat(), y, 1 - y, t))
         n = resolve_open_forecasts(c, venue=VENUE, market_id=t, outcome_yes=1 if res == "yes" else 0,
                                    resolved_at=close, source="kalshi_settlement", db_path=db_path)
         c.execute("UPDATE fs_markets SET result=?, settled_at=?, resolved_forecasts=? WHERE ticker=?",
@@ -425,6 +510,9 @@ def stats(c: sqlite3.Connection, now: datetime) -> dict[str, Any]:
                                             " settled_at >= ?", (day,)).fetchone()[0],
         "agents": [{"agent": a, "n": n, "brier": round(b, 4), "market_brier": round(mb, 4),
                     "paper_ev_after_cost": round(ev or 0, 3)} for a, n, b, mb, ev in by_agent],
+        "pm_agents_live": len(PM.agents),
+        "paper_trades": dict(c.execute("SELECT COALESCE(result,'open'), COUNT(*) FROM fs_paper_trades GROUP BY 1").fetchall()),
+        "paper_pnl": c.execute("SELECT ROUND(COALESCE(SUM(pnl),0),2) FROM fs_paper_trades").fetchone()[0],
         "news_marks": dict(c.execute("SELECT COALESCE(status,'pending'), COUNT(*) FROM news_quote_marks"
                                      " GROUP BY status").fetchall()),
     }
@@ -443,6 +531,10 @@ def run_once(db: str, api: Api | None = None, now: datetime | None = None, *, fo
             c.commit()
         live = snapshot(c, api, now)
         c.commit()
+        try:
+            pm_refresh()
+        except Exception as exc:  # noqa: BLE001
+            out["pm_error"] = f"{type(exc).__name__}: {exc}"
         out["forecasts_written"] = forecast(c, api, live, now)
         c.commit()
         out["settled_markets"], out["resolved_forecasts"] = settle(c, api, now, db)

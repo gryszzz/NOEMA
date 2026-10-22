@@ -17,7 +17,8 @@ class FakeApi:
         return {"markets": [m], "cursor": None}
 
 
-def test_forecast_before_close_then_settle_scores(tmp_path):
+def test_forecast_before_close_then_settle_scores(tmp_path, monkeypatch):
+    monkeypatch.setattr(fs, "PM_DB", str(tmp_path / "missing.db"))
     db = str(tmp_path / "t.db")
     now = datetime(2026, 10, 21, 12, tzinfo=UTC)
     api = FakeApi(now)
