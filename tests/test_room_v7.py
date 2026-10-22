@@ -192,3 +192,11 @@ def test_pm_candles_aggregate_stored_quotes(tmp_path):
 
 def test_pm_candles_empty_state_is_explicit(tmp_path):
     assert "no market_snapshots" in build_room_v7(_db(tmp_path), fetch=False)["pm_candles"]["status"]
+
+
+def test_self_built_candles_keep_gaps_and_need_three_buckets():
+    from noema.room_v7 import _self_built
+    assert _self_built([(0, 1.0), (10, 2.0)]) == []
+    rows = _self_built([(0, 1.0), (100, 2.0), (310, 1.5), (1300, 1.4)])
+    assert [r[0] for r in rows] == [0.0, 300.0, 1200.0]  # no interpolated candle for the empty buckets
+    assert rows[0][1:5] == [1.0, 2.0, 1.0, 2.0] and rows[0][5] == 0.0

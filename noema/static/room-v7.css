@@ -122,3 +122,12 @@
 
 #v7-pmc-cv{width:100%;height:96px;display:block}#v7-pmc-s{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #v7-scan canvas{cursor:crosshair}
+.v7c canvas{min-height:72px}.v7c.has-c .stp{transform:rotate(-8deg) scale(.7)!important;transform-origin:top right;top:2px}
+#v7-cg{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:4px 0}#v7-cg[data-n='4']{grid-template-columns:repeat(4,minmax(0,1fr))}#v7-cg .cgc{border:1px solid rgba(39,231,255,.35);background:rgba(3,16,26,.9);box-shadow:0 0 8px rgba(39,231,255,.15) inset}#v7-cg canvas{width:100%;height:118px;display:block;cursor:crosshair}body.v7-laptop #v7-cg canvas{height:96px}
+/* radar + TO JUDGE box removed: freed space goes to the candle grid inside the crawler bay */
+.ch-radar,#v7-scan .judge{display:none!important}
+.ch-main{grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1fr)!important}
+.ch-stage .v7c,body.v7-laptop .ch-stage .v7c{right:8px!important}
+.ch-main #v7-cg{grid-column:auto;margin:0;min-height:0;height:100%;grid-auto-rows:minmax(0,1fr)}
+.ch-main #v7-cg[data-n='4']{grid-template-columns:repeat(2,minmax(0,1fr))}
+.ch-main #v7-cg .cgc{min-height:0;display:flex}.ch-main #v7-cg canvas,body.v7-laptop .ch-main #v7-cg canvas{height:100%;min-height:80px;flex:1}

@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import urllib.robotparser
 import xml.etree.ElementTree as ET
@@ -30,6 +31,7 @@ from urllib.parse import quote_plus, urlsplit
 
 import httpx
 
+from .crawl_http import HostGate, LiveFeed, SweepMeter, fetch_concurrently, retry_after_seconds
 from .provenance import EvidenceStore
 
 USER_AGENT = "NOEMA-evidence-crawler/1.0 (research; +https://github.com/gryszzz/NOEMA)"
@@ -299,31 +301,38 @@ def parse_fred_release_dates(body: bytes) -> list[Article]:
 
 
 class PoliteClient:
-    """HTTPS-only GETs with robots.txt, per-host spacing and conditional-GET cache."""
+    """HTTPS-only GETs with robots.txt, per-host spacing, keep-alive pooling and conditional-GET cache.
+
+    Thread-safe for ``fetch``: different hosts run in parallel, each host stays serialized and spaced,
+    and a 429/503 puts the host on a Retry-After cooldown. DB writes stay on the calling thread.
+    """
 
     def __init__(self, conn: sqlite3.Connection, client: httpx.Client | None = None,
                  sleep=time.sleep, spacing: float = HOST_SPACING_SECONDS) -> None:
         self.conn, self.sleep, self.spacing = conn, sleep, spacing
-        self.client = client or httpx.Client(timeout=15, follow_redirects=True,
-                                             headers={"User-Agent": USER_AGENT})
-        self._last: dict[str, float] = {}
+        self.client = client or httpx.Client(
+            timeout=15, follow_redirects=True, headers={"User-Agent": USER_AGENT},
+            limits=httpx.Limits(max_connections=16, max_keepalive_connections=16, keepalive_expiry=120))
+        self.gate = HostGate(spacing, HOST_SPACING, sleep=sleep)
         self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._robots_lock = threading.Lock()
+        self.meter: SweepMeter | None = None
+        self.live = LiveFeed(None, "news")
+        self.source_of: dict[str, str] = {}
 
-    def _wait(self, host: str) -> None:
-        gap = time.monotonic() - self._last.get(host, -1e9)
-        need = max(self.spacing, HOST_SPACING.get(host, 0.0)) if self.spacing else 0.0
-        if gap < need:
-            self.sleep(need - gap)
-        self._last[host] = time.monotonic()
+    def _wait(self, host: str) -> None:  # kept for callers/tests that space manually
+        self.gate.acquire(host).release()
 
     def allowed(self, url: str) -> bool:
         parts = urlsplit(url)
         if parts.scheme != "https":
             return False
-        if parts.netloc not in self._robots:
+        with self._robots_lock:
+            known = parts.netloc in self._robots
+        if not known:
             rp: urllib.robotparser.RobotFileParser | None = urllib.robotparser.RobotFileParser()
+            sem = self.gate.acquire(parts.netloc)
             try:
-                self._wait(parts.netloc)
                 r = self.client.get(f"https://{parts.netloc}/robots.txt")
                 if r.status_code >= 400:
                     rp = None  # no robots file: allowed
@@ -331,13 +340,14 @@ class PoliteClient:
                     rp.parse(r.text.splitlines())
             except httpx.HTTPError:
                 rp = None
-            self._robots[parts.netloc] = rp
+            finally:
+                sem.release()
+            with self._robots_lock:
+                self._robots[parts.netloc] = rp
         rp = self._robots[parts.netloc]
         return rp is None or rp.can_fetch(USER_AGENT, url)
 
-    def get(self, url: str) -> tuple[int, bytes | None]:
-        if not self.allowed(url):
-            return 999, None
+    def cond_headers(self, url: str) -> dict[str, str]:
         row = self.conn.execute("SELECT etag, last_modified FROM news_fetch_state WHERE url=?",
                                 (re.sub(r"(api_key=)[^&]+", r"\1***", url),)).fetchone()
         headers = {}
@@ -345,16 +355,40 @@ class PoliteClient:
             headers["If-None-Match"] = row[0]
         if row and row[1]:
             headers["If-Modified-Since"] = row[1]
-        self._wait(urlsplit(url).netloc)
+        return headers
+
+    def fetch(self, url: str, headers: dict[str, str]) -> tuple[Any, bytes | None, str | None, str | None]:
+        """Network only (no DB): returns (status, body, etag, last_modified)."""
+        if not self.allowed(url):
+            return 999, None, None, None
+        host = urlsplit(url).netloc
+        if self.gate.cooling(host):
+            return 429, None, None, None
+        sem = self.gate.acquire(host)
+        tok = self.live.start(host, self.source_of.get(url))
         try:
             r = self.client.get(url, headers=headers)
         except httpx.HTTPError as exc:
-            self._state(url, f"error:{type(exc).__name__}", None, None)
-            return 0, None
-        self._state(url, str(r.status_code), r.headers.get("etag"), r.headers.get("last-modified"))
-        if r.status_code == 304 or r.status_code >= 400:
-            return r.status_code, None
-        return r.status_code, r.content[:3_000_000]
+            if self.meter:
+                self.meter.record(0)
+            self.live.finish(tok, f"error:{type(exc).__name__}")
+            return f"error:{type(exc).__name__}", None, None, None
+        finally:
+            sem.release()
+        self.live.finish(tok, r.status_code, len(r.content))
+        if self.meter:
+            self.meter.record(r.status_code)
+        if r.status_code in (429, 503):
+            self.gate.cool(host, retry_after_seconds(r.headers.get("retry-after")))
+        body = None if (r.status_code == 304 or r.status_code >= 400) else r.content[:3_000_000]
+        return r.status_code, body, r.headers.get("etag"), r.headers.get("last-modified")
+
+    def get(self, url: str) -> tuple[int, bytes | None]:
+        status, body, etag, lm = self.fetch(url, self.cond_headers(url))
+        if status == 999:
+            return 999, None
+        self._state(url, str(status), etag, lm)
+        return (0 if isinstance(status, str) else status), body
 
     def _state(self, url: str, status: str, etag: str | None, lm: str | None) -> None:
         url = re.sub(r"(api_key=)[^&]+", r"\1***", url)  # never persist credentials
@@ -821,11 +855,28 @@ def feed_due(conn: sqlite3.Connection, name: str, now: datetime) -> bool:
     return not row or not row[0] or row[0] <= now.isoformat()
 
 
+FEED_MIN_INTERVAL = 120.0
+
+
+def adaptive_feed_interval(conn: sqlite3.Connection, name: str, base: float, new: int) -> float:
+    """Hot feeds (new items this fetch or last) poll faster (down to 2 min); feeds quiet twice in a
+    row slow to 2x base. Bounded so no provider is hit more than once per 2 minutes."""
+    row = conn.execute("SELECT last_new FROM news_feed_schedule WHERE name=?", (name,)).fetchone()
+    prev = int(row[0] or 0) if row else 0
+    if new >= 3 or (new and prev):
+        return max(FEED_MIN_INTERVAL, base / 2.5)
+    if new:
+        return max(FEED_MIN_INTERVAL, base / 1.5)
+    if not prev:
+        return base * 2.0
+    return base
+
+
 def mark_feed(conn: sqlite3.Connection, name: str, status: Any, new: int, now: datetime) -> None:
     ok = isinstance(status, int) and (status < 400 or status == 304) and status != 0
     row = conn.execute("SELECT failures FROM news_feed_schedule WHERE name=?", (name,)).fetchone()
     failures = 0 if ok else (row[0] if row else 0) + 1
-    interval = FEED_META.get(name, DEFAULT_FEED_META)[0]
+    interval = adaptive_feed_interval(conn, name, FEED_META.get(name, DEFAULT_FEED_META)[0], new)
     wait = interval if ok else min(FEED_MAX_BACKOFF, interval * 2 ** failures)
     if status == 999:
         wait = 24 * 3600.0  # robots.txt disallow: re-check daily, never fetch meanwhile
@@ -883,6 +934,8 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
     ensure_schema(conn)
     pc = client or PoliteClient(conn)
     pc.conn = conn
+    pc.meter = meter = SweepMeter("news")
+    pc.live = LiveFeed(db_path, "news")
     index = MarketIndex(watched_markets(conn))
     now = datetime.now(UTC)
     stats: dict[str, Any] = {"fetched": {}, "skipped_not_due": 0, "new_articles": 0, "links": 0,
@@ -894,11 +947,20 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
         feeds.append(("FRED releases", "fred", "https://api.stlouisfed.org/fred/releases/dates?file_type=json"
                       "&include_release_dates_with_no_data=true&sort_order=asc&limit=60&realtime_start="
                       + now.strftime("%Y-%m-%d") + "&api_key=" + quote_plus(fred_key)))
+    due = []
     for name, kind, url in feeds:
         if not force and not feed_due(conn, name, now):
             stats["skipped_not_due"] += 1
             continue
-        status, body = pc.get(url)
+        due.append((name, kind, url, pc.cond_headers(url)))
+        pc.source_of[url] = name
+    # fetch every due feed in parallel (each host still serialized + spaced by the gate)
+    fetched = fetch_concurrently(lambda d: pc.fetch(d[2], d[3]), due,
+                                 workers=int(os.getenv("NOEMA_NEWS_FETCH_WORKERS", "8")))
+    for (name, kind, url, _h), (raw_status, body, etag, lm) in zip(due, fetched, strict=True):
+        if raw_status != 999:
+            pc._state(url, str(raw_status), etag, lm)
+        status = 0 if isinstance(raw_status, str) else raw_status
         stats["fetched"][name] = status
         arts: list[Article] = []
         if body:
@@ -909,6 +971,7 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
             if _store(conn, a, index, include_sports, now, stats):
                 to_store.append(a)
         mark_feed(conn, name, status, stats["new_articles"] - before, now)
+        pc.live.items(name, stats["new_articles"] - before)
         conn.commit()
     gd = gdelt_state(conn)
     gdelt_ok = gdelt and not (gd["cooldown_until"] and gd["cooldown_until"] > now.isoformat())
@@ -971,6 +1034,8 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
                      "ORDER BY id DESC LIMIT 500)")
     stats["rematched"] = rematch_recent(conn, index, include_sports=include_sports)
     conn.commit()
+    stats["sweep"] = meter.save(conn, stats["new_articles"])
+    pc.meter = None
     conn.close()
     store = EvidenceStore(db_path)
     for a in to_store:
@@ -1113,14 +1178,18 @@ def main() -> None:
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=float, default=float(os.getenv("NOEMA_NEWS_INTERVAL_SECONDS", "300")))
     args = ap.parse_args()
+    conn0 = sqlite3.connect(args.db, timeout=30)
+    client = PoliteClient(conn0)  # one pooled keep-alive client + robots cache for the process
     while True:
         try:
-            print(json.dumps({"at": datetime.now(UTC).isoformat(), **crawl_once(args.db)}), flush=True)
+            print(json.dumps({"at": datetime.now(UTC).isoformat(), **crawl_once(args.db, client=client)}),
+                  flush=True)
         except Exception as exc:  # noqa: BLE001 - crawler must keep running; logged
             print(json.dumps({"at": datetime.now(UTC).isoformat(), "error": type(exc).__name__}), flush=True)
         if not args.loop:
             return
-        time.sleep(max(120.0, args.interval))  # per-feed schedules decide what is actually due
+        # per-feed (adaptive) schedules decide what is actually due; wake often enough for hot feeds
+        time.sleep(max(60.0, float(os.getenv("NOEMA_NEWS_TICK_SECONDS", "60"))))
 
 
 if __name__ == "__main__":
