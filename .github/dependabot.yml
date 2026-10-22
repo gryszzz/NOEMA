@@ -11,12 +11,22 @@ updates:
     schedule: {interval: weekly}
     open-pull-requests-limit: 5
     groups:
-      pip-minor-patch:
-        update-types: [minor, patch]
+      pip-all:
+        patterns: ["*"]
+        update-types: [major, minor, patch]
   - package-ecosystem: npm
     directory: /
     schedule: {interval: weekly}
     open-pull-requests-limit: 5
     groups:
-      npm-minor-patch:
-        update-types: [minor, patch]
+      npm-all:
+        patterns: ["*"]
+        update-types: [major, minor, patch]
+  - package-ecosystem: uv
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    groups:
+      uv-all:
+        patterns: ["*"]
+        update-types: [major, minor, patch]
