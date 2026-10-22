@@ -248,8 +248,14 @@ def load_samples(db: str, timing_db: str) -> list[dict[str, Any]]:
     try:
         rows = src.execute("SELECT token_mint, captured_at, reference_price_usd, reference_liquidity_usd FROM trench_candidates"
                            " WHERE disposition='observe' ORDER BY captured_at").fetchall()
-        out = []
+        if src.execute("SELECT 1 FROM sqlite_master WHERE name='alpha_candidates'").fetchone():
+            rows = list(rows) + src.execute("SELECT address, evaluated_at, price, liquidity FROM alpha_candidates"
+                                            " WHERE passed=1 AND chain='solana' ORDER BY evaluated_at").fetchall()
+        out, seen = [], set()
         for r in rows:
+            if r[0] in seen:
+                continue
+            seen.add(r[0])
             p = cc.execute("SELECT pool FROM pools WHERE mint=?", (r["token_mint"],)).fetchone()
             if not p or not p[0]:
                 continue
