@@ -368,11 +368,19 @@ def treasury_section(db: str, now: float | None = None) -> dict[str, Any]:
         rows = c.execute("SELECT at, status, total_usd, sources_json FROM equity_feed_readings "
                          "ORDER BY rowid DESC LIMIT 1440").fetchall()
         dep = c.execute("SELECT COALESCE(SUM(CAST(deposit_usd AS REAL)),0) FROM equity_feed_readings").fetchone()[0]
+        try:
+            deps = [{"at": a, "source": s, "usd": float(u)} for a, s, u in c.execute(
+                "SELECT at, source, amount_usd FROM equity_feed_deposits ORDER BY at")]
+        except sqlite3.OperationalError:
+            deps = []
     finally:
         c.close()
     if not rows:
         return {"as_of": None, "cadence_s": 60}
     at, status, total, sj = rows[0]
+    from .treasury import label_deposits
+    flows = label_deposits(deps)
+    bonus = sum(d["usd"] for d in flows if d["kind"] == "bonus")
     cur = _j(sj)
     venues = []
     for k, v in cur.items():
@@ -395,7 +403,8 @@ def treasury_section(db: str, now: float | None = None) -> dict[str, Any]:
                        "attempt_at": v.get("read_at") or at, "latency_ms": v.get("latency_ms"), "fresh": fresh,
                        "holdings": {h[:6]: q for h, q in (v.get("holdings") or {}).items()}})
     return {"as_of": at, "cadence_s": 60, "status": status, "total_usd": float(total) if total else None,
-            "net_deposits_usd": round(dep, 4), "venues": venues}
+            "net_deposits_usd": round(dep, 4), "bonus_usd": round(bonus, 4),
+            "owner_deposits_usd": round(dep - bonus, 4), "deposits": flows, "venues": venues}
 
 
 def pm_history_section(dd: str) -> dict[str, Any]:
