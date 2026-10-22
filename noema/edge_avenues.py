@@ -395,7 +395,7 @@ def main() -> None:  # pragma: no cover
     ap.add_argument("--db", default="data/edge_avenues.db")
     ap.add_argument("--main-db", default=os.getenv("NOEMA_DB_PATH", "data/noema.db"))
     ap.add_argument("--loop", action="store_true")
-    ap.add_argument("--interval", type=int, default=3600)
+    ap.add_argument("--interval", type=int, default=900)
     ap.add_argument("--no-fetch", action="store_true")
     ap.add_argument("--life-db", default=os.getenv("NOEMA_LIFECYCLE_DB", "data/agent_lifecycle.db"))
     a = ap.parse_args()

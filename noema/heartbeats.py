@@ -359,7 +359,7 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                           detail="agent_heartbeats"), "agent:noema-agent:cycle", "agent", 60))
     P(_probe(lambda: _rec("agent:trench_desks", "agent", 120, _max(main_db, "SELECT MAX(ts) FROM trench_desk_events"),
                           detail="desk cycle events"), "agent:trench_desks", "agent", 120))
-    P(_probe(lambda: _rec("agent:samplers", "agent", 300, _max(j("edge_avenues.db"), "SELECT MAX(at) FROM avenue_reports"),
+    P(_probe(lambda: _rec("agent:samplers", "agent", 900, _max(j("edge_avenues.db"), "SELECT MAX(at) FROM avenue_reports"),
                           detail="edge avenue samplers"), "agent:samplers", "agent", 900))
     P(_probe(_loops, "agent:loops", "agent", 60))
     P(_probe(lambda: _live_checkout_branch(main_db), "system:live_checkout_branch", "system", 60))
