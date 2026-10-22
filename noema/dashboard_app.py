@@ -1086,7 +1086,17 @@ async def x_signal_api() -> dict[str, Any]:
     shill warnings, KOL contract checks, crowd extremes. Evidence only; never a trade trigger.
     UI module: /static/x-edge-panel.js (window.TEVXEdge.mount(el))."""
     from .x_edge import x_signal_board
-    return await asyncio.to_thread(x_signal_board, _db_path())
+    # The board only changes when the X pull/edge run writes; a 15s cache keeps 2s UI polls cheap.
+    key = str(_db_path())
+    hit = _X_SIGNAL_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < 15:
+        return hit[1]
+    val = await asyncio.to_thread(x_signal_board, _db_path())
+    _X_SIGNAL_CACHE[key] = (time.monotonic(), val)
+    return val
+
+
+_X_SIGNAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 @app.get("/api/crawl-live")

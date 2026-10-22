@@ -1273,7 +1273,8 @@ def x_signal_board(db_path: str, *, now: datetime | None = None) -> dict[str, An
         last = q("SELECT at, detail FROM x_edge_runs ORDER BY id DESC LIMIT 1").fetchone()
         posts = []
         for r in q("SELECT p.post_id, p.author_handle, p.author_class, p.author_followers, p.text, p.created_at, "
-                   "p.topic, p.url, p.credibility, p.pump_risk, p.weight, p.flags, a.status, a.shrunk, a.n, a.hits "
+                   "p.topic, p.url, p.credibility, p.pump_risk, p.weight, p.flags, a.status, a.shrunk, a.n, a.hits, "
+                   "p.likes, p.reposts, p.replies, p.quotes, p.velocity, p.ingested_at "
                    "FROM x_posts p LEFT JOIN x_author_scores a ON a.author=LOWER(p.author_handle) WHERE p.weight>=0.01 "
                    "AND p.created_at>=? ORDER BY (p.post_id IN (SELECT post_id FROM x_market_links)) DESC, "
                    "p.created_at DESC LIMIT 30", (h48,)).fetchall():
@@ -1287,6 +1288,8 @@ def x_signal_board(db_path: str, *, now: datetime | None = None) -> dict[str, An
                           "flags": [f for f in (r[11] or "").split(",") if f],
                           "smart_money": {"status": r[12] or "unscored", "shrunk": r[13], "n": r[14] or 0,
                                           "hits": r[15] or 0},
+                          "engagement": {"likes": r[16], "reposts": r[17], "replies": r[18], "quotes": r[19]},
+                          "velocity": r[20], "ingested_at": r[21],
                           "stances": [{"venue": v, "market_id": m, "title": sanitize(t or m, 90), "stance": sv,
                                        "confidence": cf, "source": src} for v, m, t, sv, cf, src in pst]})
         agents = []
