@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+
+from .sqlite_util import connect as sqlite_connect
 
 
 class WalletBudgetLedger:
@@ -11,7 +12,7 @@ class WalletBudgetLedger:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(db)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS wallet_intent_budget (

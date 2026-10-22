@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .sqlite_util import connect as sqlite_connect
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class EvidenceStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS evidence_records (

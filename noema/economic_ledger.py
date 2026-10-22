@@ -12,6 +12,7 @@ from typing import Any
 
 from .economic_accounting import validate_snapshot
 from .economic_models import EconomicSnapshot
+from .sqlite_util import connect as sqlite_connect
 
 RECONCILIATION_STATES = frozenset({
     "OBSERVED", "ESTIMATED", "MATCHED", "RECONCILED", "DISPUTED", "INCOMPLETE",
@@ -146,7 +147,7 @@ class EconomicLedger:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """

@@ -14,6 +14,7 @@ from .history_forecaster import MODEL_VERSION
 from .paper_execution import FeeTerms, PaperQuote, parse_aware_time, quote_yes_taker
 from .paper_settlements import load_paper_settlements
 from .risk import RiskPolicy
+from .sqlite_util import connect as sqlite_connect
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class PaperResearchStore:
         self.path = path
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS paper_quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
