@@ -68,6 +68,23 @@ def decode_event(data: bytes) -> dict[str, Any] | None:
     return None
 
 
+WATCH: set[str] = set()          # smart-wallet watchlist (data/smart_wallets.db), reloaded by _reload_watch
+EXTEND: dict[str, float] = {}     # mint -> follow-until (epoch s) after a watched wallet buys
+WATCH_FOLLOW_S = 1800
+_WATCH_AT = [0.0]
+
+
+def reload_watch(path: str = "data/smart_wallets.db") -> int:
+    from .smart_wallets import load_watch
+    w = load_watch(path)
+    WATCH.clear()
+    WATCH.update(w)
+    now = time.time()
+    for m in [m for m, u in EXTEND.items() if u < now]:
+        EXTEND.pop(m, None)
+    return len(WATCH)
+
+
 def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], follow: dict[str, float] | None = None,
                     now: float | None = None) -> int:
     """Insert decoded trades for followed (recently created) mints; returns trades inserted."""
@@ -85,7 +102,10 @@ def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], fol
             continue
         if ev["kind"] == "create":
             follow.setdefault(ev["mint"], now)
-        elif sig and now - follow.get(ev["mint"], -1e18) <= TRADE_FOLLOW_S:
+        elif sig and (now - follow.get(ev["mint"], -1e18) <= TRADE_FOLLOW_S or ev["trader"] in WATCH
+                      or EXTEND.get(ev["mint"], 0) >= now):
+            if ev["trader"] in WATCH and ev["side"] == "buy":
+                EXTEND[ev["mint"]] = now + WATCH_FOLLOW_S  # price the watched wallet's exit (smart-wallet study)
             key = sig if n == 0 else f"{sig}:{n}"
             n += insert_trade(c, key, ev["mint"], ev["side"], ev["sol"], ev["tokens"], ev["trader"],
                               ev["market_cap_sol"], "helius")
@@ -322,6 +342,12 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue
                     if time.time() - last_commit > 2:
                         c.commit()
                         prune_follow(FOLLOW)
+                        if time.time() - _WATCH_AT[0] > 300:
+                            _WATCH_AT[0] = time.time()
+                            try:
+                                reload_watch()
+                            except Exception as exc:  # noqa: BLE001 - watchlist is optional
+                                print("watchlist reload failed", type(exc).__name__, flush=True)
                         for pk in [k for k, x in LL_POOLS.items() if time.time() - x["at"] > TRADE_FOLLOW_S]:
                             LL_POOLS.pop(pk, None)
                         last_commit = time.time()

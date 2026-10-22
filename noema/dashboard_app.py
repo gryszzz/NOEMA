@@ -1116,6 +1116,14 @@ async def treasury_api() -> dict[str, Any]:
     return await asyncio.to_thread(treasury_board, _db_path())
 
 
+@app.get("/api/smart-wallets")
+async def smart_wallets_api() -> dict[str, Any]:
+    """Smart-wallet study (paper/read-only): vetted wallets, patterns, SMART-FOLLOW paper results, recent moves."""
+    from .smart_wallets import latest_report
+    r = await asyncio.to_thread(latest_report, os.getenv("NOEMA_SMART_DB", "data/smart_wallets.db"))
+    return r or {"status": "no report yet"}
+
+
 @app.get("/api/strategies")
 async def strategies_api() -> dict[str, Any]:
     """Read-only structural-edge strategy book (paper): per-strategy P&L, n, EV, backtest verdict,

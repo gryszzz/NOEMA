@@ -222,6 +222,23 @@ def meta_score(m: dict[str, Any], hit_rate: float | None) -> float:
 
 
 # ------------------------------------------------------------------ shield
+_SMART: dict[str, Any] = {}
+
+
+def _smart_feats(mint: str) -> dict[str, float]:
+    """Vetted smart-wallet buys of this mint (vetting as of the previous hour; no look-ahead). Zeros if unavailable."""
+    try:
+        from .smart_wallets import build_positions, load_trades, smart_features, wallet_stats
+        now = time.time()
+        if now - _SMART.get("at", 0) > 600:
+            tr, meta = load_trades(os.getenv("NOEMA_DB_PATH", "data/noema.db"), os.getenv("NOEMA_SMART_DB", "data/smart_wallets.db"))
+            pos = build_positions(tr, meta)
+            _SMART.update(at=now, pos=pos, vet=wallet_stats(pos, (now // 3600) * 3600))
+        return smart_features(_SMART["pos"], mint, now, _SMART["vet"])
+    except Exception:  # noqa: BLE001
+        return {"smart_buyers": 0.0, "smart_buy_sol": 0.0}
+
+
 def shield(launch: dict[str, Any], ca: dict[str, tuple[int, int, float]], warn: dict[str, list[str]]
            ) -> tuple[bool, list[str], float]:
     d = launch["d"]
@@ -346,6 +363,7 @@ def replay(c: sqlite3.Connection, since: datetime, until: datetime, *, step_min:
                      "top_holders": float(a.get("topHoldersPercentage") or 0),
                      "liquidity_usd": float(la["d"].get("liquidity") or 0),
                      "hit_rate": m["hit_rate"] if m["hit_rate"] is not None else -1.0}
+            feats.update(_smart_feats(la["mint"]))
             rec = {"mint": la["mint"], "meta": m["meta"], "matched_at": now, "launched_at": la["at"],
                    "name": la["name"], "symbol": la["symbol"], "rank": rank, "sim": sim, "x_ca": cam,
                    "shield_ok": ok, "shield": why, "features": feats, "stage": m["stage"]}

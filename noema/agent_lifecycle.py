@@ -210,7 +210,9 @@ AVENUE_SEEDS = {"funding_carry": "carry: spot long / perp short when trailing fu
                 "news_lag": "news/X lag continuation, 2c move at +5m, exit +60m",
                 "pm_weather": "kalshi weather: market + Open-Meteo prior-run forecast stack, 08:00 LST entry",
                 "pm_thin": "wide-spread (>=3c) markets: walk-forward calibration / favourite-longshot correction",
-                "pm_politics": "long-dated politics: calibration + 14d drift mean-reversion at 30d to close"}
+                "pm_politics": "long-dated politics: calibration + 14d drift mean-reversion at 30d to close",
+                "smart_follow": "SMART-FOLLOW: copy entries of wallets vetted (before the signal) on realized PnL CI; "
+                                "TP40/SL25/wallet-exit/20m, 2%/side costs"}
 
 
 def seed_avenues(c: sqlite3.Connection) -> None:
