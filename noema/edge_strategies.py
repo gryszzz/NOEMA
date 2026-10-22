@@ -118,6 +118,17 @@ def pmus_fee(p: float) -> float:
     return _env("NOEMA_PMUS_TAKER_THETA", PMUS_TAKER_THETA) * p * (1 - p)
 
 
+def entry_buffer() -> float:
+    """Minimum expected gain per $1 contract AFTER fees (and slippage) before any paper agent enters.
+    NOEMA_ENTRY_BUFFER, default 0.01 (1 cent). Signals below it are recorded as shadow only."""
+    return max(0.0, _env("NOEMA_ENTRY_BUFFER", 0.01))
+
+
+def clears_fee_buffer(edge_after_fees: float | None) -> bool:
+    """Fee-plus-buffer gate: True only when the post-fee expected gain is known and >= the buffer."""
+    return edge_after_fees is not None and edge_after_fees >= entry_buffer()
+
+
 def leg_cost(venue: str, price: float) -> float:
     slip = _env("NOEMA_STRATEGY_SLIPPAGE", 0.005)
     fee = kalshi_fee(price) if venue.startswith("kalshi") else pmus_fee(price)
@@ -705,6 +716,8 @@ def open_signal(conn: sqlite3.Connection, sig: dict[str, Any], now: datetime) ->
                     (sig["strategy"], sig["key"])).fetchone():
         return None
     size = size_for(conn, sig["strategy"], sig)
+    if sig.get("edge") is not None and not clears_fee_buffer(sig.get("edge")):
+        size = 0.0  # fee-plus-buffer gate: record as shadow, never enter
     status = "open" if size > 0 else "shadow"
     if status == "shadow" and conn.execute("SELECT 1 FROM strategy_signals WHERE strategy=? AND key=? AND "
                                            "status='shadow' AND at>=?", (sig["strategy"], sig["key"],
