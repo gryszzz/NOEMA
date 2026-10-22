@@ -23,6 +23,7 @@ function scaffold(){const app=document.querySelector(".app"),hdr=app&&app.queryS
  const left=document.querySelector(".left");/* heat map removed: NEWS wire takes its place in the left column (see room-v6 aw-news) */if(false)left.insertAdjacentHTML("beforeend",`<section class="pnl v7p" id="v7-hp" style="flex:0 0 auto;max-height:34%"><h2>HEAT MAP<span class="tag" id="v7-heat-t">scanned pools · 5m move</span></h2><div class="body"><div id="v7-heat"></div></div></section>`);
  document.body.insertAdjacentHTML("beforeend",`<svg id="v7-links"></svg><div id="v7-flash"></div><div id="v7-keys"><div><h3>TEV · SHORTCUTS</h3><p><kbd>?</kbd>this overlay</p><p><kbd>S</kbd>decision sound <b id="v7-k-s"></b></p><p><kbd>F</kbd>decision flash <b id="v7-k-f"></b></p><p><kbd>P</kbd>pause / resume scan lane</p><p><kbd>A</kbd>prediction board: show all / actionable</p><p><kbd>R</kbd>refresh all feeds now</p><p><kbd>Esc</kbd>close</p><p class="dim">Cmd-R reload · Cmd-F full screen (Mac app)</p></div></div>`);
  const ch=byId("chain");if(bay&&ch)bay.after(ch);
+ if(bay&&!byId("v7-cg")){(ch||bay).insertAdjacentHTML("afterend",`<div id="v7-cg"></div>`)}
  V.booted=true}
 
 /* ---------- ticker ---------- */
@@ -82,14 +83,16 @@ function metricBars(x,W,H,it){const R=T.metricRows(it);x.font="9px monospace";x.
   x.fillStyle=r[0]==="5m %"?(r[1]<0?"#ff3b6b":"#39ff9c"):"#27e7ff";x.fillRect(56,y,Math.max(1,w),bh)});if(k<1)requestAnimationFrame(step)};step()}
 /* real OHLC candles (GeckoTerminal) via tev-candles.js; never a price line */
 function miniChart(cv,it,lab){if(!window.TEVCandles)return;TEVCandles.draw(cv,it.ohlc||[],{interval:it.interval,label:lab,key:lab,markers:it.markers||[],empty:"no candle data from GeckoTerminal for this pool"})}
-function scanNext(){if(V.paused)return;const f=(V.d||{}).funnel||{},L=f.scan||[],lane=byId("v7-scan");if(!lane)return;
+/* pools with real candles first so the chart dwell shows candles; the rest still replay after */
+T.chartFirst=L=>L.filter(it=>(it.ohlc||[]).length>1).concat(L.filter(it=>!((it.ohlc||[]).length>1)));
+function scanNext(){if(V.paused)return;const f=(V.d||{}).funnel||{},L=T.chartFirst(f.scan||[]),lane=byId("v7-scan");if(!lane)return;
  if(!L.length){byId("v7-sc-t").textContent="no sweep recorded yet — the lane only shows real scanned pools";return}
  if(V.scanCycle!==f.cycle_id){V.scanCycle=f.cycle_id;V.scanI=0}
  const i=V.scanI++%L.length,it=L[i],ck=T.checksFor(it),fail=ck.some(c=>c.state==="f");
  byId("v7-sc-t").innerHTML=`sweep <b>#${E(f.cycle_id)}</b> · ${HM(f.ts)} · replaying real crawl results`;byId("v7-sc-n").textContent=`${i+1}/${L.length}`;
  lane.querySelectorAll(".v7c").forEach(o=>{o.classList.add(o.dataset.fail==="1"?"drop":"fly");setTimeout(()=>o.remove(),800)});
  const px=it.price_usd==null?"—":(+it.price_usd<1?(+it.price_usd).toPrecision(4):N(it.price_usd));
- lane.insertAdjacentHTML("beforeend",`<div class="v7c" data-fail="${fail?1:0}"><div><div class="sy">${E(it.symbol||"?")}<small>${E(it.source||"")} · ${E((it.mint||"").slice(0,4))}…</small></div><div class="mt"><span>px <b>${px}</b></span><span>liq <b>${U(it.liquidity_usd)}</b></span><span>vol1h <b>${U(it.volume_h1_usd)}</b></span><span>5m <b class="${it.price_change_m5<0?"bad":"ok"}">${N(it.price_change_m5)}%</b></span><span>age <b>${N(it.pool_age_hours,1)}h</b></span>${it.trades_h1!=null?`<span>trades1h <b>${E(it.trades_h1)}</b></span>`:""}${it.probability!=null?`<span>judge p <b>${N(it.probability)}</b></span>`:""}</div></div><canvas></canvas><div class="ck">${ck.map(c=>`<div data-s="${c.state}"><i>·</i>${E(c.name)}</div>`).join("")}</div><div class="stp ${fail?"rej":"pass"}">${fail?"REJECTED":"PASSED"}<small>${E(it.reason||it.stage||"")}</small></div></div>`);
+ lane.insertAdjacentHTML("beforeend",`<div class="v7c${(it.ohlc||[]).length>1?" has-c":""}" data-fail="${fail?1:0}"><div><div class="sy">${E(it.symbol||"?")}<small>${E(it.source||"")} · ${E((it.mint||"").slice(0,4))}…</small></div><div class="mt"><span>px <b>${px}</b></span><span>liq <b>${U(it.liquidity_usd)}</b></span><span>vol1h <b>${U(it.volume_h1_usd)}</b></span><span>5m <b class="${it.price_change_m5<0?"bad":"ok"}">${N(it.price_change_m5)}%</b></span><span>age <b>${N(it.pool_age_hours,1)}h</b></span>${it.trades_h1!=null?`<span>trades1h <b>${E(it.trades_h1)}</b></span>`:""}${it.probability!=null?`<span>judge p <b>${N(it.probability)}</b></span>`:""}</div></div><canvas></canvas><div class="ck">${ck.map(c=>`<div data-s="${c.state}"><i>·</i>${E(c.name)}</div>`).join("")}</div><div class="stp ${fail?"rej":"pass"}">${fail?"REJECTED":"PASSED"}<small>${E(it.reason||it.stage||"")}</small></div></div>`);
  const card=lane.lastElementChild;requestAnimationFrame(()=>{card.classList.add("in");const cv=card.querySelector("canvas");miniChart(cv,it,`${i+1}/${L.length} ${it.symbol||"?"}`)});
  const rows=[...card.querySelectorAll(".ck div")];rows.forEach((r,k)=>setTimeout(()=>{if(!card.isConnected)return;r.classList.add("on",r.dataset.s);r.querySelector("i").textContent=r.dataset.s==="p"?"✔":r.dataset.s==="f"?"✖":"–"},450+k*170));
  setTimeout(()=>{if(!card.isConnected)return;card.querySelector(".stp").classList.add("on");if(!fail){const j=byId("v7-judge");j.classList.remove("hit");void j.offsetWidth;j.classList.add("hit");link("ag-judge",card)}},450+rows.length*170+120)}
@@ -98,6 +101,20 @@ function pmCandles(){const cv=byId("v7-pmc-cv");if(!cv||!window.TEVCandles)retur
  V.pmI=((V.pmI??-1)+1)%M.length;const m=M[V.pmI],lab=`${V.pmI+1}/${M.length} ${String(m.title||m.market_id).slice(0,28)}`;
  TEVCandles.draw(cv,m.ohlc,{interval:m.interval,label:lab,key:m.venue+m.market_id,markers:m.markers,volLabel:"quotes",empty:"no candle data"});
  byId("v7-pmc-s").textContent=`${m.venue} · ${m.market_id} · yes mid · ${m.quotes} quotes · ${m.interval} auto`}
+/* candle grid: 2 charts (laptop) / 4 (big monitor), each cycling different real finds, staggered */
+T.candlePool=d=>{const sc=((d||{}).funnel||{}).scan||[],pm=((d||{}).pm_candles||{}).markets||[];
+ return sc.filter(it=>(it.ohlc||[]).length>1).map(it=>({key:"p:"+(it.mint||it.symbol),sym:it.symbol||"?",src:"candles: "+(it.candle_source||"GeckoTerminal"),ohlc:it.ohlc,interval:it.interval,markers:it.markers||[]}))
+  .concat(pm.map(m=>({key:"m:"+m.venue+m.market_id,sym:String(m.title||m.market_id).slice(0,24),src:m.venue+" quotes",ohlc:m.ohlc,interval:m.interval,markers:m.markers||[],vol:"quotes"})))};
+T.nextPick=(pool,cur,taken)=>{if(!pool.length)return -1;for(let s=1;s<=pool.length;s++){const j=((cur<0?-1:cur)+s)%pool.length;if(!taken.includes(pool[j].key)||pool.length<=taken.length)return j}return cur};
+function cgN(){return window.innerWidth>=2200&&window.innerHeight>=1200?4:2}
+function cgBuild(){const g=byId("v7-cg");if(!g)return null;const cm=document.querySelector(".ch-main");if(cm&&g.parentElement!==cm)cm.insertBefore(g,cm.firstChild);const n=cgN();if(g.childElementCount!==n){g.dataset.n=n;g.innerHTML=Array.from({length:n},(_,k)=>`<div class="cgc"><canvas data-k="${k}"></canvas></div>`).join("");V.cg=Array.from({length:n},(_,k)=>({i:k-1,key:null}))}return g}
+function cgTick(k){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d),S=V.cg[k],cv=g.querySelectorAll("canvas")[k];if(!cv)return;
+ if(!pool.length){TEVCandles.draw(cv,[],{key:"none",empty:"no candle data yet · waiting for GeckoTerminal OHLCV / stored quotes"});return}
+ const taken=V.cg.filter((_,j)=>j!==k).map(o=>o.key);S.i=T.nextPick(pool,S.i,taken);const it=pool[S.i];S.key=it.key;
+ TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${S.i+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})}
+function cgRefresh(){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d);(V.cg||[]).forEach((S,k)=>{const it=pool.find(p=>p.key===S.key),cv=g.querySelectorAll("canvas")[k];
+ if(it&&cv)TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${pool.indexOf(it)+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})})}
+function cgBoot(){const D=10000;[0,1,2,3].forEach(k=>setTimeout(()=>{cgTick(k);every(()=>{if(k<cgN())cgTick(k)},D)},700+k*D/4));every(cgRefresh,30000);window.addEventListener("resize",()=>{cgBuild();cgRefresh()})}
 function link(fromId,toEl){const a=byId(fromId),svg=byId("v7-links");if(!a||!svg||!toEl)return;const r1=a.getBoundingClientRect(),r2=toEl.getBoundingClientRect();
  const x1=r1.right,y1=r1.top+r1.height/2,x2=r2.left,y2=r2.top+r2.height/2,mx=(x1+x2)/2;
  const p=document.createElementNS("http://www.w3.org/2000/svg","path");p.setAttribute("d",`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);svg.appendChild(p);vote(fromId.slice(3));setTimeout(()=>p.remove(),1600);while(svg.childNodes.length>6)svg.firstChild.remove()}
@@ -187,7 +204,7 @@ let busy=false;
 async function poll(){if(busy||document.hidden)return;busy=true;try{const r=await fetch(`/api/room-v7?since=${V.since}`,{cache:"no-store"});if(r.ok){const d=await r.json();const first=!V.d;V.d=d;ingest(d.events||[],first);render7()}}catch(e){}finally{busy=false}}
 function render7(){for(const f of [tape,pulse,pumpfun,chainV7,equity,stripe,heat,window.dial&&(()=>window.dial(null))])try{f&&f()}catch(e){console.error(e)}}
 window.chain=chainV7;
-function boot(){scaffold();poll();every(poll,2000);every(scanNext,10000);every(pmCandles,10000);setTimeout(pmCandles,900);every(()=>{try{window.wireSources();window.pm()}catch(e){}},5000);setTimeout(scanNext,400);
+function boot(){scaffold();poll();every(poll,2000);every(scanNext,10000);every(pmCandles,10000);cgBoot();setTimeout(pmCandles,900);every(()=>{try{window.wireSources();window.pm()}catch(e){}},5000);setTimeout(scanNext,400);
  window.addEventListener("resize",()=>{V.eqN=-1;equity()})}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot);else boot();
 })();

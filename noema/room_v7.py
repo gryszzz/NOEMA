@@ -187,8 +187,48 @@ def pm_candles(conn: sqlite3.Connection, *, markets: int = 6, min_quotes: int = 
             "status": "ok" if out else f"no market has {min_quotes}+ stored quotes in {lookback_hours}h"}
 
 
-def _scan_chart(it: dict, sweep_ts: Any) -> dict[str, Any]:
-    rows = _ohlc(it.get("candles"))
+def _self_built(points: list[tuple[float, float]], bucket: int = 300) -> list[list[float]]:
+    """OHLC from our own stored sweep price snapshots. Volume is unknown (0). Empty buckets stay gaps."""
+    out: dict[int, list[float]] = {}
+    for t, px in sorted(points):
+        k = int(t // bucket * bucket)
+        c = out.get(k)
+        if c is None:
+            out[k] = [float(k), px, px, px, px, 0.0]
+        else:
+            c[2], c[3], c[4] = max(c[2], px), min(c[3], px), px
+    rows = sorted(out.values())
+    return rows[-48:] if len(rows) >= 3 else []
+
+
+_GT_STATE = {"last": 0.0}
+GT_MIN_GAP_S = 4.0  # GeckoTerminal public limit is ~30/min shared with the desk; stay well under
+
+
+def _gt_fallback(mint: str, symbol: str, *, allow_fetch: bool) -> list[list[float]]:
+    """GeckoTerminal OHLCV looked up by token mint (finds a pool the desk did not chart). Cached 10 min,
+    misses cached too, at most one uncached call every GT_MIN_GAP_S seconds."""
+    from noema import room_v4
+    key = f"v7gt:{mint}"
+    hit = room_v4._CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < 600:
+        return _ohlc((hit[1] or {}).get("candles"))
+    if not allow_fetch or time.monotonic() - _GT_STATE["last"] < GT_MIN_GAP_S:
+        return []
+    _GT_STATE["last"] = time.monotonic()
+    val = room_v4._cached(key, 600, lambda: room_v4._ohlcv(mint, symbol, "minute", 5))
+    return _ohlc((val or {}).get("candles"))
+
+
+def _scan_chart(it: dict, sweep_ts: Any, history: dict | None = None, allow_fetch: bool = False) -> dict[str, Any]:
+    rows, src = _ohlc(it.get("candles")), "GeckoTerminal (desk)"
+    mint = str(it.get("mint") or "")
+    if len(rows) < 2 and mint:
+        rows, src = _gt_fallback(mint, str(it.get("symbol") or ""), allow_fetch=allow_fetch), "GeckoTerminal (by mint)"
+    if len(rows) < 2 and history and mint:
+        rows, src = _self_built(history.get(mint) or []), "self-built from our sweep snapshots"
+    if len(rows) < 2:
+        rows, src = [], None
     marks = []
     st, why = str(it.get("stage") or ""), str(it.get("reason") or "")
     try:
@@ -200,10 +240,10 @@ def _scan_chart(it: dict, sweep_ts: Any) -> dict[str, Any]:
             marks.append({"t": t, "kind": "entry"})
         elif st != "rejected":
             marks.append({"t": t, "kind": "find"})
-    return {"ohlc": rows, "interval": _interval_label(rows), "markers": marks}
+    return {"ohlc": rows, "interval": _interval_label(rows), "markers": marks, "candle_source": src}
 
 
-def funnel(conn: sqlite3.Connection, cycles: int = 30) -> dict[str, Any]:
+def funnel(conn: sqlite3.Connection, cycles: int = 30, *, fetch: bool = False) -> dict[str, Any]:
     rows = _rows(conn, "SELECT id, ts, payload_json FROM trench_desk_events WHERE event='desk_cycle' "
                        "ORDER BY id DESC LIMIT ?", (cycles,))
     series = []
@@ -218,6 +258,18 @@ def funnel(conn: sqlite3.Connection, cycles: int = 30) -> dict[str, Any]:
                        "judged": int(p.get("entry_passed") or 0), "entered": int(p.get("entries") or 0),
                        "pumpfun": int(p.get("pumpfun_new_launches") or 0)})
     series.reverse()
+    history: dict[str, list[tuple[float, float]]] = {}
+    for _rid, ts, payload in rows:
+        try:
+            t = datetime.fromisoformat(str(ts)).timestamp()
+        except ValueError:
+            continue
+        for f in _j(payload).get("feed") or []:
+            if isinstance(f, dict) and f.get("mint") and f.get("price_usd") not in (None, ""):
+                try:
+                    history.setdefault(str(f["mint"]), []).append((t, float(f["price_usd"])))
+                except (TypeError, ValueError):
+                    pass
     rej = latest.get("rejections") or {}
     rejects = sorted(({"reason": k, "count": int(v)} for k, v in rej.items() if isinstance(v, (int, float))),
                      key=lambda r: -r["count"])
@@ -229,8 +281,12 @@ def funnel(conn: sqlite3.Connection, cycles: int = 30) -> dict[str, Any]:
                                             "liquidity_usd", "volume_h1_usd", "price_change_m5",
                                             "pool_age_hours", "trades_h1", "fdv_usd",
                                             "top10_holder_fraction", "probability", "confidence")}
-                    | {"closes": _closes(it.get("candles"))} | _scan_chart(it, latest.get("_ts")))
-    return {"cycle_id": latest.get("_id"), "ts": latest.get("_ts"), "series": series,
+                    | {"closes": _closes(it.get("candles"))} | _scan_chart(it, latest.get("_ts"), history, fetch))
+    have = sum(1 for x in scan if x["ohlc"])
+    cov = {"with_candles": have, "total": len(scan), "pct": round(100 * have / len(scan)) if scan else None,
+           "by_source": {k: sum(1 for x in scan if x["candle_source"] == k) for k in {x["candle_source"] for x in scan}
+                         if k}}
+    return {"cycle_id": latest.get("_id"), "ts": latest.get("_ts"), "series": series, "candle_coverage": cov,
             "latest": series[-1] if series else None, "rejects": rejects, "scan": scan,
             "judgement": latest.get("judgement"), "chief_gate": latest.get("chief"),
             "pumpfun_new": latest.get("pumpfun_new_launches")}
@@ -535,7 +591,7 @@ def build_room_v7(db_path: str, *, since_id: int = 0, fetch: bool = True,
         conn = _ro(db_path)
         try:
             out["events"] = pulse(conn, since_id)
-            out["funnel"] = funnel(conn)
+            out["funnel"] = funnel(conn, fetch=fetch)
             out["chief"] = chief_state(conn, out["funnel"])
             out["equity"] = equity_curve(conn)
             out["news"] = news_rate(conn)
