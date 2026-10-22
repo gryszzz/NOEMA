@@ -23,3 +23,22 @@ test("step moves at most speed*dt and arrives", () => {
   assert.equal(s.x, 40); assert.equal(s.done, false);
   assert.equal(R.step({ x: 99, y: 0 }, { x: 100, y: 0 }, 0.1, 400).done, true);
 });
+
+test("tetrapod gait: diagonal groups alternate, stance feet never lift", () => {
+  assert.equal(R.group(0, -1), R.group(1, 1)); assert.notEqual(R.group(0, -1), R.group(0, 1));
+  for (let g = 0; g < 1; g += 0.05) for (let j = 0; j < 4; j++) {
+    const a = R.legPhase(g, j, -1), b = R.legPhase(g, j, 1);
+    assert.notEqual(a.swing, b.swing); if (!a.swing) assert.equal(a.lift, 0);
+  }
+});
+test("leg IK keeps segment lengths and knees bulge outward", () => {
+  for (const side of [-1, 1]) for (let j = 0; j < 4; j++) {
+    const P = R.legPose({ gait: 0.3, stride: 1 }, j, side, 0);
+    assert.ok(Math.abs(Math.hypot(P.knee.x - P.hip.x, P.knee.y - P.hip.y) - R.L1[j]) < 0.6);
+    assert.ok(P.knee.x * side > P.hip.x * side);
+  }
+});
+test("legs at rest with no stride stay planted (no gait offset)", () => {
+  const a = R.legPose({ gait: 0.1, stride: 0 }, 1, 1, 0), b = R.legPose({ gait: 0.7, stride: 0 }, 1, 1, 0);
+  assert.ok(Math.abs(a.foot.y - b.foot.y) < 1e-9);
+});
