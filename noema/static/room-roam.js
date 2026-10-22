@@ -38,11 +38,46 @@ function poll(){const v=(W_.TEV_V7||{}).d,H=W_.TEV_CRAWLER;const L=v?(H&&H.lates
 function dispatch(c,ev){const t=el(ev.kind);if(!t)return false;c.ev=ev;c.tgt=t;c.arrive=null;return true}
 function addTag(c,now){const r=c.tgt.r;R.tags.push({x:c.x,y:c.y,t:now,kind:c.ev.kind,text:`${R.LAB[c.ev.kind]||c.ev.kind} ${c.ev.kind==="opp"?"":"fetched "}${Math.max(0,Math.round((now-c.ev.at)/1e3))}s ago${c.ev.detail?" · "+c.ev.detail.slice(0,32):""}`,w:r.width});
  if(R.tags.length>8)R.tags.shift()}
-function drawSpider(x,c,size,moving){const s=size;x.save();x.translate(c.x,c.y);x.rotate(moving?c.dir+Math.PI/2:0);x.scale(s,s);x.strokeStyle="#e8f6ff";x.lineWidth=1.4/s*Math.max(.8,s);
- for(let side=-1;side<=1;side+=2)for(let j=0;j<4;j++){const base=-.9+j*.6,wig=R.reduced?0:Math.sin(c.legs+j*1.7+(side>0?Math.PI:0))*.25,a=base+wig;
-  x.beginPath();x.moveTo(0,(j-1.5)*2);x.lineTo(side*10*Math.cos(a*.6),-8*Math.sin(a)+(j-1.5)*3);x.lineTo(side*19*Math.cos(a*.5),-14*Math.sin(a)+5+(j-1.5)*4);x.stroke()}
- x.fillStyle="#0b1d2a";x.strokeStyle="#27e7ff";x.lineWidth=1.2;x.beginPath();x.ellipse(0,5,5.5,7,0,0,7);x.fill();x.stroke();x.beginPath();x.arc(0,-4,3.6,0,7);x.fill();x.stroke();
- x.fillStyle="#ff3b6b";x.beginPath();x.arc(-1.4,-5,.9,0,7);x.arc(1.4,-5,.9,0,7);x.fill();x.restore()}
+/* ---------- articulated legs: alternating tetrapod gait + 2-bone IK + tarsus ---------- */
+/* legs j=0..3 front->back, side -1 left / +1 right. Body frame: forward = -y. Units are pre-scale. */
+R.HIPS=[-3.2,-1,1.2,3.4];R.REST=[[13,-15],[16,-5],[16,5.5],[13,15.5]];R.L1=[11,10,10,11];R.L2=[10.5,9,9,11.5];
+R.group=(j,side)=>(j+(side>0?1:0))%2;
+/* gait phase -> fore/aft foot offset (+ = forward) and lift 0..1. Stance [0,.5) plants & slides back; swing [.5,1) lifts & reaches forward */
+R.legPhase=(gait,j,side)=>{const p=(((gait+R.group(j,side)*.5)%1)+1)%1;if(p<.5)return{off:1-4*p,lift:0,swing:false};const q=(p-.5)*2;return{off:-1+2*(q*q*(3-2*q)),lift:Math.sin(q*Math.PI),swing:true}};
+R.ik=(hx,hy,fx,fy,l1,l2,ox)=>{let dx=fx-hx,dy=fy-hy,d=Math.hypot(dx,dy)||1e-6;const m=l1+l2-.01;if(d>m){fx=hx+dx/d*m;fy=hy+dy/d*m;dx=fx-hx;dy=fy-hy;d=m}
+ const a=Math.acos(Math.max(-1,Math.min(1,(l1*l1+d*d-l2*l2)/(2*l1*d)))),b=Math.atan2(dy,dx);
+ const k1={x:hx+Math.cos(b+a)*l1,y:hy+Math.sin(b+a)*l1},k2={x:hx+Math.cos(b-a)*l1,y:hy+Math.sin(b-a)*l1};
+ /* knee bulges outward (away from body axis): pick the candidate farther from x=0 on the leg's side */
+ const k=(k1.x*ox>k2.x*ox)?k1:k2;return{knee:k,foot:{x:fx,y:fy}}};
+R.legPose=(c,j,side,t)=>{const st=c.stride||0,ph=R.legPhase(c.gait||0,j,side),S=4.6*st,lift=ph.lift*st;
+ let tw=0;if(!R.reduced&&st<.2){const n=Math.sin(t*.0021*(1+j*.37)+j*2.1+side)*Math.sin(t*.0013+j*1.3*side);tw=n>.82?(n-.82)*9:0}
+ const hx=side*2.6,hy=R.HIPS[j],fx=side*(R.REST[j][0]-lift*3.2+tw*.6),fy=R.REST[j][1]-ph.off*S-tw*1.4;
+ const r=R.ik(hx,hy,fx,fy,R.L1[j]*(1+lift*.04),R.L2[j],side);
+ /* tarsus: last ~30% of the tibia, kinked downward/outward so each leg reads as 3 segments */
+ const kx=r.knee.x,ky=r.knee.y,ax=kx+(r.foot.x-kx)*.68+side*(1.3+lift),ay=ky+(r.foot.y-ky)*.68+(j<2?-1:1)*.6;
+ return{hip:{x:hx,y:hy},knee:r.knee,ankle:{x:ax,y:ay},foot:r.foot,lift}};
+let GLOW=null;function glow(){if(GLOW||!doc)return GLOW;const g=doc.createElement("canvas");g.width=g.height=32;const x=g.getContext("2d"),rg=x.createRadialGradient(16,16,0,16,16,16);
+ rg.addColorStop(0,"rgba(220,255,255,1)");rg.addColorStop(.18,"rgba(39,231,255,.95)");rg.addColorStop(.5,"rgba(39,231,255,.28)");rg.addColorStop(1,"rgba(39,231,255,0)");x.fillStyle=rg;x.fillRect(0,0,32,32);return GLOW=g}
+function node(x,g,p,r,a){x.globalAlpha=a;x.drawImage(g,p.x-r,p.y-r,r*2,r*2)}
+function drawSpider(x,c,size,moving,t){const s=size,mini=c!==R.main,g=glow();
+ if(c.heading==null)c.heading=0;if(moving){let d=c.dir+Math.PI/2-c.heading;d=Math.atan2(Math.sin(d),Math.cos(d));c.heading+=d*.25}
+ const bob=R.reduced?0:Math.sin((c.gait||0)*Math.PI*4)*.55*(c.stride||0),sway=R.reduced?0:Math.sin((c.gait||0)*Math.PI*2)*.35*(c.stride||0);
+ x.save();x.translate(c.x,c.y);x.rotate(c.heading);x.scale(s,s);x.lineCap="round";x.lineJoin="round";
+ const poses=[];for(let side=-1;side<=1;side+=2)for(let j=0;j<4;j++)poses.push(R.legPose(c,j,side,t));
+ x.save();x.translate(sway,bob*.4);
+ for(const P of poses){x.strokeStyle=P.lift>.05?"#bff6ff":"#e8f6ff";
+  x.lineWidth=(mini?1.6:1.9)/s+.5;x.beginPath();x.moveTo(P.hip.x,P.hip.y);x.lineTo(P.knee.x,P.knee.y);x.stroke();
+  x.lineWidth=(mini?1.2:1.4)/s+.35;x.beginPath();x.moveTo(P.knee.x,P.knee.y);if(!mini)x.lineTo(P.ankle.x,P.ankle.y);x.lineTo(P.foot.x,P.foot.y);x.stroke()}
+ if(g){const prev=x.globalCompositeOperation;x.globalCompositeOperation="lighter";
+  for(const P of poses){if(!mini){node(x,g,P.knee,2.6,.95);node(x,g,P.ankle,1.9,.8);node(x,g,P.hip,1.6,.6)}node(x,g,P.foot,mini?2.2:2.4+P.lift*1.4,P.lift>.05?1:.85)}
+  x.globalCompositeOperation=prev;x.globalAlpha=1}
+ x.restore();
+ x.translate(sway*.6,bob);const br=1+bob*.03;x.scale(br,br);
+ x.fillStyle="#0b1d2a";x.strokeStyle="#27e7ff";x.lineWidth=1.2;x.beginPath();x.ellipse(0,7,5.8,7.6,0,0,7);x.fill();x.stroke();
+ x.beginPath();x.ellipse(0,-2.5,3.9,4.4,0,0,7);x.fill();x.stroke();
+ if(!mini){x.strokeStyle="rgba(39,231,255,.55)";x.lineWidth=.6;x.beginPath();x.moveTo(0,2);x.lineTo(0,12);x.moveTo(-2.6,6);x.lineTo(2.6,6);x.stroke()}
+ if(g){x.globalCompositeOperation="lighter";node(x,g,{x:0,y:7},mini?4:6,.35);x.globalCompositeOperation="source-over";x.globalAlpha=1}
+ x.fillStyle="#ff3b6b";x.beginPath();x.arc(-1.4,-4.6,.9,0,7);x.arc(1.4,-4.6,.9,0,7);x.fill();x.restore()}
 function tick(t){R.raf=0;const cv=canvas(),vw=innerWidth,vh=innerHeight,dpr=devicePixelRatio||1;if(cv.width!==Math.round(vw*dpr)||cv.height!==Math.round(vh*dpr)){cv.width=Math.round(vw*dpr);cv.height=Math.round(vh*dpr)}
  const x=cv.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,vw,vh);const now=Date.now(),dt=Math.min(.05,R.lastT?(t-R.lastT)/1e3:.016);R.lastT=t;
  const sc=Math.max(1.4,Math.min(2.4,vw/1100));if(!R.main)R.main=crawler(sc);R.main.size=sc;
@@ -60,15 +95,16 @@ function tick(t){R.raf=0;const cv=canvas(),vw=innerWidth,vh=innerHeight,dpr=devi
  x.globalAlpha=1;
  const speed=Math.max(380,Math.hypot(vw,vh)*.42);
  for(const c of all){if(c.ev&&c.tgt){c.tgt.r=c.tgt.e.getBoundingClientRect();const L=R.land(c.tgt.r,vw,vh);
-   if(R.reduced){c.x=L.x;c.y=L.y}const s=R.step(c,L,dt,c===R.main?speed:speed*1.25);c.moving=!s.done;c.dir=Math.atan2(L.y-c.y,L.x-c.x);c.x=s.x;c.y=s.y;c.legs+=s.moved*.08;
+   if(R.reduced){c.x=L.x;c.y=L.y}const s=R.step(c,L,dt,c===R.main?speed:speed*1.25);c.moving=!s.done;c.dir=Math.atan2(L.y-c.y,L.x-c.x);c.x=s.x;c.y=s.y;if(!R.reduced)c.gait=(c.gait||0)+s.moved/(c.size*19);
    if(s.done){if(!c.arrive){c.arrive=now;addTag(c,now)}if(now-c.arrive>1600){c.anchor={x:c.x,y:c.y};c.ev=null;c.tgt=null;c.arrive=null}}
    if(L.off){x.fillStyle="#ffd23f";x.font="bold 11px ui-monospace,monospace";x.fillText({up:"▲",down:"▼",left:"◀",right:"▶"}[L.off]+" "+(R.LAB[c.ev?.kind]||""),Math.min(vw-90,L.x+16),L.y+4)}}
   else if(c===R.main){c.moving=false}
   /* dragline from where it last stood */
   x.strokeStyle="rgba(39,231,255,.45)";x.lineWidth=.8;x.beginPath();x.moveTo(c.anchor.x,c.anchor.y);x.lineTo(c.x,c.y);x.stroke();
-  drawSpider(x,c,c.size,c.moving)}
+  c.stride=R.reduced?0:(c.stride||0)+((c.moving?1:0)-(c.stride||0))*Math.min(1,dt*7);
+  drawSpider(x,c,c.size,c.moving,t)}
  /* idle minis retire back into the main spider */
- R.minis=R.minis.filter(m=>m.ev||(Math.hypot(m.x-R.main.x,m.y-R.main.y)>4&&(Object.assign(m,R.step(m,R.main,dt,speed)),!m.done)));
+ R.minis=R.minis.filter(m=>m.ev||(Math.hypot(m.x-R.main.x,m.y-R.main.y)>4&&(m.moving=true,m.dir=Math.atan2(R.main.y-m.y,R.main.x-m.x),Object.assign(m,R.step(m,R.main,dt,speed)),m.gait=(m.gait||0)+m.moved/(m.size*19),!m.done)));
  R.raf=requestAnimationFrame(tick)}
 function boot(){if(!doc||!doc.body)return;const mq=W_.matchMedia&&W_.matchMedia("(prefers-reduced-motion: reduce)");R.reduced=!!(mq&&mq.matches);mq&&mq.addEventListener&&mq.addEventListener("change",e=>{R.reduced=e.matches});
  setInterval(()=>{try{poll()}catch(e){console.error(e)}},1000);if(!R.raf)R.raf=requestAnimationFrame(tick);
