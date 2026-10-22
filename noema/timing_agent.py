@@ -397,8 +397,13 @@ def watch_new(c: sqlite3.Connection, db: str, max_age_s: int = 1800) -> int:
     n = 0
     try:
         since = datetime.fromtimestamp(time.time() - max_age_s, UTC).isoformat()
-        for r in src.execute("SELECT token_mint, captured_at, reference_price_usd, reference_liquidity_usd FROM trench_candidates"
-                             " WHERE disposition='observe' AND captured_at>? ORDER BY opportunity_score DESC LIMIT 6", (since,)):
+        rows = src.execute("SELECT token_mint, captured_at, reference_price_usd, reference_liquidity_usd FROM trench_candidates"
+                           " WHERE disposition='observe' AND captured_at>? ORDER BY opportunity_score DESC LIMIT 6",
+                           (since,)).fetchall()
+        if src.execute("SELECT 1 FROM sqlite_master WHERE name='alpha_candidates'").fetchone():
+            rows += src.execute("SELECT address, evaluated_at, price, liquidity FROM alpha_candidates WHERE passed=1"
+                                " AND chain='solana' AND evaluated_at>? ORDER BY score DESC LIMIT 6", (since,)).fetchall()
+        for r in rows:
             if c.execute("SELECT 1 FROM t_watch WHERE mint=?", (r[0],)).fetchone():
                 continue
             pool, res = tc.top_pool(c, r[0])
