@@ -64,6 +64,16 @@ def _summarise(event: str, desk: str | None, p: dict[str, Any]) -> tuple[str, st
         verb = "APPROVED" if p.get("approved") else "VETOED"
         return ("approve" if p.get("approved") else "veto",
                 f"CHIEF {verb} {sym} p={p.get('probability')} conf={p.get('confidence')} — {p.get('reason', '')}")
+    if event == "fresh_decision":
+        verb = {"enter": "ENTER", "skip": "SKIP", "drop": "DROP"}.get(p.get("decision"), "?")
+        return ("approve" if p.get("decision") == "enter" else "fresh",
+                f"FRESH {verb} {sym} @{p.get('age_s')}s — {p.get('reason', '')}")
+    if event == "fresh_exit":
+        return ("exit", f"FRESH EXIT {sym} {p.get('reason', '')} ret={p.get('ret')} after {p.get('held_s')}s")
+    if event == "fresh_cycle":
+        return ("cycle", (f"fresh launches: {p.get('launches_window', 0)} in window → {p.get('evaluated', 0)} "
+                          f"checked → {p.get('prefilter_passed', 0)} passed → {p.get('entries', 0)} entered"
+                          + (f" (blocked: {p.get('blocked')})" if p.get("blocked") else "")))
     if event == "desk_cycle":
         return ("cycle", (f"sweep: {p.get('pools_seen', 0)} pools → {p.get('prefilter_passed', 0)} filters → "
                           f"{p.get('holder_checked', 0)} holders → {p.get('entry_passed', 0)} judge → "
@@ -81,7 +91,8 @@ def _summarise(event: str, desk: str | None, p: dict[str, Any]) -> tuple[str, st
 
 def pulse(conn: sqlite3.Connection, since_id: int = 0, limit: int = 60) -> list[dict[str, Any]]:
     rows = _rows(conn, "SELECT id, ts, desk_id, event, payload_json FROM trench_desk_events "
-                       "WHERE id>? AND event!='equity_snapshot' ORDER BY id DESC LIMIT ?",
+                       "WHERE id>? AND event!='equity_snapshot' AND NOT (event='fresh_decision' "
+                       "AND payload_json LIKE '%\"decision\": \"drop\"%') ORDER BY id DESC LIMIT ?",
                  (int(since_id), int(limit)))
     out = []
     for rid, ts, desk, event, payload in rows:

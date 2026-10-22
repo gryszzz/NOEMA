@@ -108,6 +108,56 @@ def rules_ranking(candidates: list[dict[str, Any]]) -> list[Judgement]:
     ]
 
 
+LEDGER_PRIOR_N = 30.0  # pseudo-count: a source needs ~30 resolved calls before confidence can reach ~half
+
+
+def ledger_confidence(conn: sqlite3.Connection, agent_id: str, *, days: int = 30) -> dict[str, Any]:
+    """Confidence in an agent's probabilities from its own resolved track record.
+
+    confidence = calibration_quality * sample_weight, where calibration_quality is
+    1 - 2*|mean predicted - realized up-rate| (0 when off by 0.5 or more) blended with
+    Brier skill vs the realized base rate, and sample_weight = n / (n + LEDGER_PRIOR_N).
+    No resolved history gives 0, never a constant.
+    """
+    try:
+        rows = conn.execute(
+            """SELECT f.predicted_probability, r.outcome FROM accuracy_forecasts f
+               JOIN accuracy_resolutions r ON r.forecast_id = f.id
+               WHERE f.agent_id = ? AND r.resolved_at >= datetime('now', ?)""",
+            (agent_id, f"-{int(days)} days"),
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    n = len(rows)
+    if n == 0:
+        return {"confidence": 0.0, "n": 0, "calibration_gap": None, "brier_skill": None,
+                "realized_rate": None}
+    preds = [float(p) for p, _ in rows]
+    outs = [float(o) for _, o in rows]
+    mean_p, rate = sum(preds) / n, sum(outs) / n
+    gap = abs(mean_p - rate)
+    brier = sum((p - o) ** 2 for p, o in zip(preds, outs, strict=True)) / n
+    ref = rate * (1 - rate)
+    skill = 1 - brier / ref if ref > 0 else 0.0
+    quality = max(0.0, 1 - 2 * gap) * 0.5 + max(0.0, min(1.0, skill + 0.5)) * 0.5
+    weight = n / (n + LEDGER_PRIOR_N)
+    return {"confidence": round(max(0.0, min(1.0, quality * weight)), 4), "n": n,
+            "calibration_gap": round(gap, 4), "brier_skill": round(skill, 4),
+            "realized_rate": round(rate, 4)}
+
+
+def with_ledger_confidence(
+    conn: sqlite3.Connection, judgements: list[Judgement], agent_id: str,
+) -> list[Judgement]:
+    """Fill missing confidence from the source's resolved track record (model self-report kept)."""
+    if not judgements or all(j.confidence is not None for j in judgements):
+        return judgements
+    conf = ledger_confidence(conn, agent_id)["confidence"]
+    from dataclasses import replace
+
+    return [j if j.confidence is not None else replace(j, confidence=conf) for j in judgements]
+
+
 def _record_judgements(
     conn: sqlite3.Connection, judgements: list[Judgement], candidates: list[dict[str, Any]]
 ) -> None:
@@ -257,6 +307,7 @@ async def judge_candidates(
                         db_path=db_path,
                         accuracy=accuracy,
                     )
+                    judgements = with_ledger_confidence(conn, judgements, "tev_judge")
                     spent = estimate * samples
                     conn.execute(
                         """INSERT INTO trench_desk_judgements (ts, source, status, estimated_usd,
@@ -296,7 +347,7 @@ async def judge_candidates(
                             json.dumps(status),
                         ),
                     )
-        ranked = rules_ranking(candidates)
+        ranked = with_ledger_confidence(conn, rules_ranking(candidates), "trench_rules")
         _record_judgements(conn, ranked, candidates)
         conn.execute(
             """INSERT INTO trench_desk_judgements (ts, source, status, estimated_usd,

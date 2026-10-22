@@ -293,7 +293,9 @@ async def run_desk_cycle(
         if stale:  # never open on stale marks; exits/management still run on whatever marks we have
             summary["skipped_stale"] = stale
             picks = []
-        for index, desk in enumerate(store.active_desks()):
+        # The FRESH desk is run by trench_fresh on its own fast cadence and risk limits.
+        main_desks = [d for d in store.active_desks() if d["base_name"] != "FRESH"]
+        for index, desk in enumerate(main_desks):
             engine.manage_positions(desk["desk_id"], marks, now=now)
             if picks:
                 ordered = picks[index % len(picks):] + picks[: index % len(picks)]
