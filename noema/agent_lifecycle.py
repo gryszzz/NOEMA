@@ -205,6 +205,19 @@ def seed_meta(c: sqlite3.Connection) -> None:
              origin="meta", kind="meta_launch")
 
 
+AVENUE_SEEDS = {"funding_carry": "carry: spot long / perp short when trailing funding clears costs+buffer",
+                "kalshi_mm": "kalshi passive MM 1c inside spread, fills only on trades through",
+                "news_lag": "news/X lag continuation, 2c move at +5m, exit +60m"}
+
+
+def seed_avenues(c: sqlite3.Connection) -> None:
+    """Paper agents from noema.edge_avenues join the roster as shadow agents (once per kind)."""
+    for kind, desc in AVENUE_SEEDS.items():
+        if not c.execute("SELECT 1 FROM agents WHERE kind=?", (kind,)).fetchone():
+            hire(c, {"kind": kind, "filters": [], "desc": desc}, generation=0, parent=None, origin="avenue",
+                 name=f"{kind.upper().replace('_', '-')}-g0", kind=kind)
+
+
 def load_meta_samples(meta_db: str | None) -> list[dict[str, Any]]:
     if not meta_db or not os.path.isfile(meta_db):
         return []
@@ -227,10 +240,13 @@ def load_meta_samples(meta_db: str | None) -> list[dict[str, Any]]:
 
 
 def cycle(db: str, life_db: str, feed_db: str | None = None, rng: random.Random | None = None,
-          meta_db: str | None = None) -> dict[str, Any]:
+          meta_db: str | None = None, avenues_db: str | None = None) -> dict[str, Any]:
     rng = rng or random.Random()
     report = em.mine_all(db, feed_db)
     by_kind = {"trench_rule": em.load_trench(db), "meta_launch": load_meta_samples(meta_db)}
+    if avenues_db:
+        from .edge_avenues import load_samples
+        by_kind.update(load_samples(avenues_db))
     c = connect(life_db)
     try:
         c.execute("INSERT INTO edge_reports (at, report_json) VALUES (?,?)", (report["at"], json.dumps(report)))
@@ -238,6 +254,8 @@ def cycle(db: str, life_db: str, feed_db: str | None = None, rng: random.Random 
         seed(c, report)
         if meta_db:
             seed_meta(c)
+        if avenues_db:
+            seed_avenues(c)
         live = c.execute("SELECT * FROM agents WHERE status IN ('shadow','earning')").fetchall()
         fired = []
         scored: dict[str, dict[str, Any]] = {}
@@ -326,12 +344,13 @@ def main() -> None:
     ap.add_argument("--life-db", default=os.getenv("NOEMA_LIFECYCLE_DB", "data/agent_lifecycle.db"))
     ap.add_argument("--feed-db", default="data/opportunity_feed.db")
     ap.add_argument("--meta-db", default=os.getenv("NOEMA_META_DB", "data/meta_launch.db"))
+    ap.add_argument("--avenues-db", default=os.getenv("NOEMA_AVENUES_DB", "data/edge_avenues.db"))
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=int, default=int(os.getenv("NOEMA_LIFECYCLE_INTERVAL_SECONDS", "900")))
     a = ap.parse_args()
     while True:
         try:
-            print(_now(), json.dumps(cycle(a.db, a.life_db, a.feed_db, meta_db=a.meta_db)), flush=True)
+            print(_now(), json.dumps(cycle(a.db, a.life_db, a.feed_db, meta_db=a.meta_db, avenues_db=a.avenues_db)), flush=True)
         except Exception as e:  # noqa: BLE001 - keep the loop alive; the next cycle retries
             print(_now(), "cycle error:", repr(e), flush=True)
         if not a.loop:
