@@ -33,3 +33,9 @@ Primary metrics:
 - performance by market family, horizon, edge bucket, and confidence bucket
 
 A strategy is not promoted because of a few wins. Promotion requires out-of-sample evidence.
+
+## Live checkout rule (all agents)
+`/workspace/NOEMA` is the live runtime checkout and must stay on `main`. Never `git checkout`/`switch` it:
+do all branch work in `git worktree add /workspace/wt-<name> -b <branch> origin/main`, merge via PR on green,
+then `git -C /workspace/NOEMA pull --ff-only`. `start.sh` refuses to launch when the checkout is not on main
+(override `NOEMA_ALLOW_NON_MAIN=1`), and the `system:live_checkout_branch` heartbeat goes red.

@@ -310,6 +310,19 @@ def _loops() -> list[dict[str, Any]]:
     return out
 
 
+def _live_checkout_branch(main_db: str) -> dict[str, Any]:
+    """Red if the live checkout (repo containing the main DB) is not on main: agents must use git worktrees."""
+    import subprocess
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(main_db)))
+    now = time.time()
+    br = subprocess.run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                        text=True, timeout=5, check=False).stdout.strip()
+    if br == "main":
+        return _rec("system:live_checkout_branch", "system", 60, now, detail="live checkout on main")
+    return _rec("system:live_checkout_branch", "system", 60, None, attempt=now,
+                error=f"live checkout on '{br or '?'}', not main - use git worktrees", detail="live checkout branch")
+
+
 def observe(main_db: str) -> list[dict[str, Any]]:
     dd = os.path.dirname(os.path.abspath(main_db))
     j = lambda f: os.path.join(dd, f)
@@ -349,6 +362,7 @@ def observe(main_db: str) -> list[dict[str, Any]]:
     P(_probe(lambda: _rec("agent:samplers", "agent", 300, _max(j("edge_avenues.db"), "SELECT MAX(at) FROM avenue_reports"),
                           detail="edge avenue samplers"), "agent:samplers", "agent", 900))
     P(_probe(_loops, "agent:loops", "agent", 60))
+    P(_probe(lambda: _live_checkout_branch(main_db), "system:live_checkout_branch", "system", 60))
     return recs
 
 
