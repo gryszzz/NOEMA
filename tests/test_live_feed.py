@@ -30,3 +30,15 @@ def test_live_endpoint(monkeypatch, tmp_path):
     monkeypatch.setattr(live_feed, "_CACHE", {}, raising=False)
     r = TestClient(dashboard_app.app).get("/api/live")
     assert r.status_code == 200 and r.json()["schema"] == "tev.live.v1"
+
+
+def test_cached_error_retries_soon_and_keeps_last_good(monkeypatch):
+    monkeypatch.setattr(live_feed, "_CACHE", {})
+    assert live_feed._cached("k", 300, lambda: {"as_of": "x", "v": 1})["v"] == 1
+    live_feed._CACHE["k"] = (0.0, live_feed._CACHE["k"][1])  # expire
+
+    def boom():
+        raise RuntimeError("database is locked")
+    v = live_feed._cached("k", 300, boom)
+    assert v["v"] == 1 and "locked" in v["last_error"]
+    assert live_feed._CACHE["k"][0] < live_feed.time.monotonic() - 290
