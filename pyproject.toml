@@ -9,7 +9,7 @@ dependencies = [
   "cryptography>=50.0.2,<51",
   "websockets>=15,<16",
   "fastapi>=0.149.0,<1",
-  "uvicorn>=0.35,<1",
+  "uvicorn>=0.54.0,<1",
   "mcp>=1.26,<2",
   "solders>=0.29,<0.30",
   "eth-account>=0.13,<0.14",
@@ -21,7 +21,7 @@ dependencies = [
 dev = [
   "pytest>=9.1.1,<10",
   "pytest-asyncio>=1.4.0,<2",
-  "ruff>=0.9,<1",
+  "ruff>=0.17.1,<1",
 ]
 
 [project.scripts]
