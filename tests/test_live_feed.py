@@ -35,7 +35,7 @@ def test_live_endpoint(monkeypatch, tmp_path):
 def test_cached_error_retries_soon_and_keeps_last_good(monkeypatch):
     monkeypatch.setattr(live_feed, "_CACHE", {})
     assert live_feed._cached("k", 300, lambda: {"as_of": "x", "v": 1})["v"] == 1
-    live_feed._CACHE["k"] = (0.0, live_feed._CACHE["k"][1])  # expire
+    live_feed._CACHE["k"] = (-1e9, live_feed._CACHE["k"][1])  # expire
 
     def boom():
         raise RuntimeError("database is locked")
