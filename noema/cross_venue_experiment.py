@@ -705,9 +705,12 @@ def mature_paper_pairs(
                 + " FROM outcomes"
             )
         }
+        # Stream (no fetchall) and pre-filter in SQLite: only paper-filled observations can mature, and
+        # loading every observation_json here cost ~2 GB RSS per /api/prediction-venues refresh.
         records = state_conn.execute(
-            "SELECT observation_hash,observation_json FROM canonical_pair_observations ORDER BY id"
-        ).fetchall()
+            "SELECT observation_hash,observation_json FROM canonical_pair_observations "
+            "WHERE instr(observation_json, 'paper_fill_simulated') > 0 ORDER BY id"
+        )
         existing: set[str] = set()
         existing_statuses: dict[str, str] = {}
         for (payload,) in state_conn.execute(
