@@ -31,7 +31,7 @@ def test_no_trade_thin_pool():
 
 def test_manage_hard_stop_and_costs():
     cs = _cs([1.0] * 10 + [0.8] * 5)
-    k, gross, why, _ = ta.manage(cs, 5, 1.0, ta.Genome(stop=-0.07))
+    _k, gross, why, _ = ta.manage(cs, 5, 1.0, ta.Genome(stop=-0.07))
     assert why == "hard stop" and gross < -0.06
 
 
