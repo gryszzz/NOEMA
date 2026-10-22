@@ -39,6 +39,7 @@ SOURCES = {
     "culture": "culture radar (crypto · stocks · prediction buzz)",
     "trench": "pump.fun / DEX pool sweeps",
     "strategy": "strategy book signals",
+    "smart_wallets": "smart-wallet study: tracked/vetted wallets' recent pump.fun moves (watch only)",
     "launch_stream": "live pump.fun creates (PumpPortal stream, first 3 min of trades)",
     "setup": "fresh setups (new pools, new markets, early X; majors excluded)",
 }
@@ -232,6 +233,23 @@ def collect(conn: sqlite3.Connection, now: datetime) -> tuple[list[dict[str, Any
             reason=f"new create · net buys {(_f(net) or 0):.2f} SOL · {ntr} trades / {traders} traders (observe)",
             price_kind="trench", price=None, url=f"https://pump.fun/coin/{mint}")
     st["launch_stream"] = {"n": len(ls), "note": "live creates, last 10 min (watch only)" + ("" if ls else " · stream idle")}
+
+    # 6c) smart-wallet study: tracked wallets' recent moves (watch only; vetted = prospective realized-PnL CI > 0)
+    try:
+        from .smart_wallets import latest_report
+        rep = latest_report(os.getenv("NOEMA_SMART_DB", "data/smart_wallets.db")) or {}
+    except Exception:  # noqa: BLE001
+        rep = {}
+    mv = (rep.get("recent_moves") or [])[:8]
+    for i, m in enumerate(mv):
+        add("smart_wallets", id=f"smart:{m['wallet'][:8]}:{m['mint'][:8]}:{i}", tier=2,
+            title=f"{'VETTED' if m['vetted'] else 'tracked'} {m['wallet'][:4]}…{m['wallet'][-4:]} {m['side']} "
+                  f"{m['sol']} SOL", venue="solana", ref=m["mint"], edge=None, score=None, source_at=_iso(m["at"]),
+            reason=f"mcap {m.get('mcap_sol') or 0:.0f} SOL · {m['mint'][:6]}… (observe; SMART-FOLLOW paper agent scores it)",
+            price_kind="trench", price=None, url=f"https://solscan.io/account/{m['wallet']}")
+    sf = rep.get("smart_follow") or {}
+    st["smart_wallets"] = {"n": len(mv), "note": f"{len(rep.get('vetted') or [])} vetted / {rep.get('candidates', 0)} "
+                           f"tracked wallets · SMART-FOLLOW paper n={sf.get('n', 0)} mean ${sf.get('mean_net_usd')}"}
 
     # 7) strategy book: open / shadow signals
     since = (now - timedelta(hours=24)).isoformat()
