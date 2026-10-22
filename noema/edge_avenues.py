@@ -24,6 +24,7 @@ from typing import Any
 
 from . import edge_mining as em
 from .edge_strategies import clears_fee_buffer, entry_buffer, kalshi_fee
+from .sqlite_util import connect as sqlite_connect
 
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 SCHEMA = """
@@ -41,7 +42,7 @@ KINDS = ("funding_carry", "kalshi_mm", "news_lag", "pm_weather", "pm_thin", "pm_
 
 
 def connect(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.executescript(SCHEMA)
     return c
 

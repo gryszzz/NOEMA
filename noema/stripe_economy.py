@@ -30,6 +30,7 @@ from .economic_ledger import (
 from .mission_store import MissionStore
 from .research_session import SessionStore
 from .resource_control import try_acquire
+from .sqlite_util import connect as sqlite_connect
 
 _PAYMENT_ID = re.compile(r"^pi_[A-Za-z0-9]{8,128}$")
 _CHARGE_ID = re.compile(r"^ch_[A-Za-z0-9]{8,128}$")
@@ -135,7 +136,7 @@ class StripeEconomyStore:
         db = Path(path)
         self.conn_path = str(db)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db, timeout=5)
+        self.conn = sqlite_connect(db)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS stripe_economy_snapshots (

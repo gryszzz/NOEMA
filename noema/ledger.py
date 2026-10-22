@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Action, Forecast, MarketSnapshot, Opportunity
+from .sqlite_util import connect as sqlite_connect
 
 
 class ForecastLedger:
@@ -17,7 +18,7 @@ class ForecastLedger:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS forecast_ledger (

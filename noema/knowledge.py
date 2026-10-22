@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .sqlite_util import connect as sqlite_connect
+
 MAX_SOURCE_BYTES = 1_000_000
 MAX_CHUNK_CHARS = 2_400
 MAX_RETRIEVAL_CHUNKS = 6
@@ -342,7 +344,7 @@ class KnowledgeStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db, timeout=5)
+        self.conn = sqlite_connect(db)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS knowledge_sources (

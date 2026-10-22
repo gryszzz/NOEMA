@@ -45,6 +45,8 @@ from noema.venues.base import VenueAdapter
 from noema.venues.errors import VenueRejected, VenueUnavailable
 from noema.wallet_credentials import load_polymarket_us_credentials_in_api_boundary
 
+from ..sqlite_util import connect as sqlite_connect
+
 _log = logging.getLogger(__name__)
 
 _PRICE_QUANTUM = Decimal("0.0001")
@@ -236,7 +238,7 @@ class _ClientOrderStore:
 
     def _connect(self) -> sqlite3.Connection:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
+        conn = sqlite_connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute(
             """CREATE TABLE IF NOT EXISTS polymarket_us_client_orders (

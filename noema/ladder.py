@@ -10,12 +10,13 @@ from .doctor import doctor_report
 from .history_forecaster import MODEL_VERSION
 from .outcomes import OutcomeStore
 from .paired_evaluation import compare_history_to_market
+from .sqlite_util import connect as sqlite_connect
 
 
 def _candidate_count(path: str) -> int:
     if not Path(path).exists():
         return 0
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     try:
         return conn.execute(
             """

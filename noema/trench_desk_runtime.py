@@ -26,6 +26,7 @@ from .solana_research import (
     SolanaRpcResearchClient,
     XChatterSource,
 )
+from .sqlite_util import connect as sqlite_connect
 from .trench_desks import CostModel, Mark, PaperDeskEngine, TrenchDeskStore, desk_overview
 from .trench_judgement import judge_candidates
 from .trench_risk import DeskEntryPolicy, evaluate_desk_entry
@@ -218,7 +219,7 @@ async def run_desk_cycle(
     picks, chief_log = chief_gate(judged_picks)
     accuracy = AccuracyConfig.from_env()
     if accuracy.influence_enabled:
-        weight_conn = sqlite3.connect(db_path, timeout=30)
+        weight_conn = sqlite_connect(db_path)
         try:
             weights = influences_for(weight_conn, accuracy)
         finally:
@@ -273,7 +274,7 @@ async def run_desk_cycle(
             if mint not in marks and mint in by_mint:
                 c = by_mint[mint]
                 marks[mint] = Mark(c["price_usd"], c["liquidity_usd"], "geckoterminal")
-        resolve_conn = sqlite3.connect(db_path, timeout=30)
+        resolve_conn = sqlite_connect(db_path)
         try:
             resolve_token_marks(
                 resolve_conn, {mint: mark.price_usd for mint, mark in marks.items()},
@@ -338,7 +339,7 @@ def _record_chief_forecasts(
 ) -> None:
     if not chief_log:
         return
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite_connect(db_path)
     try:
         for entry in chief_log:
             mint = entry.get("mint")

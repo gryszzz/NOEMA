@@ -29,6 +29,7 @@ from typing import Any
 
 from . import adaptive_exits as ax
 from . import edge_mining as em
+from .sqlite_util import connect as sqlite_connect
 
 WINDOW_MIN = 30
 BASELINE = timedelta(hours=6)
@@ -79,7 +80,7 @@ def _ro(path: str) -> sqlite3.Connection:
 
 def connect(path: str) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.row_factory = sqlite3.Row
     c.executescript(SCHEMA)
     return c

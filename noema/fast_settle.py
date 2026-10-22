@@ -32,6 +32,7 @@ from typing import Any
 import httpx
 
 from .accuracy_ledger import ensure_accuracy_schema, record_forecast, resolve_open_forecasts
+from .sqlite_util import connect as sqlite_connect
 
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 COINBASE = "https://api.exchange.coinbase.com"
@@ -320,7 +321,7 @@ def pm_refresh(force: bool = False) -> None:
         return
     from .pm_history import refresh_live
     from .pm_models import FeatureSource
-    c = sqlite3.connect(PM_DB, timeout=30)
+    c = sqlite_connect(PM_DB)
     try:
         refresh_live(c)
         c.execute("CREATE TABLE IF NOT EXISTS pm_agents (agent_id TEXT PRIMARY KEY, genome_json TEXT NOT NULL,"
@@ -569,7 +570,7 @@ def stats(c: sqlite3.Connection, now: datetime) -> dict[str, Any]:
 def run_once(db: str, api: Api | None = None, now: datetime | None = None, *, force_discover: bool = False) -> dict[str, Any]:
     api = api or Api()
     now = now or datetime.now(UTC)
-    c = sqlite3.connect(db, timeout=30)
+    c = sqlite_connect(db)
     try:
         ensure_schema(c)
         out: dict[str, Any] = {"at": now.isoformat()}

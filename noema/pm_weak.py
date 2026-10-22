@@ -44,6 +44,7 @@ from .pm_models import (
     phi,
     sigmoid,
 )
+from .sqlite_util import connect as sqlite_connect
 
 STD_OFFSET_H = {"NY": -5, "NYC": -5, "PHIL": -5, "BOS": -5, "DC": -5, "MIA": -5, "CHI": -6, "AUS": -6, "HOU": -6,
                 "DEN": -7, "PHX": -7, "LAX": -8}
@@ -337,7 +338,7 @@ def politics_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def fetch_politics_list(c: sqlite3.Connection, api: Api, src_db: str | None = None, max_series: int = 3000) -> int:
     """Settled binary markets of every Kalshi Politics series (live + historical endpoints), incremental."""
     if src_db and os.path.isfile(src_db):  # one-off import of a previously fetched list (same columns)
-        s = sqlite3.connect(src_db)
+        s = sqlite_connect(src_db)
         c.executemany("INSERT OR IGNORE INTO pw_pol_src VALUES (?,?,?,?,?,?,?)",
                       s.execute("SELECT ticker, series, event, open_time, close_time, result, volume FROM mk").fetchall())
         c.executemany("INSERT OR IGNORE INTO pw_pol_done VALUES (?, '')", s.execute("SELECT series FROM done").fetchall())
@@ -447,7 +448,7 @@ def record_outcomes(av_db: str, kind: str, rows: list[dict[str, Any]], key: str)
 
 
 def run(db: str, av_db: str, pol_src: str | None, fetch: bool = True) -> dict[str, Any]:
-    c = sqlite3.connect(db, timeout=60)
+    c = sqlite_connect(db)
     ensure(c)
     api = Api()
     rep: dict[str, Any] = {"schema": "tev.pm_weak.v1", "at": datetime.now(UTC).isoformat(), "mode": "paper only"}

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+
+from .sqlite_util import connect as sqlite_connect
 
 
 @dataclass(frozen=True)
@@ -17,7 +18,7 @@ def build_soak_quality_report(path: str = "data/noema.db") -> SoakQualityReport:
     if not Path(path).exists():
         return SoakQualityReport(0, 0.0, 0.0, 0)
 
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     snapshots, valid = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(valid), 0) FROM market_snapshots"
     ).fetchone()

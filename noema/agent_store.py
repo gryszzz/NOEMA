@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .agent_identity import AgentIdentity
 from .agent_models import AgentConnectionState, AgentCycleState, AgentStatus
+from .sqlite_util import connect as sqlite_connect
 
 
 class AgentStore:
@@ -22,7 +23,7 @@ class AgentStore:
         # stream. WAL lets those readers proceed without holding the rollback
         # journal's read lock against writers. This mode is persistent in the DB
         # header, so every later writer connection uses it as well.
-        self.conn = sqlite3.connect(db, timeout=15)
+        self.conn = sqlite_connect(db)
         self.conn.execute("PRAGMA busy_timeout=15000")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute(

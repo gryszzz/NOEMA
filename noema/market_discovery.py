@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -21,6 +20,7 @@ from urllib.parse import quote
 import httpx
 
 from .chain_registry import resolve_provider_network
+from .sqlite_util import connect as sqlite_connect
 
 _BASE = "https://api.dexscreener.com"
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -406,7 +406,7 @@ class MarketDiscoveryStore:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.path = str(db)
-        with sqlite3.connect(self.path, timeout=5.0) as connection:
+        with sqlite_connect(self.path) as connection:
             connection.execute("PRAGMA busy_timeout=5000")
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS market_discovery_candidates (
@@ -438,7 +438,7 @@ class MarketDiscoveryStore:
 
     def persist(self, observations: list[DiscoveredPairObservation]) -> dict[str, int]:
         inserted = duplicates = 0
-        with sqlite3.connect(self.path, timeout=5.0) as connection:
+        with sqlite_connect(self.path) as connection:
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("BEGIN IMMEDIATE")
             for observation in observations:

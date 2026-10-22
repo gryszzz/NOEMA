@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 MISSION_STATES = frozenset({
     "discovered", "queued", "claimed", "running", "waiting", "passed",
     "completed", "failed", "interrupted", "quarantined", "superseded",
@@ -64,7 +66,7 @@ class MissionStore:
     def __init__(self, path: str):
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db, timeout=5)
+        self.conn = sqlite_connect(db)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS missions (

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .solana_live_gate import DeskSwapRejected
+from .sqlite_util import connect as sqlite_connect
 
 BASE_DESK_NAMES = ("VET", "RISK", "FILLS", "TAPE", "FLOOR", "DEPTH", "DRIFT", "EDGE")
 HARD_STOP_CEILING = 0.079  # every loser is cut before -8%
@@ -195,7 +196,7 @@ def _now() -> str:
 class TrenchDeskStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path, timeout=30)
+        self.conn = sqlite_connect(path)
         self.conn.row_factory = sqlite3.Row
         for statement in SCHEMA:
             self.conn.execute(statement)

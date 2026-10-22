@@ -26,6 +26,12 @@ class TrenchCollectorConfig:
     def from_env(cls) -> TrenchCollectorConfig:
         primary_rpc = os.getenv("NOEMA_SOLANA_RPC_URL", DEFAULT_SOLANA_RPC_URL).strip()
         configured_fallback = (os.getenv("NOEMA_SOLANA_RPC_FALLBACK_URL") or "").strip()
+        helius_key = (os.getenv("HELIUS_API_KEY") or "").strip()
+        if helius_key and primary_rpc.rstrip("/") in {DEFAULT_SOLANA_RPC_URL, ""}:
+            # The public endpoint rejects/rate-limits research reads; prefer the keyed
+            # Helius RPC and keep the public endpoint as the fallback. Never logged.
+            configured_fallback = configured_fallback or DEFAULT_SOLANA_RPC_URL
+            primary_rpc = f"https://mainnet.helius-rpc.com/?api-key={helius_key}"
         return cls(
             enabled=_enabled("NOEMA_TRENCH_ENABLED"),
             jupiter_api_key=os.getenv("NOEMA_JUPITER_API_KEY") or None,

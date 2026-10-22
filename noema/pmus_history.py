@@ -14,6 +14,8 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 BBO_HORIZON_H = 48
 BBO_CAP = int(os.getenv("NOEMA_PMUS_BBO_CAP", "120"))
 SCHEMA = """
@@ -27,7 +29,7 @@ CREATE TABLE IF NOT EXISTS pmus_settlements (slug TEXT PRIMARY KEY, settlement R
 
 
 def connect(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.executescript(SCHEMA)
     return c
 

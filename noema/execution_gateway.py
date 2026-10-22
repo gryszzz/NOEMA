@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Action, Decision, Opportunity
+from .sqlite_util import connect as sqlite_connect
 from .venues.errors import VenueRejected, VenueUnavailable
 
 # Polymarket US retail trading (api.polymarket.us). The international CLOB is not a live venue.
@@ -175,7 +176,7 @@ class ExecutionGateway:
         self.authority_resolver = authority_resolver
         if initialize:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite_connect(self.db_path) as conn:
                 conn.execute("""CREATE TABLE IF NOT EXISTS execution_gateway_requests (
                 proposal_id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
@@ -645,7 +646,7 @@ class ExecutionGateway:
     ) -> bool:
         request_hash = self._hash(payload)
         cap = self._owner_daily_notional_cap(authority) or Decimal(0)
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if conn.execute("SELECT 1 FROM execution_gateway_requests WHERE proposal_id=?",
                             (proposal.proposal_id,)).fetchone():
@@ -704,7 +705,7 @@ class ExecutionGateway:
         reasons: list[str],
     ) -> None:
         result = json.dumps({"reasons": reasons}, sort_keys=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute("INSERT OR IGNORE INTO execution_gateway_requests "
                          "(proposal_id,created_at,route,tier,venue,status,request_hash,"
                          "notional_usd,mission_id,instrument,side,provider_reference,result_json,request_json) "
@@ -722,7 +723,7 @@ class ExecutionGateway:
         self, request_id: str, route: str, tier: str, venue: str | None,
         notional: Decimal | None, payload: dict[str, Any], request_hash: str,
     ) -> bool:
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             try:
                 conn.execute("INSERT INTO execution_gateway_requests "
                              "(proposal_id,created_at,route,tier,venue,status,request_hash,"
@@ -744,7 +745,7 @@ class ExecutionGateway:
         self, request_id: str, status: str, reference: str | None,
         result: dict[str, Any],
     ) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             old = conn.execute("SELECT status FROM execution_gateway_requests WHERE proposal_id=?",
                                (request_id,)).fetchone()
@@ -768,7 +769,7 @@ class ExecutionGateway:
     def apply_reconciliation(self, observation: ReconciliationObservation) -> bool:
         """Apply exact provider truth. Mismatches never mutate the reservation."""
         observation.validate()
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM execution_gateway_requests WHERE proposal_id=?",
@@ -877,7 +878,7 @@ class ExecutionGateway:
 
     async def reconcile_pending(self, adapter_resolver: Callable[[str], Any]) -> dict[str, int]:
         """Query adapters; absent or inconclusive provider evidence stays reserved."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM execution_gateway_requests WHERE status IN "
                                 "('unknown','submitted','partial') ORDER BY created_at").fetchall()
@@ -915,7 +916,7 @@ class ExecutionGateway:
         if not Path(self.db_path).is_file():
             return None
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite_connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     "SELECT * FROM execution_gateway_requests WHERE proposal_id=?",
@@ -936,7 +937,7 @@ class ExecutionGateway:
         if not Path(self.db_path).is_file():
             return []
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite_connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     "SELECT * FROM execution_gateway_requests WHERE route='prediction' "
@@ -948,7 +949,7 @@ class ExecutionGateway:
         return [dict(row) for row in rows]
 
     def _mission_exposure(self, mission_id: str, exclude_id: str) -> Decimal:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite_connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT notional_usd,status,filled_exposure_usd,remaining_reserved_usd "
                 "FROM execution_gateway_requests WHERE route='prediction' "
@@ -970,7 +971,7 @@ class ExecutionGateway:
 
     def _daily_exposure(self, exclude_id: str) -> Decimal:
         prefix = datetime.now(UTC).date().isoformat() + "%"
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite_connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT notional_usd,status,filled_exposure_usd,remaining_reserved_usd "
                 "FROM execution_gateway_requests WHERE route='prediction' "

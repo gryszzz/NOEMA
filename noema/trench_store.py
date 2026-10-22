@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .sqlite_util import connect as sqlite_connect
 from .trench_models import TrenchAssessment
 
 
@@ -16,7 +16,7 @@ class TrenchResearchStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS trench_candidates (

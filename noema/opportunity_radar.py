@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .sqlite_util import connect as sqlite_connect
+
 
 @dataclass(frozen=True)
 class RadarRow:
@@ -84,7 +86,7 @@ def build_radar(
     if not Path(path).exists():
         return []
     now = now or datetime.now(UTC)
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
 
     try:
         rows = conn.execute(

@@ -18,12 +18,13 @@ refused unless a fresh equity snapshot exists and the guard is not tripped.
 from __future__ import annotations
 
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+from .sqlite_util import connect as sqlite_connect
 
 TIER_MAX_FRACTION: dict[str, Decimal] = {
     "micro": Decimal("0.03"),
@@ -78,7 +79,7 @@ class CapitalGuard:
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path or os.getenv("NOEMA_DB_PATH", "data/noema.db")
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS capital_guard (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 peak_equity TEXT NOT NULL, floor TEXT NOT NULL, equity TEXT NOT NULL,
@@ -89,7 +90,7 @@ class CapitalGuard:
 
     # -- state -------------------------------------------------------------
     def state(self) -> GuardState | None:
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             row = conn.execute("SELECT peak_equity, floor, equity, day, day_start_equity, "
                                "tripped, trip_reason, updated_at FROM capital_guard WHERE id=1").fetchone()
         if row is None:
@@ -122,7 +123,7 @@ class CapitalGuard:
                 tripped, reason = True, f"daily loss stop hit ({daily_stop_fraction():.0%})"
         if equity <= 0 and peak > 0:
             tripped, reason = True, "equity depleted"
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.execute("""INSERT INTO capital_guard VALUES (1,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET peak_equity=excluded.peak_equity, floor=excluded.floor,
                 equity=excluded.equity, day=excluded.day, day_start_equity=excluded.day_start_equity,
@@ -146,7 +147,7 @@ class CapitalGuard:
             raise RuntimeError("no capital guard state to reset")
         floor_value = current.floor if current.equity >= current.floor else current.equity * floor_fraction()
         peak = current.peak_equity if current.equity >= current.floor else current.equity
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with sqlite_connect(self.db_path) as conn:
             conn.execute("UPDATE capital_guard SET tripped=0, trip_reason=NULL, floor=?, peak_equity=?, "
                          "day_start_equity=equity, updated_at=? WHERE id=1",
                          (str(floor_value), str(peak), now.isoformat()))

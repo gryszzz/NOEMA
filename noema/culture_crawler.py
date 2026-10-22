@@ -38,6 +38,7 @@ from .crawl_http import (
     retry_after_seconds,
 )
 from .news_crawler import sanitize
+from .sqlite_util import connect as sqlite_connect
 
 USER_AGENT = "TEV-culture-crawler/1.0 (read-only research; +https://github.com/gryszzz/TEV-Bot-Trading-Terminal)"
 DEFAULT_SPACING = 2.0
@@ -579,7 +580,7 @@ def main() -> None:
 
     client = CultureClient()
     while True:
-        conn = sqlite3.connect(args.db, timeout=30)
+        conn = sqlite_connect(args.db)
         sleep_s = max(300.0, args.interval)
         try:
             client.meter = meter = SweepMeter("culture")

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .news_crawler import STOP, sanitize
+from .sqlite_util import connect as sqlite_connect
 
 AGENTS = {"stance": "x_social", "smart": "x_smart_money", "burst": "x_burst",
           "contra": "x_contrarian", "shield": "x_shield"}
@@ -1197,7 +1198,7 @@ def plan_queries(conn: sqlite3.Connection, cfg: dict[str, Any], now: datetime, *
 
 def write_plan(db_path: str, path: str | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     from .x_signal import load_config
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite_connect(db_path)
     try:
         ensure_edge_schema(conn)
         plan = plan_queries(conn, cfg or load_config(), datetime.now(UTC))
@@ -1219,7 +1220,7 @@ def run_edge(db_path: str, *, now: datetime | None = None, fetch: bool | None = 
     now = now or datetime.now(UTC)
     fetch = os.getenv("NOEMA_X_EDGE_FETCH", "1") == "1" if fetch is None else fetch
     stats: dict[str, Any] = {}
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite_connect(db_path)
     try:
         if not _has(conn, "x_posts"):
             return {"status": "no x_posts"}

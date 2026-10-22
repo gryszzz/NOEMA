@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import edge_mining as em
+from .sqlite_util import connect as sqlite_connect
 
 MIN_N = int(os.getenv("NOEMA_LIFECYCLE_MIN_N", "30"))
 POP_CAP = int(os.getenv("NOEMA_LIFECYCLE_POP_CAP", "12"))
@@ -49,7 +50,7 @@ def _now() -> str:
 
 def connect(path: str) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.row_factory = sqlite3.Row
     c.executescript(SCHEMA)
     return c

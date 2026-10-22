@@ -21,6 +21,7 @@ from .cognition_store import CognitionStore
 from .openai_client import OpenAICognitionClient
 from .openai_config import OpenAIConfig
 from .provenance import canonical_payload_hash
+from .sqlite_util import connect as sqlite_connect
 
 MAX_OUTPUT_TOKENS = 1000
 TRIGGER_ENV = "NOEMA_COGNITION_DIAGNOSTIC_TRIGGER_ID"
@@ -68,7 +69,7 @@ def _persisted_context(db_path: str, *, limit: int = 8) -> dict[str, Any]:
     """Build a bounded diagnostic input from persisted observations, never live guesses."""
     if not Path(db_path).exists():
         raise ValueError("persisted market/research database is unavailable")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite_connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         tables = {row[0] for row in conn.execute(

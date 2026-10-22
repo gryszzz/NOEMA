@@ -29,12 +29,13 @@ from .openai_client import OpenAICognitionClient, _completed_text
 from .openai_config import OpenAIConfig
 from .provenance import EvidenceStore
 from .resource_control import try_acquire
+from .sqlite_util import connect as sqlite_connect
 
 
 class SessionStore:
     def __init__(self, path: str):
         self.path = path
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite_connect(path)
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS cognitive_identities (
                 identity_hash TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,

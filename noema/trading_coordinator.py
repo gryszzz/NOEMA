@@ -50,6 +50,7 @@ from .execution_gateway import (
 from .fill_accounting import FillAccounting, summarize_fills
 from .models import Action, Decision, Forecast, MarketSnapshot, Opportunity
 from .risk import RiskEngine, RiskPolicy
+from .sqlite_util import connect as sqlite_connect
 from .trade_telemetry import ObservedFill, ObservedOrder
 from .venues.base import VenueAdapter
 
@@ -105,7 +106,7 @@ class TradingCoordinator:
         self.mission_id = mission_id
         self._owns_ledger = ledger is None
         self.ledger = ledger or EconomicLedger(db_path)
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite_connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._ensure_schema()
         self._cycle_level = AutonomyLevel.SHADOW
@@ -918,7 +919,7 @@ class TradingCoordinator:
 
     def _reconciled_rows(self) -> list[dict[str, Any]]:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite_connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     "SELECT * FROM execution_gateway_requests WHERE route='prediction' AND tier='execution' "

@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from .ecosystem import EcosystemPlan
+from .sqlite_util import connect as sqlite_connect
 
 
 def apply_research_feedback(path: str, plan: EcosystemPlan) -> EcosystemPlan:
-    with sqlite3.connect(path) as conn:
+    with sqlite_connect(path) as conn:
         if not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE name='autonomous_research_runs'"
         ).fetchone():

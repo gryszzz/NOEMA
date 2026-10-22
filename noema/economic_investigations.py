@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .economic_ledger import EconomicLedger
+from .sqlite_util import connect as sqlite_connect
 
 _ACTIONS = {"INVESTIGATE", "WAIT", "RETRY_LATER", "REQUEST_OWNER_INPUT", "PASS"}
 _ADR_VERSION = "autonomous-decision-record-v3"
@@ -212,7 +213,7 @@ class EconomicInvestigationStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS economic_investigation_decisions (

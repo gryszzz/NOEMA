@@ -33,6 +33,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .pm_history import reference_symbol, weather_site
+from .sqlite_util import connect as sqlite_connect
 
 EPS = 0.01
 MODELS = ("market", "market_cal", "spotvol", "weather", "model_cal", "stack")
@@ -368,7 +369,7 @@ def _aid(g: dict[str, Any]) -> str:
 def _life_event(life_db: str | None, aid: str, ev: str, detail: str) -> None:
     if not life_db or not os.path.isfile(life_db):
         return
-    c = sqlite3.connect(life_db, timeout=30)
+    c = sqlite_connect(life_db)
     try:
         c.execute("INSERT INTO lifecycle_events (at, agent_id, event, detail) VALUES (?,?,?,?)",
                   (datetime.now(UTC).isoformat(), aid, ev, detail[:500]))
@@ -381,7 +382,7 @@ def _life_event(life_db: str | None, aid: str, ev: str, detail: str) -> None:
 
 def train(db: str, life_db: str | None = None, rng: random.Random | None = None) -> dict[str, Any]:
     rng = rng or random.Random(int(time.time()))
-    c = sqlite3.connect(db, timeout=60)
+    c = sqlite_connect(db)
     c.executescript(SCHEMA)
     rows = load_rows(c)
     cats = sorted({r["category"] for r in rows})

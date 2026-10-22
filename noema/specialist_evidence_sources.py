@@ -11,11 +11,12 @@ from .history_forecaster import MODEL_VERSION
 from .paired_evaluation import compare_history_to_market
 from .paper_performance import settled_paper_performance
 from .specialist_evolution import SpecialistEvidence
+from .sqlite_util import connect as sqlite_connect
 from .trench_survival_model import cached_database_audit as audit_trench_survival
 
 
 def _candidate_calibration(path: str) -> float | None:
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     try:
         rows = conn.execute(
             """
@@ -122,7 +123,7 @@ def trench1_evidence(
             probabilistic_sharpe=None,
         )
 
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     try:
         row = conn.execute(
             """

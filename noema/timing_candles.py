@@ -14,6 +14,8 @@ import time
 import urllib.request
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 BASE = "https://api.geckoterminal.com/api/v2"
 UA = {"User-Agent": "NOEMA-timing/1.0 (paper research)", "Accept": "application/json"}
 
@@ -59,7 +61,7 @@ CREATE TABLE IF NOT EXISTS candles (pool TEXT, ts INTEGER, o REAL, h REAL, l REA
 
 
 def cache(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.executescript(SCHEMA)
     return c
 

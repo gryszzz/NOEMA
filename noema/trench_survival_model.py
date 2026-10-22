@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .evaluation import expected_calibration_error, score_forecast
+from .sqlite_util import connect as sqlite_connect
 from .trench_collector import horizon_lateness_seconds
 
 MODEL_VERSION = "trench-survival-logistic-v1"
@@ -328,7 +329,7 @@ def load_verified_examples(
         return []
 
     owns_connection = connection is None
-    conn = connection if connection is not None else sqlite3.connect(path)
+    conn = connection if connection is not None else sqlite_connect(path)
     try:
         rows = conn.execute(
             """
@@ -550,7 +551,7 @@ class TrenchSurvivalAuditStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS trench_survival_audits (

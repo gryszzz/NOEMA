@@ -9,6 +9,7 @@ from pathlib import Path
 from .evaluation import score_forecast
 from .history_forecaster import MODEL_VERSION
 from .market_probability import snapshot_midpoint
+from .sqlite_util import connect as sqlite_connect
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ def compare_history_to_market(path: str = "data/noema.db") -> PairedEvaluation:
     empty = PairedEvaluation(MODEL_VERSION, 0, 0, None, None, None, None, None, "no_pairs")
     if not Path(path).exists():
         return empty
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     try:
         rows = conn.execute(
             """

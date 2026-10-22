@@ -6,13 +6,13 @@ Paper forecasts, internal economic snapshots and wallet balances never enter thi
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import ClassVar
 
 from .economic_ledger import EconomicEvent, ensure_economic_event_schema, record_event_on_connection
+from .sqlite_util import connect as sqlite_connect
 
 
 def _money(value: Decimal) -> Decimal:
@@ -52,7 +52,7 @@ class BillTracker:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.path = str(db)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """CREATE TABLE IF NOT EXISTS bill_budget (
                 id INTEGER PRIMARY KEY CHECK (id = 1),

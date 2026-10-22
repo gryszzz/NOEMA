@@ -33,6 +33,7 @@ import httpx
 
 from .fast_settle import KALSHI, Api, _f
 from .pm_models import bh, clip, evaluate, fit_logistic, logit, phi, sigmoid
+from .sqlite_util import connect as sqlite_connect
 
 ASSETS = {"KXBTC": ("BTC-USD", "btcusd"), "KXETH": ("ETH-USD", "ethusd"), "KXSOL": ("SOL-USD", "solusd"),
           "KXXRP": ("XRP-USD", "xrpusd"), "KXDOGE": ("DOGE-USD", "dogeusd")}
@@ -323,7 +324,7 @@ def mirror_check(c: sqlite3.Connection) -> dict[str, Any]:
 
 
 def train(db: str) -> dict[str, Any]:
-    c = sqlite3.connect(db, timeout=60)
+    c = sqlite_connect(db)
     ensure_schema(c)
     rows = load(c)
     results = []
@@ -401,7 +402,7 @@ def live_forecasts(db: str, row: Any, mid: float, bid: float, ask: float, now: d
     leads = [lead for lead in LEADS if lead - 90 <= secs <= lead and not ("15M" in row["series"] and lead >= 900)]
     if not leads:
         return {}
-    c = sqlite3.connect(db, timeout=30)
+    c = sqlite_connect(db)
     try:
         ensure_schema(c)
         if time.monotonic() - LIVE.loaded > 600:
@@ -442,8 +443,17 @@ def main() -> None:
     ap.add_argument("--interval", type=int, default=6 * 3600)
     a = ap.parse_args()
     while True:
-        c = sqlite3.connect(a.db, timeout=60)
+        c = sqlite_connect(a.db)
         if not a.skip_backfill:
+            # pm_models only tops up pm_train every 6h; pull fresh crypto settlements here so the
+            # near-close set tracks the loop cadence instead of going stale between model fits.
+            try:
+                from .pm_history import SERIES as _hist_series
+                from .pm_history import run as _hist_run
+                crypto = [x for x in _hist_series if asset_of(x)]
+                _hist_run(a.db, days=1, series=crypto, max_per_series=500)
+            except Exception as exc:  # noqa: BLE001 - settlement top-up is best effort
+                print(json.dumps({"settlement_topup_error": type(exc).__name__}), flush=True)
             print(json.dumps({"ref_1m": backfill_1m(c, a.days)}), flush=True)
             print(json.dumps({"near": backfill_near(c, Api())}), flush=True)
         c.close()
