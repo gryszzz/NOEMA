@@ -33,6 +33,10 @@ FOLLOW_TRADES = os.getenv("NOEMA_STREAM_TRADES", "0") == "1"
 RPC_TRADES = os.getenv("NOEMA_RPC_TRADES", "1") == "1"
 FOLLOW: dict[str, float] = {}  # mint -> first-seen epoch, shared by PumpPortal + RPC creates
 _DISC = {hashlib.sha256(f"event:{n}".encode()).digest()[:8]: n for n in ("TradeEvent", "CreateEvent")}
+_LL_TRADE = hashlib.sha256(b"event:TradeEvent").digest()[:8]
+_LL_CREATE = hashlib.sha256(b"event:PoolCreateEvent").digest()[:8]
+WSOL = "So11111111111111111111111111111111111111112"
+LL_POOLS: dict[str, dict[str, Any]] = {}  # LaunchLab pool_state -> {"mint", "at"} (SOL-quoted pools only)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
@@ -83,10 +87,96 @@ def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], fol
             follow.setdefault(ev["mint"], now)
         elif sig and now - follow.get(ev["mint"], -1e18) <= TRADE_FOLLOW_S:
             key = sig if n == 0 else f"{sig}:{n}"
-            cur = c.execute("INSERT OR IGNORE INTO launch_trades VALUES (?,?,?,?,?,?,?,?)", (
-                key, ev["mint"], _now(), ev["side"], ev["sol"], ev["tokens"], ev["trader"], ev["market_cap_sol"]))
-            n += cur.rowcount
+            n += insert_trade(c, key, ev["mint"], ev["side"], ev["sol"], ev["tokens"], ev["trader"],
+                              ev["market_cap_sol"], "helius")
     return n
+
+
+def decode_launchlab(data: bytes) -> dict[str, Any] | None:
+    """Raydium LaunchLab TradeEvent (147B): pool, total_base_sell, v_base, v_quote, real_base/quote before+after, ...,
+    trade_direction @144 (0=buy). PoolCreateEvent: pool_state first. Quote assumed SOL (non-WSOL pools never followed)."""
+    if data[:8] == _LL_CREATE and len(data) >= 40:
+        return {"kind": "ll_create", "pool": b58(data[8:40])}
+    if data[:8] != _LL_TRADE or len(data) != 147:
+        return None
+    u = [int.from_bytes(data[40 + 8 * i:48 + 8 * i], "little") for i in range(7)]
+    _tbs, vb, vq, rbb, rqb, rba, rqa = u
+    denom = vb - rba
+    return {"kind": "ll_trade", "pool": b58(data[8:40]), "side": "sell" if data[144] else "buy",
+            "sol": abs(rqa - rqb) / 1e9, "tokens": abs(rba - rbb) / 1e6,
+            "market_cap_sol": round((vq + rqa) * 1e6 / denom, 4) if denom > 0 else None}
+
+
+def handle_launchlab_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], pools: dict | None = None,
+                          now: float | None = None) -> tuple[int, list[str]]:
+    """Returns (trades inserted, new pool_states needing a mint lookup)."""
+    pools = LL_POOLS if pools is None else pools
+    now = now or time.time()
+    n, new = 0, []
+    for ln in logs:
+        if not ln.startswith("Program data: "):
+            continue
+        try:
+            ev = decode_launchlab(base64.b64decode(ln[14:]))
+        except ValueError:
+            continue
+        if not ev:
+            continue
+        if ev["kind"] == "ll_create":
+            if ev["pool"] not in pools:
+                pools[ev["pool"]] = {"mint": None, "at": now, "sig": sig}
+                new.append(ev["pool"])
+            continue
+        p = pools.get(ev["pool"])
+        if sig and p and p.get("mint") and now - p["at"] <= TRADE_FOLLOW_S:
+            n += insert_trade(c, sig if n == 0 else f"{sig}:{n}", p["mint"], ev["side"], ev["sol"], ev["tokens"],
+                              None, ev["market_cap_sol"], "helius_launchlab")
+    return n, new
+
+
+def mint_from_tx(tx: dict[str, Any]) -> tuple[str | None, bool]:
+    """(base mint, quote_is_sol) from a LaunchLab create tx's token balances."""
+    mints = {b.get("mint") for k in ("postTokenBalances", "preTokenBalances")
+             for b in ((tx.get("meta") or {}).get(k) or [])} - {None}
+    base = sorted(m for m in mints if m != WSOL)
+    return (base[0] if len(base) == 1 else None), (WSOL in mints or len(base) == 1)
+
+
+def _get_tx(sig: str) -> dict[str, Any] | None:
+    import urllib.request
+    url = rpc_http_url()
+    if not url:
+        return None
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "getTransaction",
+                       "params": [sig, {"maxSupportedTransactionVersion": 0, "commitment": "confirmed"}]}).encode()
+    req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read()).get("result")
+
+
+async def resolve_ll_pools(c: sqlite3.Connection, q: asyncio.Queue, stop: asyncio.Event) -> None:
+    """One getTransaction per LaunchLab create (a few/min), >=1s apart, retries w/ backoff - free-tier friendly."""
+    while not stop.is_set():
+        pool = await q.get()
+        p = LL_POOLS.get(pool)
+        if not p or not p.get("sig"):
+            continue
+        for attempt in range(4):
+            await asyncio.sleep(2 + 3 * attempt)  # confirmed tx needs a moment; also rate-limits
+            try:
+                tx = await asyncio.to_thread(_get_tx, p["sig"])
+            except Exception as exc:  # noqa: BLE001
+                print(_now(), "rpc_http", type(exc).__name__, flush=True)  # never print the URL
+                continue
+            if tx:
+                mint, sol_q = mint_from_tx(tx)
+                if mint and sol_q:
+                    p["mint"] = mint
+                    c.execute("INSERT OR IGNORE INTO launch_stream (mint, signature, received_at, source, raw_json)"
+                              " VALUES (?,?,?,?,?)", (mint, p["sig"], _now(), "helius_launchlab",
+                                                      json.dumps({"pool": pool})))
+                break
+        await asyncio.sleep(1)
 
 
 def prune_follow(follow: dict[str, float], now: float | None = None) -> None:
@@ -102,6 +192,8 @@ CREATE INDEX IF NOT EXISTS launch_stream_at ON launch_stream(received_at);
 CREATE TABLE IF NOT EXISTS launch_trades (signature TEXT PRIMARY KEY, mint TEXT NOT NULL, received_at TEXT NOT NULL,
   side TEXT, sol REAL, tokens REAL, trader TEXT, market_cap_sol REAL);
 CREATE INDEX IF NOT EXISTS launch_trades_mint ON launch_trades(mint, received_at);
+CREATE TABLE IF NOT EXISTS launch_trade_seen (signature TEXT NOT NULL, source TEXT NOT NULL, received_at TEXT NOT NULL,
+  PRIMARY KEY (signature, source));
 CREATE TABLE IF NOT EXISTS launch_rpc_events (signature TEXT PRIMARY KEY, program TEXT, received_at TEXT NOT NULL,
   slot INTEGER);
 """
@@ -118,7 +210,29 @@ def connect(path: str) -> sqlite3.Connection:
     c = sqlite3.connect(path, timeout=30)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
+    if "source" not in {r[1] for r in c.execute("PRAGMA table_info(launch_trades)")}:
+        c.execute("ALTER TABLE launch_trades ADD COLUMN source TEXT")
     return c
+
+
+def pumpportal_url() -> str:
+    key = os.getenv("PUMPPORTAL_API_KEY")  # never logged
+    return f"{PUMPPORTAL}?api-key={key}" if key else PUMPPORTAL
+
+
+def rpc_http_url() -> str | None:
+    key = os.getenv("HELIUS_API_KEY")
+    return f"https://mainnet.helius-rpc.com/?api-key={key}" if key else os.getenv("NOEMA_SOLANA_HTTP_URL")
+
+
+def insert_trade(c: sqlite3.Connection, sig: str, mint: str, side: str | None, sol: Any, tokens: Any, trader: Any,
+                 mcap: Any, source: str) -> int:
+    """Dedupe by signature across sources; launch_trade_seen records every source's arrival for overlap/latency."""
+    now = _now()
+    c.execute("INSERT OR IGNORE INTO launch_trade_seen VALUES (?,?,?)", (sig.split(":")[0], source, now))
+    return c.execute("INSERT OR IGNORE INTO launch_trades (signature, mint, received_at, side, sol, tokens, trader,"
+                     " market_cap_sol, source) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (sig, mint, now, side, sol, tokens, trader, mcap, source)).rowcount
 
 
 def _now() -> str:
@@ -137,9 +251,8 @@ def handle_pumpportal(c: sqlite3.Connection, msg: dict[str, Any], follow: dict[s
         FOLLOW.setdefault(msg["mint"], time.time())
         return msg["mint"]
     if tx in ("buy", "sell") and msg.get("mint") and msg.get("signature"):
-        c.execute("INSERT OR IGNORE INTO launch_trades VALUES (?,?,?,?,?,?,?,?)", (
-            msg["signature"], msg["mint"], _now(), tx, msg.get("solAmount"), msg.get("tokenAmount"),
-            msg.get("traderPublicKey"), msg.get("marketCapSol")))
+        insert_trade(c, msg["signature"], msg["mint"], tx, msg.get("solAmount"), msg.get("tokenAmount"),
+                     msg.get("traderPublicKey"), msg.get("marketCapSol"), "pumpportal")
     return None
 
 
@@ -149,11 +262,13 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
     backoff = 1.0
     while not stop.is_set():
         try:
-            async with websockets.connect(PUMPPORTAL, ping_interval=20, max_size=2**22) as ws:
+            async with websockets.connect(pumpportal_url(), ping_interval=20, max_size=2**22) as ws:
                 await ws.send(json.dumps({"method": "subscribeNewToken"}))
                 backoff, last_commit = 1.0, time.time()
                 while not stop.is_set():
                     msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
+                    if "txType" not in msg and msg.get("message") or msg.get("errors"):
+                        print(_now(), "pumpportal msg", str(msg.get("message") or msg.get("errors"))[:160], flush=True)
                     new = handle_pumpportal(c, msg, follow)
                     if FOLLOW_TRADES and new and len(follow) <= MAX_FOLLOW:
                         await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [new]}))
@@ -173,7 +288,7 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
             backoff = min(60.0, backoff * 2)
 
 
-async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event) -> None:
+async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue | None = None) -> None:
     import websockets
     backoff = 1.0
     while not stop.is_set():
@@ -197,10 +312,18 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                             v.get("signature"), subs.get(p.get("subscription"), "?"), _now(),
                             ((p.get("result") or {}).get("context") or {}).get("slot")))
                     if RPC_TRADES and v.get("err") is None:
-                        handle_rpc_logs(c, v.get("signature"), logs)
+                        if subs.get(p.get("subscription")) == "raydium_launchlab":
+                            _n, new_pools = handle_launchlab_logs(c, v.get("signature"), logs)
+                            for pool in new_pools:
+                                if llq is not None and llq.qsize() < 50:
+                                    llq.put_nowait(pool)
+                        else:
+                            handle_rpc_logs(c, v.get("signature"), logs)
                     if time.time() - last_commit > 2:
                         c.commit()
                         prune_follow(FOLLOW)
+                        for pk in [k for k, x in LL_POOLS.items() if time.time() - x["at"] > TRADE_FOLLOW_S]:
+                            LL_POOLS.pop(pk, None)
                         last_commit = time.time()
         except Exception as exc:  # noqa: BLE001
             print(_now(), "rpc", type(exc).__name__, flush=True)  # never print the URL (may hold a key)
@@ -243,7 +366,7 @@ def _has(c: sqlite3.Connection, t: str) -> bool:
 def prune(db: str, keep_h: float = 72) -> None:
     c = connect(db)
     cut = datetime.fromtimestamp(time.time() - keep_h * 3600, UTC).isoformat()
-    for t in ("launch_trades", "launch_rpc_events"):
+    for t in ("launch_trades", "launch_rpc_events", "launch_trade_seen"):
         c.execute(f"DELETE FROM {t} WHERE received_at < ?", (cut,))
     c.commit()
     c.close()
@@ -258,7 +381,8 @@ async def _main(db: str) -> None:
             prune(db)
             print(_now(), json.dumps(latency_report(db, 1)), flush=True)
     c = connect(db)  # one connection shared by both tasks (single thread) - no self-locking
-    await asyncio.gather(run_pumpportal(c, stop), run_rpc(c, stop), housekeeping())
+    llq: asyncio.Queue = asyncio.Queue()
+    await asyncio.gather(run_pumpportal(c, stop), run_rpc(c, stop, llq), resolve_ll_pools(c, llq, stop), housekeeping())
 
 
 def main() -> None:  # pragma: no cover
