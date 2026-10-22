@@ -504,6 +504,18 @@ def board(timing_db: str) -> dict[str, Any]:
         out["watch"] = [dict(r) for r in c.execute("SELECT mint, pool, t0, liq FROM t_watch ORDER BY t0 DESC LIMIT 20")]
         out["recent"] = [{"at": r["at"], "agent": r["agent_id"], "mint": r["mint"], "action": r["action"]}
                          for r in c.execute("SELECT at, agent_id, mint, action FROM t_decisions ORDER BY id DESC LIMIT 30")]
+        for a in out["agents"]:
+            r = c.execute("SELECT COUNT(*), COALESCE(SUM(net),0) FROM t_results WHERE agent_id=?", (a["id"],)).fetchone()
+            a["scored"], a["paper_pnl_usd"] = r[0], round(r[1] * NOTIONAL, 2)
+        for w in out["watch"]:
+            acts = [x[0] for x in c.execute("SELECT action FROM t_decisions WHERE mint=? AND at>? ORDER BY id DESC LIMIT ?",
+                                            (w["mint"], time.time() - 120, POP))]
+            enter = sum(a.startswith("intent:") for a in acts)
+            w["state"] = "enter" if enter else ("wait" if acts else "idle")
+            w["agents_entering"] = enter
+        out["exited"] = [{"mint": r[0], "net_usd": round(r[1] * NOTIONAL, 2), "traded": r[2], "at": r[3]} for r in c.execute(
+            "SELECT mint, AVG(net), SUM(legs_json!='[]'), MAX(scored_at) FROM t_results GROUP BY mint ORDER BY MAX(scored_at) DESC LIMIT 8")]
+        out["paper_pnl_usd"] = round((c.execute("SELECT COALESCE(SUM(net),0) FROM t_results").fetchone()[0]) * NOTIONAL, 2)
         out["events"] = [dict(r) for r in c.execute("SELECT at, agent_id, event, detail FROM t_events ORDER BY id DESC LIMIT 20")]
         rep = c.execute("SELECT at, report_json FROM t_reports ORDER BY id DESC LIMIT 1").fetchone()
         if rep:
