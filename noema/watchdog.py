@@ -114,10 +114,12 @@ def sol_balance(address: str, timeout: float = 10.0) -> float:
         return int(json.load(r)["result"]["value"]) / 1e9
 
 
-def pumpportal_wallet_check(warn_sol: float = 0.035, fetch: Any = sol_balance) -> tuple[bool, str]:
+def pumpportal_wallet_check(warn_sol: float | None = None, fetch: Any = sol_balance) -> tuple[bool, str]:
     addr = os.getenv("NOEMA_PUMPPORTAL_WALLET_ADDRESS")
     if not addr:
         return False, "set NOEMA_PUMPPORTAL_WALLET_ADDRESS (public address) to watch the key wallet balance"
+    if warn_sol is None:
+        warn_sol = float(os.getenv("NOEMA_PUMPPORTAL_WARN_SOL", "0.025"))
     bal = fetch(addr)
     if bal < PUMPPORTAL_CUTOFF_SOL:
         return False, f"{bal:.4f} SOL - below PumpPortal's 0.02 SOL cutoff, keyed trades will stop"

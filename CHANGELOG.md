@@ -10,8 +10,8 @@
 
 ### Live Solana and EVM swap signers
 
-- Solana trench desks can swap through Jupiter inside the isolated signer process. The key is `NOEMA_SOLANA_SIGNER_SECRET`, read only there. The only signing address is `J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv`.
-- EVM swaps quote the public KyberSwap aggregator for Ethereum, Base, and Polygon. Robinhood Chain (4663) is in the same chain table and stays inert until its RPC, price, venue, and allowlist are set. The key is `NOEMA_EVM_SIGNER_SECRET`. The only signing address is `0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8`.
+- Solana trench desks can swap through Jupiter inside the isolated signer process. The key is `NOEMA_SOLANA_SIGNER_SECRET`, read only there. The only signing address is `<YOUR_SOLANA_ADDRESS>`.
+- EVM swaps quote the public KyberSwap aggregator for Ethereum, Base, and Polygon. Robinhood Chain (4663) is in the same chain table and stays inert until its RPC, price, venue, and allowlist are set. The key is `NOEMA_EVM_SIGNER_SECRET`. The only signing address is `<YOUR_EVM_ADDRESS>`.
 - Both signers default off. Live requires the signer flag, `NOEMA_ALLOW_LIVE_ORDERS`, a venue allowlist, and an owner-review flag (`NOEMA_SOLANA_OWNER_REVIEWED` or `NOEMA_EVM_OWNER_REVIEWED`). Those review flags are environment-only. A swap request cannot set them. Master halt still wins.
 - Each swap is simulated before it is sent. A retry of the same idempotency key resends the original signed transaction or returns the stored fill. Per-trade and daily USD caps come from `config/autonomy_authority.toml` at `NOEMA_AUTONOMY_LEVEL`; env dollar caps can only tighten them.
 - Checklists: `docs/solana-live-swaps.md` and `docs/evm-live-swaps.md`.

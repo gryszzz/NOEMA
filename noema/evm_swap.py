@@ -26,7 +26,8 @@ from .sqlite_util import connect as sqlite_connect
 
 # The only address this swap signer will sign for. A matching env value is
 # required as well; a different derived key is refused.
-EXPECTED_EVM_SIGNER_ADDRESS = "0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8"
+# Pin lives in private runtime config; empty = signer refuses (fail closed).
+EXPECTED_EVM_SIGNER_ADDRESS = os.environ.get("NOEMA_EVM_SIGNER_PIN", "")
 KYBER_ROUTER = "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"
 KYBER_NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 DEFAULT_AGGREGATOR_URL = "https://aggregator-api.kyberswap.com"
@@ -346,6 +347,8 @@ def _require_signer(account: Any) -> str:
     if not _address_ok(address):
         raise RuntimeError("configured evm wallet does not match signer")
     expected = EXPECTED_EVM_SIGNER_ADDRESS.lower()
+    if not expected:
+        raise RuntimeError("EVM signer pin NOEMA_EVM_SIGNER_PIN is not configured; address does not match")
     configured = os.getenv("NOEMA_EVM_ADDRESS", "").strip().lower()
     if address.lower() != expected or (configured and configured != expected):
         raise RuntimeError("configured evm wallet does not match signer")

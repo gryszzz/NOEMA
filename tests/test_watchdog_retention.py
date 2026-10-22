@@ -65,8 +65,13 @@ def test_reconcile_fixes_stale_pidfile(tmp_path, monkeypatch):
 def test_pumpportal_low_balance(monkeypatch):
     monkeypatch.setenv("NOEMA_PUMPPORTAL_WALLET_ADDRESS", "Addr1111")
     assert watchdog.pumpportal_wallet_check(fetch=lambda a: 0.1)[0] is True
-    ok, msg = watchdog.pumpportal_wallet_check(fetch=lambda a: 0.03)
+    monkeypatch.delenv("NOEMA_PUMPPORTAL_WARN_SOL", raising=False)
+    assert watchdog.pumpportal_wallet_check(fetch=lambda a: 0.0308)[0] is True
+    ok, msg = watchdog.pumpportal_wallet_check(fetch=lambda a: 0.022)
     assert not ok and msg.startswith("LOW")
+    monkeypatch.setenv("NOEMA_PUMPPORTAL_WARN_SOL", "0.05")
+    assert watchdog.pumpportal_wallet_check(fetch=lambda a: 0.0308)[0] is False
+    monkeypatch.delenv("NOEMA_PUMPPORTAL_WARN_SOL")
     ok, msg = watchdog.pumpportal_wallet_check(fetch=lambda a: 0.01)
     assert not ok and "cutoff" in msg
 

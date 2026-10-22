@@ -39,8 +39,8 @@ import httpx
 
 from .sqlite_util import connect as sqlite_connect
 
-SOLANA_ADDRESS = "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
-EVM_ADDRESS = "0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8"
+SOLANA_ADDRESS = os.environ.get("NOEMA_SOLANA_WALLET_ADDRESS", "")  # private runtime config
+EVM_ADDRESS = os.environ.get("NOEMA_EVM_ADDRESS", "")  # private runtime config
 EVM_CHAINS: dict[str, dict[str, Any]] = {
     "ethereum": {"native": "ETH", "rpc": "https://ethereum-rpc.publicnode.com",
                  "tokens": {"USDC": ("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6),

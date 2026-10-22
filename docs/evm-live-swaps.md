@@ -4,7 +4,7 @@ EVM swaps stay off unless every gate in this checklist is set. The signer proces
 
 The parent sends chain, side (`buy` spends native gas for an ERC-20, `sell` does the reverse), token, amount, max slippage in basis points, minimum out, and an idempotency key. It does not receive the private key or the signed transaction.
 
-`NOEMA_EVM_SIGNER_SECRET` is a 32-byte hex private key (optional `0x`) or a JSON byte array. Only the signer process reads it. The derived address must be `0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8`. Any other key is refused. The value must not be written to this repo, the dashboard, prompts, or logs.
+`NOEMA_EVM_SIGNER_SECRET` is a 32-byte hex private key (optional `0x`) or a JSON byte array. Only the signer process reads it. The derived address must be `<YOUR_EVM_ADDRESS>`. Any other key is refused. The value must not be written to this repo, the dashboard, prompts, or logs.
 
 Chains in the registry today are Ethereum (1), Base (8453), Polygon (137), and Robinhood Chain (4663). Adding another chain is a new entry in `SWAP_CHAINS` with a pinned router. There is no default RPC, so a chain does nothing until its own endpoint is set.
 
@@ -18,7 +18,7 @@ Leave these at the defaults until the key, a current native price, an allowlist,
 4. Set `NOEMA_ALLOW_LIVE_ORDERS=1`.
 5. Set `NOEMA_EVM_OWNER_REVIEWED=1`. This is the owner-review flag. It defaults to off, and the agent cannot set it over IPC.
 6. Set `NOEMA_LIVE_VENUES` to include `evm` (every configured chain) or the specific names `ethereum`, `base`, `polygon`, and `robinhood`.
-7. Set `NOEMA_EVM_ADDRESS=0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8`.
+7. Set `NOEMA_EVM_ADDRESS=<YOUR_EVM_ADDRESS>`.
 8. Inject `NOEMA_EVM_SIGNER_SECRET` into the signer process environment only.
 9. Set the RPC for each chain you will use. Swaps do not fall back to a public default:
    - `NOEMA_EVM_RPC_URL_ETHEREUM` or `NOEMA_EVM_RPC_URL_1`

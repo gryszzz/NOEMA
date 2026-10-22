@@ -21,8 +21,8 @@ from .room_v4 import _cached
 from .x_signal import x_wire
 
 STARTED_AT = datetime.now(UTC)
-SOLANA_ADDRESS = "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
-EVM_ADDRESS = "0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8"
+SOLANA_ADDRESS = os.environ.get("NOEMA_SOLANA_WALLET_ADDRESS", "")  # private runtime config
+EVM_ADDRESS = os.environ.get("NOEMA_EVM_ADDRESS", "")  # private runtime config
 EVM_RPCS = {
     "ethereum": ("ETH", "https://ethereum-rpc.publicnode.com"),
     "base": ("ETH", "https://base-rpc.publicnode.com"),

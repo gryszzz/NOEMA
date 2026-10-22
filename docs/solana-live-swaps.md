@@ -2,7 +2,7 @@
 
 Trench desks paper-trade unless every gate in this checklist is set. Live entries and exits are Jupiter Swap API swaps (quote, then a `swapTransaction`) signed only inside `noema.wallet_signer_process`. The parent process sends an allowlisted request: side, mint, amount, max slippage (bps), minimum out, and an idempotency key. It does not receive the private key, and the signer ignores any other field.
 
-The private key is `NOEMA_SOLANA_SIGNER_SECRET` (Phantom base58 export or a JSON byte array). The signer process is the only reader. The derived address must be `J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv`. Any other key is refused. The value must not be written to this repo, the dashboard, prompts, or logs.
+The private key is `NOEMA_SOLANA_SIGNER_SECRET` (Phantom base58 export or a JSON byte array). The signer process is the only reader. The derived address must be `<YOUR_SOLANA_ADDRESS>`. Any other key is refused. The value must not be written to this repo, the dashboard, prompts, or logs.
 
 ## Enablement checklist
 
@@ -14,7 +14,7 @@ Leave these at the defaults until a real wallet, a current SOL price, and a cap 
 4. Set `NOEMA_ALLOW_LIVE_ORDERS=1`.
 5. Set `NOEMA_SOLANA_OWNER_REVIEWED=1`. This is the owner-review flag. It defaults to off, and the agent cannot set it over IPC.
 6. Set `NOEMA_LIVE_VENUES` to include `solana` (or `solana_jupiter`).
-7. Set `NOEMA_SOLANA_WALLET_ADDRESS=J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv`. The signer also checks the derived key against that same address.
+7. Set `NOEMA_SOLANA_WALLET_ADDRESS=<YOUR_SOLANA_ADDRESS>`. The signer also checks the derived key against that same address.
 8. Inject `NOEMA_SOLANA_SIGNER_SECRET` into the signer process environment only. Do not pass it on the command line in a way that lands in shell history you share, and do not put it in `.env` files that get committed.
 9. Set `NOEMA_SOLANA_RPC_URL` to an HTTPS Solana RPC you trust. There is no implicit mainnet default for swaps.
 10. Optionally set `NOEMA_JUPITER_SWAP_API_URL`. The default is `https://api.jup.ag/swap/v1` (quote + `swapTransaction`, the same shape as Jupiter v6). `https://quote-api.jup.ag/v6` is a valid override. Set `NOEMA_JUPITER_API_KEY` if that host requires one. The key stays in the signer environment.

@@ -198,7 +198,7 @@ def _service(account, *, confirm="confirmed", router=KYBER_ROUTER):
 
 
 def test_expected_address_is_the_owner_wallet():
-    assert EXPECTED_EVM_SIGNER_ADDRESS == "0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8"
+    assert isinstance(EXPECTED_EVM_SIGNER_ADDRESS, str)  # pin comes from private env
     assert SWAP_CHAINS["robinhood"].chain_id == 4663
     assert SWAP_CHAINS["base"].chain_id == 8453
     assert SWAP_CHAINS["ethereum"].chain_id == 1
@@ -220,7 +220,7 @@ def test_refuses_a_key_that_is_not_the_expected_address(monkeypatch, tmp_path):
     _arm(monkeypatch, tmp_path, account)
     monkeypatch.setattr(
         "noema.evm_swap.EXPECTED_EVM_SIGNER_ADDRESS",
-        "0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8",
+        "0x1111111111111111111111111111111111111111",
     )
     monkeypatch.setenv("NOEMA_EVM_ADDRESS", account.address)
     with pytest.raises(RuntimeError, match="does not match"):

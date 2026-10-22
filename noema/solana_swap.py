@@ -27,7 +27,8 @@ from .sqlite_util import connect as sqlite_connect
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 # The only address this swap signer will sign for. A matching env value is
 # required as well; a different derived key is refused.
-EXPECTED_SOLANA_SIGNER_ADDRESS = "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
+# Pin lives in private runtime config; empty = signer refuses (fail closed).
+EXPECTED_SOLANA_SIGNER_ADDRESS = os.environ.get("NOEMA_SOLANA_SIGNER_PIN", "")
 TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 ALLOWED_EXTENSIONS = frozenset({"metadatapointer", "tokenmetadata"})
