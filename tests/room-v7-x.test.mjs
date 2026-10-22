@@ -24,3 +24,7 @@ test('posts group under a matching narrative', () => {
   assert.equal(T.groupOf({ text: 'New ETH vault on Ethereum', stances: [] }, N), 'vault / eth / ethereum');
   assert.equal(T.groupOf({ text: 'hi', stances: [{ title: '$SOL' }] }, N), '$SOL');
 });
+test('legacy X effect line charts stay hidden in the one-page layout', () => {
+  const css = readFileSync(new URL('../noema/static/room-v7-x.css', import.meta.url), 'utf8');
+  assert.match(css, /body\.v7-one #ch-wires \.xw\.xe7-on \.xfx\{display:none!important\}/);
+});
