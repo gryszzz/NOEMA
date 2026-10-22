@@ -16,3 +16,23 @@ body.v7-one #ch-wires .xfx{display:grid!important}
 body.v7-one #ch-wires .body{max-height:none!important}
 body.v7-one .culture-row{grid-column:1/-1!important;grid-row:7!important;min-height:340px}
 body.v7-one .center-top .v7cand-t{max-height:150px}
+/* ---- laptop fix: content-sized rows (page scrolls instead of squishing), readable candle charts ---- */
+body.v7-one .app{grid-template-rows:44px 24px 30px auto auto auto auto!important}
+body.v7-one .center-top{grid-template-rows:auto auto auto auto!important;align-content:start}
+body.v7-one .center-top>*{min-height:auto}
+/* side columns never set the hero row height; they fill it and scroll inside */
+body.v7-one .left,body.v7-one .right{height:0;min-height:100%;overflow-y:auto;overflow-x:hidden}
+body.v7-one .ch-main{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr)!important;grid-template-rows:auto minmax(190px,auto)}
+body.v7-one .ch-main>#v7-cg{grid-column:1/-1!important;height:auto!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;grid-auto-rows:auto}
+body.v7-one .ch-main>#v7-cg[data-n='3']{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+body.v7-one .ch-main #v7-cg canvas,body.v7-one.v7-laptop .ch-main #v7-cg canvas{height:240px!important;min-height:240px}
+body.v7-one .ch-stage{min-height:190px}
+@media (max-width:1360px){body.v7-one .ch-main>#v7-cg{grid-template-columns:1fr!important}body.v7-one .ch-main #v7-cg canvas{height:220px!important;min-height:220px}}
+html:has(body.v7-one),body.v7-one{overflow-x:hidden}
+/* agent wall: brier never cut off on narrow columns */
+body.v7-one .ag.aw{grid-template-columns:8px minmax(0,auto) minmax(0,1fr) auto!important}
+body.v7-one .ag.aw .nm{overflow:hidden;text-overflow:ellipsis}
+body.v7-one .ag.aw .ago{grid-column:3;grid-row:1;overflow:hidden;text-overflow:ellipsis}
+body.v7-one .ag.aw .br{grid-column:4;grid-row:1;justify-self:end}
+body.v7-one .ag.aw .th{grid-column:2/4!important;grid-row:2}
+body.v7-one .ag.aw .sp{grid-column:4!important;grid-row:2;justify-self:end}

@@ -102,11 +102,13 @@ function pmCandles(){const cv=byId("v7-pmc-cv");if(!cv||!window.TEVCandles)retur
  TEVCandles.draw(cv,m.ohlc,{interval:m.interval,label:lab,key:m.venue+m.market_id,markers:m.markers,volLabel:"quotes",empty:"no candle data"});
  byId("v7-pmc-s").textContent=`${m.venue} · ${m.market_id} · yes mid · ${m.quotes} quotes · ${m.interval} auto`}
 /* candle grid: 2 charts (laptop) / 4 (big monitor), each cycling different real finds, staggered */
+/* only the newest-first novelty list (server already ages out >12 shows / >2h replays); no cached-candle preference */
+T.foundAgo=it=>{const t=Date.parse(it.first_seen_at||"");if(!isFinite(t))return"";const m=Math.max(0,(Date.now()-t)/6e4);return " · found "+(m<1?"<1m":m<60?Math.round(m)+"m":Math.round(m/60)+"h")+" ago"};
 T.candlePool=d=>{const sc=((d||{}).funnel||{}).scan||[],pm=((d||{}).pm_candles||{}).markets||[];
- return sc.filter(it=>(it.ohlc||[]).length>1).map(it=>({key:"p:"+(it.mint||it.symbol),sym:it.symbol||"?",src:"candles: "+(it.candle_source||"GeckoTerminal"),ohlc:it.ohlc,interval:it.interval,markers:it.markers||[]}))
+ return sc.filter(it=>(it.ohlc||[]).length>1&&!it.aged_out).map(it=>({key:"p:"+(it.mint||it.symbol),sym:it.symbol||"?",src:(it.candle_source||"GeckoTerminal")+T.foundAgo(it),ohlc:it.ohlc,interval:it.interval,markers:it.markers||[]}))
   .concat(pm.map(m=>({key:"m:"+m.venue+m.market_id,sym:String(m.title||m.market_id).slice(0,24),src:m.venue+" quotes",ohlc:m.ohlc,interval:m.interval,markers:m.markers||[],vol:"quotes"})))};
 T.nextPick=(pool,cur,taken)=>{if(!pool.length)return -1;for(let s=1;s<=pool.length;s++){const j=((cur<0?-1:cur)+s)%pool.length;if(!taken.includes(pool[j].key)||pool.length<=taken.length)return j}return cur};
-function cgN(){return window.innerWidth>=2200&&window.innerHeight>=1200?4:2}
+function cgN(){const w=window.innerWidth;return w>=2200&&window.innerHeight>=1200?4:w>=1600?3:2}
 function cgBuild(){const g=byId("v7-cg");if(!g)return null;const cm=document.querySelector(".ch-main");if(cm&&g.parentElement!==cm)cm.insertBefore(g,cm.firstChild);const n=cgN();if(g.childElementCount!==n){g.dataset.n=n;g.innerHTML=Array.from({length:n},(_,k)=>`<div class="cgc"><canvas data-k="${k}"></canvas></div>`).join("");V.cg=Array.from({length:n},(_,k)=>({i:k-1,key:null}))}return g}
 function cgTick(k){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d),S=V.cg[k],cv=g.querySelectorAll("canvas")[k];if(!cv)return;
  if(!pool.length){TEVCandles.draw(cv,[],{key:"none",empty:"no candle data yet · waiting for GeckoTerminal OHLCV / stored quotes"});return}
@@ -114,7 +116,7 @@ function cgTick(k){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool
  TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${S.i+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})}
 function cgRefresh(){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d);(V.cg||[]).forEach((S,k)=>{const it=pool.find(p=>p.key===S.key),cv=g.querySelectorAll("canvas")[k];
  if(it&&cv)TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${pool.indexOf(it)+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})})}
-function cgBoot(){const D=10000;[0,1,2,3].forEach(k=>setTimeout(()=>{cgTick(k);every(()=>{if(k<cgN())cgTick(k)},D)},700+k*D/4));every(cgRefresh,30000);window.addEventListener("resize",()=>{cgBuild();cgRefresh()})}
+function cgBoot(){const D=5000;[0,1,2,3].forEach(k=>setTimeout(()=>{cgTick(k);every(()=>{if(k<cgN())cgTick(k)},D)},700+k*D/4));every(cgRefresh,30000);window.addEventListener("resize",()=>{cgBuild();cgRefresh()})}
 function link(fromId,toEl){const a=byId(fromId),svg=byId("v7-links");if(!a||!svg||!toEl)return;const r1=a.getBoundingClientRect(),r2=toEl.getBoundingClientRect();
  const x1=r1.right,y1=r1.top+r1.height/2,x2=r2.left,y2=r2.top+r2.height/2,mx=(x1+x2)/2;
  const p=document.createElementNS("http://www.w3.org/2000/svg","path");p.setAttribute("d",`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);svg.appendChild(p);vote(fromId.slice(3));setTimeout(()=>p.remove(),1600);while(svg.childNodes.length>6)svg.firstChild.remove()}
