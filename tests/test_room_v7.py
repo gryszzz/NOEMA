@@ -200,3 +200,22 @@ def test_self_built_candles_keep_gaps_and_need_three_buckets():
     rows = _self_built([(0, 1.0), (100, 2.0), (310, 1.5), (1300, 1.4)])
     assert [r[0] for r in rows] == [0.0, 300.0, 1200.0]  # no interpolated candle for the empty buckets
     assert rows[0][1:5] == [1.0, 2.0, 1.0, 2.0] and rows[0][5] == 0.0
+
+
+def test_scan_novelty_ages_out_replayed_trending_and_puts_new_first(tmp_path):
+    p = tmp_path / "nov.db"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE trench_desk_events (id INTEGER PRIMARY KEY, ts TEXT, desk_id TEXT, event TEXT, "
+              "payload_json TEXT)")
+    old = {"mint": "OLD", "symbol": "OLD", "stage": "chief_veto", "price_change_m5": 1.0, "liquidity_usd": 9e6}
+    rows = [(f"2026-10-21T20:{i:02d}:00+00:00", None, "desk_cycle", json.dumps({"feed": [old]})) for i in range(20)]
+    last = {"feed": [old, {"mint": "NEW", "symbol": "NEW", "stage": "filters", "liquidity_usd": 10},
+                     {"mint": "PUMPED", "symbol": "PUMPED", "stage": "filters", "price_change_m5": 40.0}]}
+    rows.append(("2026-10-21T20:30:00+00:00", None, "desk_cycle", json.dumps(last)))
+    c.executemany("INSERT INTO trench_desk_events (ts, desk_id, event, payload_json) VALUES (?,?,?,?)", rows)
+    c.commit()
+    out = room_v7.scan_novelty(c, last["feed"], now=room_v7._parse_ts("2026-10-21T20:30:00+00:00"))
+    mints = [x["mint"] for x in out["items"]]
+    assert "OLD" not in mints and mints[0] in {"NEW", "PUMPED"}
+    assert out["stats"]["aged_out"] == 1 and out["stats"]["last_new_token_min_ago"] == 0.0
+    assert all(x["is_new"] for x in out["items"])

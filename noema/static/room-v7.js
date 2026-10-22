@@ -84,7 +84,7 @@ function metricBars(x,W,H,it){const R=T.metricRows(it);x.font="9px monospace";x.
 /* real OHLC candles (GeckoTerminal) via tev-candles.js; never a price line */
 function miniChart(cv,it,lab){if(!window.TEVCandles)return;TEVCandles.draw(cv,it.ohlc||[],{interval:it.interval,label:lab,key:lab,markers:it.markers||[],empty:"no candle data from GeckoTerminal for this pool"})}
 /* pools with real candles first so the chart dwell shows candles; the rest still replay after */
-T.chartFirst=L=>L.filter(it=>(it.ohlc||[]).length>1).concat(L.filter(it=>!((it.ohlc||[]).length>1)));
+T.chartFirst=L=>L.slice(); // server order = newest find first (novelty); never float old cached-candle tokens to the top
 function scanNext(){if(V.paused)return;const f=(V.d||{}).funnel||{},L=T.chartFirst(f.scan||[]),lane=byId("v7-scan");if(!lane)return;
  if(!L.length){byId("v7-sc-t").textContent="no sweep recorded yet — the lane only shows real scanned pools";return}
  if(V.scanCycle!==f.cycle_id){V.scanCycle=f.cycle_id;V.scanI=0}
@@ -128,16 +128,17 @@ T.verdict=it=>{const st=String(it.stage||""),r=String(it.reason||""),ent=/enter|
  if(ent)return{cls:"ok",txt:r||st,out:"ENTERED"};
  if(st!=="rejected"&&(/^passed/i.test(r)||/queued/i.test(r)))return{cls:"ok",txt:r,out:/holder/i.test(r)?"→ HOLDERS":"PASSED"};
  return{cls:"bad",txt:r||st||"—",out:"CUT"}};
+T.noveltyLine=n=>{if(!n)return"";const a=n.last_new_token_min_ago;return ` · <b class="${a!=null&&a<=10?"ok":"bad"}">last new token ${a==null?"never":a<1?"<1m":Math.round(a)+"m"} ago</b> · ${E(n.new_unique_tokens_1h)} new/1h · ${E(n.aged_out)} replays aged out`};
 T.candRows=(scan,n=12)=>{const rank=it=>it.probability!=null?0:T.verdict(it).cls==="ok"?1:2;
- return (scan||[]).slice().sort((a,b)=>rank(a)-rank(b)||(+b.liquidity_usd||0)-(+a.liquidity_usd||0)).slice(0,n)};
+ return (scan||[]).slice().sort((a,b)=>String(b.first_seen_at||"").localeCompare(String(a.first_seen_at||""))||rank(a)-rank(b)).slice(0,n)};
 const age=h=>h==null||isNaN(h)?"—":h<1?Math.round(h*60)+"m":h<48?N(h,1)+"h":Math.round(h/24)+"d";
 function chainV7(){const el=byId("chain");if(!el)return;const f=(V.d||{}).funnel||{},lt=f.latest;
  if(!el.querySelector(".v7cand")){el.className="v7chain";el.innerHTML=`<div class="v7cand"><div class="v7cand-h" id="v7-cand-h"></div><div class="v7cand-t"><table id="v7-cand"></table></div><div class="v7rj" id="v7-rj"></div></div>`}
- byId("v7-cand-h").innerHTML=lt?`<b>LATEST CANDIDATES</b> · sweep #${E(f.cycle_id)} ${HM(f.ts)} · ${lt.crawled} pools scanned → ${lt.filters} passed filters → ${lt.holders} holder-checked → ${lt.judged} judged → <b class="${lt.entered?"ok":"dim"}">${lt.entered} entered</b>`:"<b>LATEST CANDIDATES</b> · no sweep recorded yet";
+ byId("v7-cand-h").innerHTML=lt?`<b>LATEST CANDIDATES</b> · sweep #${E(f.cycle_id)} ${HM(f.ts)} · ${lt.crawled} pools scanned → ${lt.filters} passed filters → ${lt.holders} holder-checked → ${lt.judged} judged → <b class="${lt.entered?"ok":"dim"}">${lt.entered} entered</b>`+T.noveltyLine(f.novelty):"<b>LATEST CANDIDATES</b> · no sweep recorded yet";
  const rows=T.candRows(f.scan),sc=(f.scan||[]).length;
  const h=`<tr><th>token</th><th>age</th><th>liq</th><th>vol 1h</th><th>5m</th><th>filter cut / judge</th><th>outcome</th></tr>`+(rows.map(it=>{const v=T.verdict(it);
   return `<tr title="${E(it.mint)} · ${E(it.source)}"><td><b>${E(it.symbol||"?")}</b></td><td>${age(it.pool_age_hours)}</td><td>${U(it.liquidity_usd)}</td><td>${U(it.volume_h1_usd)}</td><td class="${it.price_change_m5<0?"bad":"ok"}">${N(it.price_change_m5,1)}%</td><td class="v7why" title="${E(v.txt)}">${E(v.txt)}</td><td class="${v.cls}">${v.out}</td></tr>`}).join("")||'<tr><td colspan=7 class="dim">no candidates in the latest sweep</td></tr>')
-  +(sc>rows.length?`<tr><td colspan=7 class="dim">+${sc-rows.length} more pools in this sweep (judged and passing first, then by liquidity)</td></tr>`:"");
+  +(sc>rows.length?`<tr><td colspan=7 class="dim">+${sc-rows.length} more pools in this sweep (newest finds first; tokens replayed too long are aged out)</td></tr>`:"");
  const t=byId("v7-cand");if(t.dataset.h!==h){t.dataset.h=h;t.innerHTML=h}
  const R=f.rejects||[];byId("v7-rj").innerHTML=R.length?`<span class="dim">TOP CUTS</span>`+R.slice(0,6).map(r=>`<span class="v7cut" title="${E(r.reason)}">${E(r.reason)} <b>${r.count}</b></span>`).join(""):'<span class="dim">no rejects in the last sweep</span>';
  const iv=(SS().tr||{}).interval_seconds;const bt=byId("bay-tag");if(bt&&f.ts&&lt)bt.textContent=`sweep ${HM(f.ts)} · ${N((lt.crawled||0)/(iv||120)*60,1)} pools/min`}

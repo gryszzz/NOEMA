@@ -243,6 +243,72 @@ def _scan_chart(it: dict, sweep_ts: Any, history: dict | None = None, allow_fetc
     return {"ohlc": rows, "interval": _interval_label(rows), "markers": marks, "candle_source": src}
 
 
+# ---------------------------------------------------------------- scan novelty (fresh finds first)
+NOVELTY_WINDOW_CYCLES = int(os.getenv("NOEMA_SCAN_NOVELTY_CYCLES", "120"))  # ~5h of desk sweeps
+NOVELTY_MAX_SHOWN = int(os.getenv("NOEMA_SCAN_MAX_SHOWN", "12"))  # ~30 min of sweeps
+NOVELTY_MAX_AGE_S = float(os.getenv("NOEMA_SCAN_MAX_AGE_S", str(2 * 3600)))
+NOVELTY_NEW_S = 15 * 60
+RETRIGGER_M5_PCT = 15.0
+
+
+def _parse_ts(v: Any) -> datetime:
+    try:
+        d = datetime.fromisoformat(str(v))
+        return d if d.tzinfo else d.replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return datetime.now(UTC)
+
+
+def scan_novelty(conn: sqlite3.Connection, feed: list, *, now: datetime | None = None) -> dict[str, Any]:
+    """Order the latest sweep newest-find first and age out the replay.
+
+    The desk sweep pulls GeckoTerminal *trending* pools every cycle; those are the same
+    long-lived, high-liquidity tokens each time and the feed sorts by liquidity, so they sat on
+    top forever. Here each mint gets first_seen/shown_count from recent sweeps; a mint shown more
+    than NOVELTY_MAX_SHOWN sweeps or first seen over NOVELTY_MAX_AGE_S ago is aged out unless it
+    re-triggers (reached the desk, or |5m move| >= RETRIGGER_M5_PCT)."""
+    now = now or datetime.now(UTC)
+    rows = _rows(conn, "SELECT ts, payload_json FROM trench_desk_events WHERE event='desk_cycle' "
+                       "ORDER BY id DESC LIMIT ?", (NOVELTY_WINDOW_CYCLES,))
+    first: dict[str, datetime] = {}
+    shown: dict[str, int] = {}
+    for ts, payload in rows:
+        t = _parse_ts(ts)
+        for f in _j(payload).get("feed") or []:
+            m = isinstance(f, dict) and (f.get("mint") or f.get("symbol"))
+            if not m:
+                continue
+            shown[m] = shown.get(m, 0) + 1
+            if m not in first or t < first[m]:
+                first[m] = t
+    # first sighting ever per mint inside the window -> "last new token found"
+    newest_first = max(first.values()) if first else None
+    hour_ago = now - timedelta(hours=1)
+    new_1h = sum(1 for t in first.values() if t >= hour_ago)
+    fresh, aged = [], 0
+    for it in feed:
+        if not isinstance(it, dict) or not (it.get("mint") or it.get("symbol")):
+            continue
+        m = str(it.get("mint") or it.get("symbol"))
+        fs = first.get(m, now)
+        n = shown.get(m, 1)
+        age = (now - fs).total_seconds()
+        m5 = it.get("price_change_m5")
+        re_trig = it.get("stage") == "desk" or (isinstance(m5, (int, float)) and abs(m5) >= RETRIGGER_M5_PCT)
+        if (n > NOVELTY_MAX_SHOWN or age > NOVELTY_MAX_AGE_S) and not re_trig:
+            aged += 1
+            continue
+        fresh.append(it | {"first_seen_at": fs.isoformat(), "shown_count": n,
+                           "is_new": age <= NOVELTY_NEW_S, "retriggered": bool(re_trig and n > NOVELTY_MAX_SHOWN)})
+    fresh.sort(key=lambda r: r["first_seen_at"], reverse=True)  # stable: ties keep sweep order
+    ago = round((now - newest_first).total_seconds() / 60, 1) if newest_first else None
+    return {"items": fresh, "stats": {
+        "last_new_token_at": newest_first.isoformat() if newest_first else None,
+        "last_new_token_min_ago": ago, "new_unique_tokens_1h": new_1h,
+        "shown": len(fresh), "aged_out": aged, "max_shown": NOVELTY_MAX_SHOWN,
+        "max_age_min": round(NOVELTY_MAX_AGE_S / 60)}}
+
+
 def funnel(conn: sqlite3.Connection, cycles: int = 30, *, fetch: bool = False) -> dict[str, Any]:
     rows = _rows(conn, "SELECT id, ts, payload_json FROM trench_desk_events WHERE event='desk_cycle' "
                        "ORDER BY id DESC LIMIT ?", (cycles,))
@@ -273,14 +339,14 @@ def funnel(conn: sqlite3.Connection, cycles: int = 30, *, fetch: bool = False) -
     rej = latest.get("rejections") or {}
     rejects = sorted(({"reason": k, "count": int(v)} for k, v in rej.items() if isinstance(v, (int, float))),
                      key=lambda r: -r["count"])
+    nov = scan_novelty(conn, latest.get("feed") or [], now=_parse_ts(latest.get("_ts")))
     scan = []
-    for it in (latest.get("feed") or [])[:40]:
-        if not isinstance(it, dict):
-            continue
+    for it in nov["items"][:40]:
         scan.append({k: it.get(k) for k in ("symbol", "mint", "source", "stage", "reason", "price_usd",
                                             "liquidity_usd", "volume_h1_usd", "price_change_m5",
                                             "pool_age_hours", "trades_h1", "fdv_usd",
-                                            "top10_holder_fraction", "probability", "confidence")}
+                                            "top10_holder_fraction", "probability", "confidence",
+                                            "first_seen_at", "shown_count", "is_new", "retriggered")}
                     | {"closes": _closes(it.get("candles"))} | _scan_chart(it, latest.get("_ts"), history, fetch))
     have = sum(1 for x in scan if x["ohlc"])
     cov = {"with_candles": have, "total": len(scan), "pct": round(100 * have / len(scan)) if scan else None,
@@ -289,7 +355,7 @@ def funnel(conn: sqlite3.Connection, cycles: int = 30, *, fetch: bool = False) -
     return {"cycle_id": latest.get("_id"), "ts": latest.get("_ts"), "series": series, "candle_coverage": cov,
             "latest": series[-1] if series else None, "rejects": rejects, "scan": scan,
             "judgement": latest.get("judgement"), "chief_gate": latest.get("chief"),
-            "pumpfun_new": latest.get("pumpfun_new_launches")}
+            "pumpfun_new": latest.get("pumpfun_new_launches"), "novelty": nov["stats"]}
 
 
 def chief_state(conn: sqlite3.Connection, fun: dict[str, Any]) -> dict[str, Any]:
