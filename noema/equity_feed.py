@@ -49,7 +49,33 @@ EVM_CHAINS: dict[str, dict[str, Any]] = {
     "polygon": {"native": "POL", "rpc": "https://polygon-bor-rpc.publicnode.com",
                 "tokens": {"USDC": ("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", 6),
                            "USDC.e": ("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", 6)}},
+    "arbitrum": {"native": "ETH", "rpc": "https://arbitrum-one-rpc.publicnode.com", "chain_id": 42161,
+                 "tokens": {"USDC": ("0xaf88d065e77c8cC2239327C5EDb3A432268e5831", 6),
+                            "WETH": ("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", 18)}},
+    "optimism": {"native": "ETH", "rpc": "https://optimism-rpc.publicnode.com", "chain_id": 10,
+                 "tokens": {"USDC": ("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", 6),
+                            "WETH": ("0x4200000000000000000000000000000000000006", 18)}},
+    # Robinhood Chain (Arbitrum Orbit L2, ETH gas). Official public RPC + chain id 4663 per docs.robinhood.com/chain.
+    "robinhood": {"native": "ETH", "rpc": "https://rpc.mainnet.chain.robinhood.com", "chain_id": 4663,
+                  "tokens": {}},
 }
+EVM_CHAINS["ethereum"]["chain_id"] = 1
+EVM_CHAINS["base"]["chain_id"] = 8453
+EVM_CHAINS["polygon"]["chain_id"] = 137
+
+
+def _extra_chains() -> None:
+    """NOEMA_EVM_CHAINS_JSON adds/overrides chains: {"name": {"native": "ETH", "rpc": "...", "tokens": {}}}."""
+    raw = os.getenv("NOEMA_EVM_CHAINS_JSON", "").strip()
+    if not raw:
+        return
+    for name, spec in json.loads(raw).items():
+        spec.setdefault("native", "ETH")
+        spec["tokens"] = {k: tuple(v) for k, v in (spec.get("tokens") or {}).items()}
+        EVM_CHAINS[name.lower()] = spec
+
+
+_extra_chains()
 STABLE_SYMBOLS = {"USDC", "USDC.e", "USDT"}
 SOLANA_STABLE_MINTS = {
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
@@ -57,10 +83,10 @@ SOLANA_STABLE_MINTS = {
 }
 TOKEN_PROGRAMS = ("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
-SOURCE_IDS = ("kalshi", "polymarket_us", "solana", "evm_ethereum", "evm_base", "evm_polygon")
+SOURCE_IDS = ("kalshi", "polymarket_us", "solana", *(f"evm_{c}" for c in EVM_CHAINS))
 
 
-WALLET_SOURCES = {"solana", "evm_ethereum", "evm_base", "evm_polygon"}
+WALLET_SOURCES = {"solana", *(f"evm_{c}" for c in EVM_CHAINS)}
 
 
 class SourceError(RuntimeError):
@@ -319,11 +345,18 @@ def detect_deposits(previous: dict[str, Any], current: dict[str, SourceReading],
     Wallets compare *quantities*, so a price move is never mistaken for a deposit.
     Venues compare USD equity; a jump is a deposit only with no trade since the last reading.
     """
-    if trades:
-        return []
     out: list[tuple[str, str, Decimal, Decimal]] = []
     for source, reading in current.items():
         prev = previous.get(source)
+        if prev is None and source in WALLET_SOURCES:
+            # Newly tracked wallet (e.g. a chain just added): its existing balance is capital, not profit.
+            for asset, qty in reading.holdings.items():
+                usd = qty * reading.prices.get(asset, Decimal(1))
+                if qty > 0 and usd > 0:
+                    out.append((source, asset, qty, usd))
+            continue
+        if trades:
+            continue
         if not isinstance(prev, dict) or prev.get("status") != "ok":
             continue  # no comparable baseline for this source
         prev_holdings = {k: Decimal(v) for k, v in (prev.get("holdings") or {}).items()}
