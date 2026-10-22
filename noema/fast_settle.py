@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS fs_paper_trades (id INTEGER PRIMARY KEY AUTOINCREMENT
     agent_id TEXT NOT NULL, ticker TEXT NOT NULL, side TEXT NOT NULL, price REAL NOT NULL, fee REAL NOT NULL,
     prob REAL NOT NULL, edge REAL NOT NULL, contracts INTEGER NOT NULL, result TEXT, pnl REAL, settled_at TEXT,
     UNIQUE (agent_id, ticker));
+CREATE TABLE IF NOT EXISTS fs_books (ticker TEXT NOT NULL, at TEXT NOT NULL, best_bid REAL, best_ask REAL,
+    bid_depth5 REAL, ask_depth5 REAL, imbalance REAL, seconds_to_close REAL, PRIMARY KEY (ticker, at));
+CREATE TABLE IF NOT EXISTS fs_trades (trade_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, created_time TEXT NOT NULL,
+    yes_price REAL, count REAL, taker_side TEXT);
 CREATE TABLE IF NOT EXISTS fs_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
     summary_json TEXT NOT NULL);
 """
@@ -253,7 +257,48 @@ def forecasts_for(c: sqlite3.Connection, api: Api, row: sqlite3.Row, mid: float,
                 out["fs-spot-vol"] = (p, {"rule": "lognormal from Coinbase spot + 4h realized vol",
                                           "spot": sv[0], "vol_per_sqrt_s": sv[1], "seconds_to_close": secs})
     out.update(pm_forecasts(row, mid, now))
+    if row["category"] == "crypto":
+        try:
+            from .pm_crypto import live_forecasts
+            b, a = PM.quotes.get(row["ticker"], (mid, mid))
+            out.update(live_forecasts(PM_DB, row, mid, b, a, now))
+        except Exception:  # noqa: BLE001, S110
+            pass
     return out
+
+
+def capture_microstructure(c: sqlite3.Connection, api: Api, now: datetime, horizon_s: int = 3600) -> dict[str, int]:
+    """Public order books for crypto markets closing within the hour, plus the public trade tape."""
+    rows = c.execute("SELECT ticker, close_time FROM fs_markets WHERE result IS NULL AND category='crypto' AND"
+                     " close_time > ? AND close_time <= ?", (now.isoformat(),
+                     (now + timedelta(seconds=horizon_s)).isoformat())).fetchall()
+    books = 0
+    for t, close in rows[:40]:
+        try:
+            ob = api.get(f"{KALSHI}/markets/{t}/orderbook").get("orderbook_fp") or {}
+        except Exception:  # noqa: BLE001, S112
+            continue
+        yes = sorted(((_f(p), _f(q)) for p, q in ob.get("yes_dollars") or []), key=lambda x: -(x[0] or 0))
+        no = sorted(((_f(p), _f(q)) for p, q in ob.get("no_dollars") or []), key=lambda x: -(x[0] or 0))
+        bd, ad = sum(q or 0 for _, q in yes[:5]), sum(q or 0 for _, q in no[:5])
+        c.execute("INSERT OR IGNORE INTO fs_books VALUES (?,?,?,?,?,?,?,?)", (
+            t, now.isoformat(), yes[0][0] if yes else None, (1 - no[0][0]) if no and no[0][0] is not None else None,
+            bd, ad, (bd - ad) / (bd + ad) if bd + ad else None, (_dt(close) - now).total_seconds()))
+        books += 1
+    tracked = {r[0] for r in c.execute("SELECT ticker FROM fs_markets WHERE category='crypto' AND result IS NULL")}
+    last = c.execute("SELECT MAX(created_time) FROM fs_trades").fetchone()[0]
+    since = int(_dt(last).timestamp()) if last else int((now - timedelta(minutes=10)).timestamp())
+    trades = 0
+    try:
+        d = api.get(f"{KALSHI}/markets/trades", {"limit": 1000, "min_ts": since})
+        for tr in d.get("trades") or []:
+            if tr.get("ticker") in tracked:
+                trades += c.execute("INSERT OR IGNORE INTO fs_trades VALUES (?,?,?,?,?,?)", (
+                    tr.get("trade_id"), tr["ticker"], tr.get("created_time"),
+                    _f(tr.get("yes_price_dollars")), _f(tr.get("count_fp")), tr.get("taker_side"))).rowcount
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return {"books": books, "trades": trades}
 
 
 class _PMContext:
@@ -535,6 +580,8 @@ def run_once(db: str, api: Api | None = None, now: datetime | None = None, *, fo
             pm_refresh()
         except Exception as exc:  # noqa: BLE001
             out["pm_error"] = f"{type(exc).__name__}: {exc}"
+        out["microstructure"] = capture_microstructure(c, api, now)
+        c.commit()
         out["forecasts_written"] = forecast(c, api, live, now)
         c.commit()
         out["settled_markets"], out["resolved_forecasts"] = settle(c, api, now, db)
