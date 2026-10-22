@@ -662,12 +662,18 @@ def paper_bankroll() -> float:
 
 
 def size_for(conn: sqlite3.Connection, strategy: str, sig: dict[str, Any]) -> float:
-    """Allocator weight x bankroll, capped at the capital guard's unproven tier (3%) per trade and at
-    $25 on top-of-book arbs (no depth data). Benched -> 0."""
+    """Proven-only: unproven strategies get a tiny probe (or shadow), proven ones get allocator
+    weight x bankroll, capped at 3% per trade and $25 on top-of-book arbs. Benched -> 0."""
     row = conn.execute("SELECT weight, status FROM strategy_alloc WHERE strategy=?", (strategy,)).fetchone()
     weight, status = (row if row else (1 / len(STRATEGIES), "exploring"))
     if status == "benched":
         return 0.0
+    from .proven_sizing import strategy_proof
+    tier = strategy_proof(conn).get(strategy, {}).get("tier", "probe")
+    if tier in ("shadow", "benched"):
+        return 0.0
+    if tier != "proven":  # unproven: tiny probe so evidence keeps accruing, never real size
+        return round(min(_env("NOEMA_UNPROVEN_PROBE_USD", 2.5), 0.0025 * paper_bankroll()), 2)
     cap = 0.03 * paper_bankroll()
     size = min(cap, max(0.005 * paper_bankroll(), weight * paper_bankroll() * 0.10))
     if strategy == "pm_arb":
@@ -967,6 +973,14 @@ def strategies_board(db_path: str) -> dict[str, Any]:
             row["shadow_24h"] = conn.execute("SELECT COUNT(*) FROM strategy_signals WHERE strategy=? AND "
                                              "status='shadow' AND at>=datetime('now','-1 day')",
                                              (row["strategy"],)).fetchone()[0]
+        try:
+            from .proven_sizing import strategy_proof
+            proof = strategy_proof(conn)
+            for row in out["strategies"]:
+                p = proof.get(row["strategy"], {})
+                row["sizing_tier"], row["sizing_why"] = p.get("tier"), p.get("why")
+        except sqlite3.Error:
+            pass
         out["recent"] = [{"at": r[0], "strategy": r[1], "title": r[2], "edge": r[3], "size_usd": r[4], "status": r[5],
                           "pnl_usd": r[6]} for r in conn.execute(
             "SELECT at, strategy, title, edge, size_usd, status, pnl_usd FROM strategy_signals ORDER BY id DESC LIMIT 20")]

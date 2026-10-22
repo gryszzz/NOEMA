@@ -1097,6 +1097,13 @@ async def strategies_api() -> dict[str, Any]:
     return await asyncio.to_thread(strategies_board, _db_path())
 
 
+@app.get("/api/proven")
+async def proven_api() -> dict[str, Any]:
+    """Proven-only sizing evidence (read-only)."""
+    from .proven_sizing import board
+    return await asyncio.to_thread(board, _db_path())
+
+
 @app.get("/api/opportunities")
 async def opportunities_api() -> dict[str, Any]:
     """Read-only unified OPPORTUNITY FEED: deduped finds across every crawler source with first-seen
