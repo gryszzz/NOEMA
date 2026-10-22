@@ -582,6 +582,7 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
         if c.symbol:
             conn.execute("UPDATE culture_signals SET symbol=? WHERE kind='token' AND entity=? AND symbol IS NULL",
                          (c.symbol, f"{c.chain}:{c.address}"))
+    conn.commit()
     marks = {(c.chain, c.address): (c.price, c.liquidity or 1.0) for c in cands if c.price}
     if os.getenv("NOEMA_ALPHA_ADAPTIVE_EXITS", "1") != "0":
         exits = manage_adaptive(conn, marks, now)
@@ -596,6 +597,7 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
                            ).fetchone()
         c.liquidity_growth = (c.liquidity / old[0] - 1) if old and old[0] else 0.0
         c.screens = market_screens(c, lim)
+        conn.commit()  # release the write lock before any safety-API HTTP call
         report = None
         if all(s["pass"] for s in c.screens.values()):  # only spend safety-API calls on liquid tokens
             if c.chain == "solana":

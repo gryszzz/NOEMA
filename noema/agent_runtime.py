@@ -14,6 +14,7 @@ from time import perf_counter
 import httpx
 from polymarket_us.errors import PolymarketUSError
 
+from noema.solana_research import rpc_request_counts
 from noema.sqlite_util import retry_write
 
 from .agent_config import AgentConfig
@@ -408,6 +409,7 @@ async def _trench_sampler_loop(
                     counterfactuals_recorded=summary.counterfactuals_recorded,
                     provider_failures=list(summary.provider_failures),
                     provider_health=list(summary.provider_health),
+                    solana_rpc_requests_total=rpc_request_counts(),
                 )
         except asyncio.CancelledError:
             await solana.close()
