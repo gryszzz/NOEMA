@@ -168,7 +168,7 @@ window.wireSources=function(){const ev=(SS().v6||{}).lanes?.find(l=>l.lane==="ev
  const tg=byId("wire-tgt");if(tg)tg.innerHTML=T2.slice(0,3).map(t=>`<div><i>TARGET</i> ${E(t.market||"")} ⟵ <i>${E(t.backend)}</i> “${E(t.query||"")}” · ${t.results??0} results · ${t.linked??0} linked</div>`).join("")+(dropped?`<div class="dim">${dropped} rulebook-boilerplate quer${dropped>1?"ies":"y"} hidden</div>`:"")};
 
 /* ---------- equity vs floor ---------- */
-function equity(){const T=V.tr,cv=byId("v7-eq");if(!cv)return;const head=byId("v7-tr-head"),kv=byId("v7-eq-kv"),pp=byId("v7-tr-paper");
+function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(!cv)return;const head=byId("v7-tr-head"),kv=byId("v7-eq-kv"),pp=byId("v7-tr-paper");
  if(!T||!T.real){head.innerHTML='<div class="dim">waiting for the first real equity reading…</div>';return}
  const r=T.real,g=T.guard||{},S=(T.series||[]).filter(p=>p.usd!=null),sg=v=>v>=0?"+":"",pc=v=>v==null?"—":sg(v)+N(v,2)+"%",ago=Math.max(0,Math.round((Date.now()-Date.parse(r.last_reading_at))/1000)),agoS=ago<90?ago+"s":Math.round(ago/60)+"m",stale=ago>900;
  head.innerHTML=`<div class="tr-big">$${N(r.total_usd,4)}<span class="tr-sub">total real balance · last reading <b class="${stale?"bad":"ok"}">${agoS} ago</b>${stale?" (stale)":""}</span></div>
