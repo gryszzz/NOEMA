@@ -62,3 +62,16 @@ test('crawl-live maps hosts to sources and builds an honest caption', () => {
   assert.equal(s.done.find(d => d.id === 3).rl, true);
   assert.equal(R.liveState({ entries: [] }, now).caption, 'idle · legs resting');
 });
+
+test('crawl-live retry backoff is gentle and capped at 10s', () => {
+  const src = readFileSync(new URL('../noema/static/room-roam.js', import.meta.url), 'utf8');
+  const ctx = { window: {} };
+  (new Function('window', 'document', src))(ctx.window, undefined);
+  const R = ctx.window.TEV_ROAM;
+  assert.equal(R.backoff(0), 0);
+  assert.equal(R.backoff(1), 2000);
+  assert.equal(R.backoff(2), 3000);
+  assert.equal(R.backoff(3), 4500);
+  assert.equal(R.backoff(20), 10000);
+  assert.doesNotMatch(src, /Math\.random\(\)>\.05/);
+});

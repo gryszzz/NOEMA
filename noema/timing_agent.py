@@ -36,6 +36,8 @@ FEE_SIDE = float(os.getenv("NOEMA_TIMING_FEE_SIDE", "0.01"))      # DEX fee + pr
 NOTIONAL = float(os.getenv("NOEMA_TIMING_NOTIONAL", "25"))         # paper clip, drives slippage
 MIN_N = int(os.getenv("NOEMA_LIFECYCLE_MIN_N", "30"))
 POP = 8
+MAX_WATCH = int(os.getenv("NOEMA_TIMING_MAX_WATCH", "20"))
+CANDLE_REFRESH_S = float(os.getenv("NOEMA_TIMING_CANDLE_REFRESH_S", "120"))  # GeckoTerminal budget shared with the crawler
 Candle = tuple  # (ts, o, h, l, c, v)
 
 
@@ -404,6 +406,8 @@ def watch_new(c: sqlite3.Connection, db: str, max_age_s: int = 1800) -> int:
             rows += src.execute("SELECT address, evaluated_at, price, liquidity FROM alpha_candidates WHERE passed=1"
                                 " AND chain='solana' AND evaluated_at>? ORDER BY score DESC LIMIT 6", (since,)).fetchall()
         for r in rows:
+            if c.execute("SELECT COUNT(*) FROM t_watch").fetchone()[0] >= MAX_WATCH:
+                break                                               # keeps candle refresh within budget
             if c.execute("SELECT 1 FROM t_watch WHERE mint=?", (r[0],)).fetchone():
                 continue
             pool, res = tc.top_pool(c, r[0])
@@ -440,7 +444,9 @@ def tick(c: sqlite3.Connection, now: float) -> dict[str, int]:
             c.execute("DELETE FROM t_watch WHERE mint=?", (w["mint"],))
             done += 1
             continue
-        tc.minute_candles(c, w["pool"], int(now), 60)              # rate-limited by the shared bucket
+        last = c.execute("SELECT MAX(ts) FROM candles WHERE pool=?", (w["pool"],)).fetchone()[0] or 0
+        if now - last >= CANDLE_REFRESH_S:                          # 1m paths stored for every passed candidate
+            tc.minute_candles(c, w["pool"], int(now), 60 if last else 300)
         cs = tc.load(c, w["pool"], w["t0"] - 3600, int(now))
         for a in agents:                                           # live intent log (what it would do right now)
             g = Genome.of(json.loads(a["genome_json"]))

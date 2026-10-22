@@ -34,8 +34,11 @@ R.liveState=(d,now)=>{const E=(d&&d.entries)||[],fl=[],done=[];let items=0;
   if(now-end<3500)done.push({...e,end,ok:/^(2\d\d|304|ok)$/i.test(String(e.status)),rl:String(e.status)==="429"})}
  return{inflight:fl.slice(0,8),done,itemsPerMin:items,caption:fl.length||items?`${fl.length} fetch${fl.length===1?"":"es"} in flight · ${items} items/min`:"idle · legs resting"}};
 R.live=null;R.liveOk=null;R.seenDone=new Set();R.fx=[];
-async function pollLive(){if(R.liveOk===false&&Math.random()>.05)return;try{const r=await fetch("/api/crawl-live",{cache:"no-store",credentials:"same-origin"});
- if(!r.ok){R.liveOk=false;R.live=null;return}const d=await r.json();if(d&&d.schema==="tev.crawl_live.v1"){R.live=d;R.liveOk=true}else{R.liveOk=false;R.live=null}}catch(e){R.liveOk=false;R.live=null}}
+/* backoff after a failed request: 2s, 3s, 4.5s ... capped at 10s; any success resets it */
+R.backoff=n=>n<=0?0:Math.min(10000,2000*Math.pow(1.5,n-1));R.liveFails=0;R.liveNext=0;
+async function pollLive(){const now=Date.now();if(now<R.liveNext)return;try{const r=await fetch("/api/crawl-live",{cache:"no-store",credentials:"same-origin"});
+ if(!r.ok){liveFail();return}const d=await r.json();if(d&&d.schema==="tev.crawl_live.v1"){R.live=d;R.liveOk=true;R.liveFails=0;R.liveNext=Date.now()+1900}else liveFail()}catch(e){liveFail()}}
+function liveFail(){R.liveOk=false;R.live=null;R.liveFails+=1;R.liveNext=Date.now()+R.backoff(R.liveFails)}
 /* ---------- DOM ---------- */
 const doc=typeof document!=="undefined"?document:null;
 function el(kind){for(const id of R.TARGETS[kind]||[]){const e=doc.getElementById(id);if(e&&e.getClientRects().length){const r=e.getBoundingClientRect();if(r.width>4&&r.height>4)return{e,r}}}return null}
@@ -134,7 +137,7 @@ function tick(t){R.raf=0;const cv=canvas(),vw=innerWidth,vh=innerHeight,dpr=devi
  R.minis=R.minis.filter(m=>m.ev||(Math.hypot(m.x-R.main.x,m.y-R.main.y)>4&&(m.moving=true,m.dir=Math.atan2(R.main.y-m.y,R.main.x-m.x),Object.assign(m,R.step(m,R.main,dt,speed)),m.gait=(m.gait||0)+m.moved/(m.size*19),!m.done)));
  R.raf=requestAnimationFrame(tick)}
 function boot(){if(!doc||!doc.body)return;const mq=W_.matchMedia&&W_.matchMedia("(prefers-reduced-motion: reduce)");R.reduced=!!(mq&&mq.matches);mq&&mq.addEventListener&&mq.addEventListener("change",e=>{R.reduced=e.matches});
- setInterval(()=>{try{poll()}catch(e){console.error(e)}},1000);pollLive();setInterval(pollLive,2000);if(!R.raf)R.raf=requestAnimationFrame(tick);
+ setInterval(()=>{try{poll()}catch(e){console.error(e)}},1000);pollLive();setInterval(pollLive,1000);if(!R.raf)R.raf=requestAnimationFrame(tick);
  doc.addEventListener("visibilitychange",()=>{if(!doc.hidden&&!R.raf){R.lastT=0;R.raf=requestAnimationFrame(tick)}})}
 if(doc&&doc.addEventListener){if(doc.readyState==="loading")doc.addEventListener("DOMContentLoaded",()=>setTimeout(boot,200));else setTimeout(boot,200)}
 })();
