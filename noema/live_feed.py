@@ -127,8 +127,10 @@ def _pumpportal_note() -> str | None:
     except OSError:
         return None
     for ln in reversed(tail.splitlines()):
-        if "pumpportal msg" in ln:
-            if "funded with at least" in ln:
+        if "pumpportal keyed trades accepted" in ln or "pumpportal connected" in ln:
+            return None
+        if "pumpportal unfunded" in ln or "pumpportal msg" in ln:
+            if "funded with at least" in ln or "minimum balance" in ln.lower():
                 return "rejected: PumpPortal says API-key wallet is not funded (needs ≥0.02 SOL)"
             return None
     return None
@@ -184,7 +186,7 @@ def smart_section(smart_db: str) -> dict[str, Any]:
     from .smart_wallets import latest_report
     r = latest_report(smart_db) or {}
     sf = r.get("smart_follow") or {}
-    return {"as_of": r.get("at"), "cadence_s": 900,
+    return {"as_of": r.get("at"), "cadence_s": 300,
             "vetted": [{k: v.get(k) for k in ("wallet", "n_closed", "win_rate", "pnl_sol", "pnl_ex_best", "ci_lo")}
                        for v in (r.get("vetted") or [])[:12]],
             "n_vetted": len(r.get("vetted") or []), "candidates": r.get("candidates"),
@@ -469,7 +471,7 @@ def xv_section(db: str) -> dict[str, Any]:
                          "at=? ORDER BY edge DESC LIMIT 10", (at,)).fetchall() if at else []
     finally:
         c.close()
-    return {"as_of": at, "cadence_s": 900, "rows": [
+    return {"as_of": at, "cadence_s": 300, "rows": [
         {"pm": a, "kalshi": b, "verdict": v, "skew_s": s, "raw_gap": g, "cost": co, "edge": e,
          "gate": "clears 1¢ gate" if (e or 0) >= 0.01 else "below 1¢ fee+buffer gate"} for a, b, v, s, g, co, e in rows]}
 
