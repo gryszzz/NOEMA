@@ -186,7 +186,7 @@ def smart_section(smart_db: str) -> dict[str, Any]:
     from .smart_wallets import latest_report
     r = latest_report(smart_db) or {}
     sf = r.get("smart_follow") or {}
-    return {"as_of": r.get("at"), "cadence_s": 900,
+    return {"as_of": r.get("at"), "cadence_s": 300,
             "vetted": [{k: v.get(k) for k in ("wallet", "n_closed", "win_rate", "pnl_sol", "pnl_ex_best", "ci_lo")}
                        for v in (r.get("vetted") or [])[:12]],
             "n_vetted": len(r.get("vetted") or []), "candidates": r.get("candidates"),
@@ -447,7 +447,7 @@ def pm_history_section(dd: str) -> dict[str, Any]:
 def near_close_section(dd: str) -> dict[str, Any]:
     p = os.path.join(dd, "pm_train.db")
     if not os.path.isfile(p):
-        return {"as_of": None, "cadence_s": 900}
+        return {"as_of": None, "cadence_s": 300}
     c = _ro(p)
     try:
         ts = c.execute("SELECT MAX(snap_ts) FROM pm_near").fetchone()[0]
@@ -457,7 +457,7 @@ def near_close_section(dd: str) -> dict[str, Any]:
     finally:
         c.close()
     rj = _j(rep[1]) if rep else {}
-    return {"as_of": _iso(ts), "cadence_s": 900,
+    return {"as_of": _iso(ts), "cadence_s": 300,
             "rows": [dict(zip(("ticker", "lead_s", "bid", "ask", "mid", "vol10", "dmid10"), r, strict=True)) for r in rows],
             "report_at": rep[0] if rep else None,
             "report": {k: rj[k] for k in list(rj)[:6] if not isinstance(rj[k], (list, dict))}}
@@ -471,7 +471,7 @@ def xv_section(db: str) -> dict[str, Any]:
                          "at=? ORDER BY edge DESC LIMIT 10", (at,)).fetchall() if at else []
     finally:
         c.close()
-    return {"as_of": at, "cadence_s": 900, "rows": [
+    return {"as_of": at, "cadence_s": 300, "rows": [
         {"pm": a, "kalshi": b, "verdict": v, "skew_s": s, "raw_gap": g, "cost": co, "edge": e,
          "gate": "clears 1¢ gate" if (e or 0) >= 0.01 else "below 1¢ fee+buffer gate"} for a, b, v, s, g, co, e in rows]}
 
