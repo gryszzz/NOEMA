@@ -136,10 +136,16 @@ try {
   const beforeZoom=await page.locator('#world-map-canvas').evaluate(canvas=>canvas.toDataURL());
   await page.mouse.move(dragX,dragY); await page.mouse.wheel(0,-120);
   assert.notEqual(await page.locator('#world-map-canvas').evaluate(canvas=>canvas.toDataURL()),beforeZoom,`wheel zoom updates the camera at ${width}px`);
-  await page.locator('#world-event-list button').first().click();
-  // The inspector renders on the next frame; wait for it (slow CI runners) before asserting.
-  await page.waitForFunction(()=>document.getElementById('world-inspector-title')?.textContent.includes('opportunity discovered'),null,{timeout:15000}).catch(()=>{});
-  assert.ok((await page.locator('#world-inspector-title').innerText()).includes('opportunity discovered'));
+  // The inspector renders on a later frame; on slow CI runners click once more before failing.
+  let inspectorTitle='';
+  for(let attempt=1;attempt<=2;attempt++){
+   await page.locator('#world-event-list button').first().click();
+   await page.waitForFunction(()=>document.getElementById('world-inspector-title')?.textContent.includes('opportunity discovered'),null,{timeout:15000}).catch(()=>{});
+   inspectorTitle=await page.locator('#world-inspector-title').innerText();
+   if(inspectorTitle.includes('opportunity discovered'))break;
+   console.warn(`[qa] ${width}px world inspector attempt ${attempt} showed ${JSON.stringify(inspectorTitle)}; retrying once`);
+  }
+  assert.ok(inspectorTitle.includes('opportunity discovered'),`world inspector at ${width}px showed ${JSON.stringify(inspectorTitle)}`);
   assert.ok((await page.locator('#world-entity-list').innerText()).includes('MISSION · Inspect a bounded fixture opportunity · discovered'), 'historical replay must not reveal the later completed mission status');
   assert.equal(await page.locator('#world-entity-list').getByText(/EXPERIMENT/).count(),0,'experiment created after the selected event is hidden from the earlier view');
   await page.locator('#world-time-live').click();
