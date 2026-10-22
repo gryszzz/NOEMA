@@ -288,6 +288,14 @@ def _is_funding_error(text: str) -> bool:
     return "funded with at least" in t or "minimum balance not met" in t
 
 
+def _pp_beat(ok: bool, err: str | None = None) -> None:
+    try:
+        from .heartbeats import beat
+        beat("wallet:pumpportal_key", ok, err, cadence_s=300)
+    except Exception:  # noqa: BLE001, S110 - heartbeat must never break the stream
+        pass
+
+
 async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
     import websockets
     follow: dict[str, float] = {}
@@ -303,6 +311,7 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                     if msg.get("txType") in ("buy", "sell"):
                         if fund_backoff > 30.0:
                             print(_now(), "pumpportal keyed trades accepted", flush=True)
+                            _pp_beat(True)
                         fund_backoff, fund_errs = 30.0, 0
                     if "txType" not in msg and msg.get("message") or msg.get("errors"):
                         text = str(msg.get("message") or msg.get("errors"))
@@ -326,6 +335,7 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
         except PumpPortalUnfunded as exc:
             # a fresh connection re-checks the key's funding; back off 30 s -> 10 min so we don't hammer it
             print(_now(), "pumpportal unfunded", str(exc)[:120], f"retry in {fund_backoff:.0f}s", flush=True)
+            _pp_beat(False, "PumpPortal key wallet below 0.02 SOL - keyed trades refused; top it up")
             c.commit()
             follow.clear()
             await asyncio.sleep(fund_backoff)
