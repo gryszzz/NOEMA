@@ -230,6 +230,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS xv_pairs (
         pm_market TEXT, kalshi_market TEXT, family TEXT, name TEXT, verdict TEXT, issues_json TEXT,
         pm_json TEXT, k_json TEXT, best_json TEXT, skew_s REAL, at TEXT, PRIMARY KEY (pm_market, kalshi_market))""")
+    conn.execute("CREATE TABLE IF NOT EXISTS xv_gap_history (at TEXT, pm_market TEXT, kalshi_market TEXT, verdict TEXT,"
+                 " skew_s REAL, raw_gap REAL, cost REAL, edge REAL, PRIMARY KEY (at, pm_market, kalshi_market))")
     conn.execute("CREATE TABLE IF NOT EXISTS xv_runs (at TEXT, families INTEGER, pairs INTEGER, ambiguous INTEGER,"
                  " equivalent INTEGER, positive INTEGER, note TEXT)")
 
@@ -296,6 +298,12 @@ def run(conn: sqlite3.Connection, *, client: Any = None, pm_client: Any = None,
             client.close()
     conn.execute("DELETE FROM xv_pairs")
     conn.executemany("INSERT OR REPLACE INTO xv_pairs VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+    hist = []
+    for r in rows:
+        b = json.loads(r[8])
+        if b:
+            hist.append((r[10], r[0], r[1], r[4], r[9], b["raw_gap"], b["cost"], b["edge"]))
+    conn.executemany("INSERT OR REPLACE INTO xv_gap_history VALUES (?,?,?,?,?,?,?,?)", hist)
     conn.execute("INSERT INTO xv_runs VALUES (?,?,?,?,?,?,?)",
                  (now.isoformat(), len(summary["families"]), summary["pairs"], summary["ambiguous"],
                   summary["equivalent"], summary["positive"], json.dumps(summary["errors"])))
@@ -335,6 +343,26 @@ def arb_signals(pairs: list[dict[str, Any]], *, min_edge: float = 0.02) -> list[
     return out
 
 
+def gap_stats(conn: sqlite3.Connection, *, buffer: float | None = None) -> dict[str, Any]:
+    """How often rules-equivalent, synchronously quoted pairs clear combined fees + slippage + buffer.
+    `edge` in history is already 1 - (both asks + Kalshi fee + PM US fee + slippage per leg)."""
+    buffer = es.entry_buffer() if buffer is None else buffer
+    ensure_schema(conn)
+    rows = conn.execute("SELECT at, pm_market, kalshi_market, edge FROM xv_gap_history WHERE verdict='equivalent'"
+                        " AND skew_s IS NOT NULL AND skew_s <= ?", (es.MAX_LEG_SKEW_S,)).fetchall()
+    runs = sorted({r[0] for r in rows})
+    hits = [r for r in rows if r[3] >= buffer]
+    edges = sorted(r[3] for r in rows)
+    return {"buffer": buffer, "runs": len(runs), "pair_observations": len(rows),
+            "first": runs[0] if runs else None, "last": runs[-1] if runs else None,
+            "observations_clearing": len(hits), "runs_with_hit": len({r[0] for r in hits}),
+            "distinct_pairs_clearing": len({(r[1], r[2]) for r in hits}),
+            "hit_rate": round(len(hits) / len(rows), 5) if rows else None,
+            "positive_after_fees": sum(e > 0 for e in edges),
+            "median_edge": edges[len(edges) // 2] if edges else None, "max_edge": edges[-1] if edges else None,
+            "mean_edge_when_clearing": round(sum(r[3] for r in hits) / len(hits), 4) if hits else None}
+
+
 def main() -> None:  # pragma: no cover
     import argparse
 
@@ -342,7 +370,13 @@ def main() -> None:  # pragma: no cover
     ap.add_argument("--db", default="data/noema.db")
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--every", type=float, default=600)
+    ap.add_argument("--stats", action="store_true", help="print gap frequency vs fees+buffer and exit")
     a = ap.parse_args()
+    if a.stats:
+        conn = sqlite3.connect(a.db, timeout=30)
+        print(json.dumps(gap_stats(conn), indent=1))
+        conn.close()
+        return
     while True:
         conn = sqlite3.connect(a.db, timeout=30)
         try:

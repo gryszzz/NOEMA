@@ -371,6 +371,9 @@ def paper_trade(c: sqlite3.Connection, agent: str, why: dict, ticker: str, p: fl
         side, price, edge = "no", 1 - b, (1 - p) - (1 - b) - kalshi_fee(1 - b)
     else:
         return
+    from .edge_strategies import clears_fee_buffer
+    if not clears_fee_buffer(edge):
+        return
     c.execute("INSERT OR IGNORE INTO fs_paper_trades (at, agent_id, ticker, side, price, fee, prob, edge, contracts)"
               " VALUES (?,?,?,?,?,?,?,?,?)", (now.isoformat(), agent, ticker, side, price, kalshi_fee(price), p, edge, 10))
 
