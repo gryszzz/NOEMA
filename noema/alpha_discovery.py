@@ -565,6 +565,7 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
     lim = ScreenLimits.from_env()
     nov: dict[str, Any] = {}
     cands = _candidates_from_signals(conn, now, limit, nov)
+    conn.commit()  # release the noema.db write lock before the DexScreener/GoPlus HTTP calls
     by_chain: dict[str, list[Candidate]] = {}
     for c in cands:
         by_chain.setdefault(c.chain, []).append(c)
