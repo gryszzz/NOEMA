@@ -1057,8 +1057,10 @@ async def _sync_outcomes(config: AgentConfig) -> None:
                 canonical_propositions=kalshi_targets,
             )
             _log("agent_outcome_sync", **asdict(result))
-        except (httpx.HTTPError, RuntimeError, ValueError, OSError, KeyError, TypeError) as exc:
-            _log("agent_outcome_sync_error", venue="kalshi", error=type(exc).__name__)
+        except (httpx.HTTPError, RuntimeError, ValueError, OSError, KeyError, TypeError,
+                sqlite3.Error) as exc:
+            _log("agent_outcome_sync_error", venue="kalshi", error=type(exc).__name__,
+                 detail=str(exc)[:160])
         finally:
             await history.close()
         if polymarket_targets:
@@ -1265,8 +1267,11 @@ async def run_agent(
                 try:
                     await _sync_outcomes(config)
                 except (httpx.HTTPError, RuntimeError, ValueError,
-                        OSError, KeyError, TypeError) as exc:
-                    _log("agent_outcome_sync_error", error=type(exc).__name__)
+                        OSError, KeyError, TypeError, sqlite3.Error) as exc:
+                    # never let outcome sync kill the agent; retry sooner than the full interval
+                    next_outcome_sync = started + min(60.0, config.outcome_sync_interval_seconds)
+                    _log("agent_outcome_sync_error", error=type(exc).__name__,
+                         detail=str(exc)[:160])
             try:
                 cycle_status = await run_cycle(
                     cycle_id=cycle_id, config=config, identity=identity, store=store,
