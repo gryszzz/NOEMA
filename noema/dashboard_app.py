@@ -1089,6 +1089,15 @@ async def x_signal_api() -> dict[str, Any]:
     return await asyncio.to_thread(x_signal_board, _db_path())
 
 
+@app.get("/api/crawl-live")
+async def crawl_live_api() -> dict[str, Any]:
+    """Read-only live crawl activity (schema tev.crawl_live.v1): last <=50 in-flight / finished
+    crawler requests (crawler, source, host, started_at, duration_ms, status, bytes, items) plus the
+    last 10 sweep summaries. Drives the room spider's legs."""
+    from .crawl_http import crawl_live
+    return await asyncio.to_thread(crawl_live, _db_path())
+
+
 @app.get("/api/strategies")
 async def strategies_api() -> dict[str, Any]:
     """Read-only structural-edge strategy book (paper): per-strategy P&L, n, EV, backtest verdict,

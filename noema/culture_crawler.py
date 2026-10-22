@@ -18,6 +18,7 @@ import json
 import math
 import os
 import sqlite3
+import threading
 import time
 import urllib.robotparser
 from collections.abc import Callable
@@ -28,6 +29,14 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .crawl_http import (
+    HostGate,
+    LiveFeed,
+    SweepMeter,
+    adaptive_sleep,
+    fetch_concurrently,
+    retry_after_seconds,
+)
 from .news_crawler import sanitize
 
 USER_AGENT = "TEV-culture-crawler/1.0 (read-only research; +https://github.com/gryszzz/TEV-Bot-Trading-Terminal)"
@@ -90,32 +99,40 @@ BLOCKED_SOURCES: tuple[dict[str, str], ...] = (
 
 
 class CultureClient:
-    """HTTPS-only JSON GETs with robots.txt, per-host spacing and status tracking."""
+    """HTTPS-only JSON GETs with robots.txt, per-host spacing, keep-alive pooling and status tracking.
+
+    ``get_json`` is thread-safe: hosts run in parallel, each host serialized and spaced, and a
+    429/503 puts that host on a Retry-After cooldown instead of hammering it.
+    """
 
     def __init__(self, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep,
                  spacing: float = DEFAULT_SPACING) -> None:
-        self.client = client or httpx.Client(timeout=15, follow_redirects=True,
-                                             headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        self.client = client or httpx.Client(
+            timeout=15, follow_redirects=True, headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            limits=httpx.Limits(max_connections=16, max_keepalive_connections=16, keepalive_expiry=120))
         self.sleep, self.spacing = sleep, spacing
-        self._last: dict[str, float] = {}
+        self.gate = HostGate(spacing, HOST_SPACING, sleep=sleep)
         self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._robots_lock = threading.Lock()
         self.status: dict[str, str] = {}
+        self.meter: SweepMeter | None = None
+        self.live = LiveFeed(None, "culture")
+        self.source_of: dict[str, str] = {}
+        self._etags: dict[str, tuple[str | None, str | None, Any]] = {}
 
     def _wait(self, host: str) -> None:
-        need = max(self.spacing, HOST_SPACING.get(host, 0.0)) if self.spacing else 0.0
-        gap = time.monotonic() - self._last.get(host, -1e9)
-        if gap < need:
-            self.sleep(need - gap)
-        self._last[host] = time.monotonic()
+        self.gate.acquire(host).release()
 
     def allowed(self, url: str) -> bool:
         parts = urlsplit(url)
         if parts.scheme != "https":
             return False
-        if parts.netloc not in self._robots:
+        with self._robots_lock:
+            known = parts.netloc in self._robots
+        if not known:
             rp: urllib.robotparser.RobotFileParser | None = urllib.robotparser.RobotFileParser()
+            sem = self.gate.acquire(parts.netloc)
             try:
-                self._wait(parts.netloc)
                 r = self.client.get(f"https://{parts.netloc}/robots.txt")
                 if r.status_code >= 400:
                     rp = None
@@ -124,7 +141,10 @@ class CultureClient:
                     rp.parse(r.text.splitlines())
             except httpx.HTTPError:
                 rp = None
-            self._robots[parts.netloc] = rp
+            finally:
+                sem.release()
+            with self._robots_lock:
+                self._robots[parts.netloc] = rp
         rp = self._robots[parts.netloc]
         return rp is None or rp.can_fetch(USER_AGENT, url)
 
@@ -132,20 +152,48 @@ class CultureClient:
         if not self.allowed(url):
             self.status[url] = "robots"
             return None
-        self._wait(urlsplit(url).netloc)
+        host = urlsplit(url).netloc
+        if self.gate.cooling(host):
+            self.status[url] = "cooldown"
+            return None
+        headers: dict[str, str] = {}
+        cached = self._etags.get(url)
+        if cached and cached[0]:
+            headers["If-None-Match"] = cached[0]
+        if cached and cached[1]:
+            headers["If-Modified-Since"] = cached[1]
+        sem = self.gate.acquire(host)
+        tok = self.live.start(host, self.source_of.get(url, urlsplit(url).path[:60]))
         try:
-            r = self.client.get(url)
+            r = self.client.get(url, headers=headers) if headers else self.client.get(url)
         except httpx.HTTPError as exc:
             self.status[url] = f"error:{type(exc).__name__}"
+            if self.meter:
+                self.meter.record(0)
+            self.live.finish(tok, f"error:{type(exc).__name__}")
             return None
+        finally:
+            sem.release()
+        self.live.finish(tok, r.status_code, len(r.content))
+        if self.meter:
+            self.meter.record(r.status_code)
+        if r.status_code == 304 and cached:
+            self.status[url] = "304"
+            return cached[2]
         self.status[url] = str(r.status_code)
+        if r.status_code in (429, 503):
+            self.gate.cool(host, retry_after_seconds(r.headers.get("retry-after")))
         if r.status_code >= 400 or len(r.content) > 8_000_000:
             return None
         try:
-            return r.json()
+            data = r.json()
         except ValueError:
             self.status[url] = "bad_json"
             return None
+        etag, lm = r.headers.get("etag"), r.headers.get("last-modified")
+        if (etag or lm) and len(r.content) < 2_000_000:
+            self._etags[url] = (etag, lm, data)
+        return data
 
 
 SCHEMA = """
@@ -476,9 +524,13 @@ def crawl(conn: sqlite3.Connection, client: CultureClient, *, now: datetime | No
     ensure_schema(conn)
     now = now or datetime.now(UTC)
     total = 0
-    for src in sources:
-        data = client.get_json(src.url)
+    # fetch all sources in parallel (per-host serialized + spaced), then parse/store on this thread
+    client.source_of.update({src.url: src.name for src in sources})
+    datas = fetch_concurrently(lambda src: client.get_json(src.url), sources,
+                               workers=int(os.getenv("NOEMA_CULTURE_FETCH_WORKERS", "8")))
+    for src, data in zip(sources, datas, strict=True):
         obs = parse(src, data) if data is not None else []
+        client.live.items(src.name, len(obs))
         store(conn, obs, now=now)
         conn.execute("INSERT INTO culture_source_state VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
                      "status=excluded.status, items=excluded.items, fetched_at=excluded.fetched_at, url=excluded.url",
@@ -528,9 +580,19 @@ def main() -> None:
     client = CultureClient()
     while True:
         conn = sqlite3.connect(args.db, timeout=30)
+        sleep_s = max(300.0, args.interval)
         try:
+            client.meter = meter = SweepMeter("culture")
+            client.live = LiveFeed(args.db, "culture")
+            before = _signal_count(conn)
             res = crawl(conn, client)
             res["alpha"] = run_cycle(conn, client, db_path=args.db)
+            fresh = _signal_count(conn) - before
+            # adaptive cadence: a burst of brand-new signals/launches -> sweep again sooner
+            sleep_s = adaptive_sleep(fresh, max(300.0, args.interval) / 2, floor=180.0,
+                                     ceiling=max(300.0, args.interval), hot=10)
+            res["sweep"] = meter.save(conn, fresh, sleep_s)
+            client.meter = None
             print(json.dumps({"at": datetime.now(UTC).isoformat(), **res}, default=str), flush=True)
         except Exception as exc:  # noqa: BLE001 - crawler keeps running; logged without payloads
             print(json.dumps({"at": datetime.now(UTC).isoformat(), "error": type(exc).__name__,
@@ -539,7 +601,14 @@ def main() -> None:
             conn.close()
         if not args.loop:
             return
-        time.sleep(max(300.0, args.interval))
+        time.sleep(sleep_s)
+
+
+def _signal_count(conn: sqlite3.Connection) -> int:
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM culture_signals").fetchone()[0])
+    except sqlite3.Error:
+        return 0
 
 
 if __name__ == "__main__":
