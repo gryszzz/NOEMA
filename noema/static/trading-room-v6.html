@@ -130,8 +130,8 @@ body.v7-laptop .ag.aw .st{display:none}
 <div class="app">
 <header><div class="logo">TEV<small>NOEMA TRADING ROOM v6 · answer to JEV</small></div>
 <span class="pill" id="h-mode">PAPER</span><span class="pill">AUTONOMY <b id="h-lvl">…</b></span>
-<span class="pill">LIVE FLAGS <b id="h-live">…</b></span><span class="pill">DESK P&amp;L <b id="h-pnl">…</b></span>
-<span class="pill">MODEL $ <b id="h-bud">…</b></span><span class="grow"></span>
+<span class="pill">LIVE FLAGS <b id="h-live">…</b></span><span class="pill" title="simulated trench desks, not real money">PAPER DESK P&amp;L <b id="h-pnl">…</b></span>
+<span class="pill" id="h-bud-pill" title="estimated AI judge spend today (UTC day) vs the judge's own daily cap">AI SPEND today $ <b id="h-bud">…</b></span><span class="grow"></span>
 <span class="pill dim" id="h-upd">connecting…</span><span class="pill" id="h-clock"></span></header>
 
 <div class="left">
@@ -185,7 +185,7 @@ function header(){const t=S.tr||{},b=(S.cc||{}).budget||{};
  $("h-lvl").textContent=(t.autonomy||{}).level||"—";
  const live=(t.flags||{}).any_live; $("h-live").textContent=live?"ON":"ALL OFF"; $("h-live").className=live?"bad":"ok";
  const p=t.total_pnl_after_costs_usd; $("h-pnl").textContent=p==null?"—":(p>=0?"+":"")+f2(p); $("h-pnl").className=p<0?"bad":"ok";
- $("h-bud").textContent=b.day_utc?`${f2((b.cognition_usd||0)+(b.desk_judgement_usd||0),3)} / ${f2(b.cognition_cap_usd)}`:"—";
+ {const sp=b.desk_judgement_usd||0,cap=b.desk_judgement_cap_usd;$("h-bud").textContent=b.day_utc?`${f2(sp,3)} / ${cap!=null?f2(cap):"—"}`:"—";$("h-bud").className=cap&&sp>=cap*.8?"warn":"";}
  $("h-mode").innerHTML=t.paper?'<b class="warn">PAPER</b>':"—";}
 setInterval(()=>$("h-clock").textContent=new Date().toLocaleTimeString([], {hour12:false})+" ET",1000);
 /* ---------- crawler ---------- */
@@ -324,7 +324,7 @@ function acc(){const v6=S.v6||{},el=$("acc");
  const direct=S.accuracy&&Array.isArray(S.accuracy.agents)?S.accuracy.agents:null;
  const passed=v6.accuracy_leaderboard;
  const L=(direct&&direct.length)?direct:(Array.isArray(passed)&&passed.length?passed:(direct||passed));
- if(Array.isArray(L)&&L.length){el.innerHTML=`<table><tr><th>agent</th><th>brier</th><th>calib</th><th>weight</th><th>status</th></tr>${L.map(r=>`<tr><td>${esc(r.agent||r.agent_id||r.name||r.model)}</td><td>${f2(r.brier,3)}</td><td>${f2(r.calibration_error??r.calibration,3)}</td><td>${f2(r.weight)}</td><td class="${r.benched?"bad":"ok"}">${r.benched?"BENCHED":"active"}</td></tr>`).join("")}</table>`;return}
+ if(Array.isArray(L)&&L.length){el.innerHTML=`<table><tr><th>agent</th><th>brier</th><th>calib</th><th>weight</th><th>n</th><th>status</th></tr>${L.map(r=>{const n=+(r.sample_size??r.n??r.forecasts??0),thin=n<30;return `<tr${thin?' style="opacity:.4" title="fewer than 30 resolved forecasts: too few to judge"':''}><td>${esc(r.agent||r.agent_id||r.name||r.model)}</td><td>${f2(r.brier,3)}</td><td>${f2(r.calibration_error??r.calibration,3)}</td><td>${f2(r.weight)}</td><td>${n}${thin?" · thin":""}</td><td class="${r.benched?"bad":"ok"}">${r.benched?"BENCHED":"active"}</td></tr>`}).join("")}</table>`;return}
  const b=v6.brier_by_model||((S.cc||{}).ledger||{}).brier||{};
  el.innerHTML='<div class="empty">No accuracy-engine forecasts yet.</div>'+(Object.keys(b).length?`<table><tr><th>model</th><th>brier</th><th>n</th></tr>${Object.entries(b).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${f2(v.brier,3)}</td><td>${v.n}</td></tr>`).join("")}</table>`:"");}
 /* ---------- culture radar / alpha ---------- */

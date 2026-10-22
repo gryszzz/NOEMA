@@ -141,6 +141,20 @@ def _venue_summary(venues: dict[str, Any] | None, wallets: dict[str, Any] | None
     return out
 
 
+_MARK_MAX_AGE_S = float(os.getenv("NOEMA_DESK_MARK_MAX_AGE_SECONDS", "300"))
+
+
+def _mark_age_seconds(at: Any) -> float | None:
+    if not at:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(at))
+    except ValueError:
+        return None
+    ts = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    return round((datetime.now(UTC) - ts).total_seconds(), 1)
+
+
 def build_trading_room(db_path: str, *, venues: dict[str, Any] | None = None,
                        wallets: dict[str, Any] | None = None) -> dict[str, Any]:
     desks = desk_overview(db_path)
@@ -166,15 +180,22 @@ def build_trading_room(db_path: str, *, venues: dict[str, Any] | None = None,
         mark = p.get("last_mark_price") or 0
         qty = (p.get("core_qty") or 0) + (p.get("bounce_qty") or 0)
         cost = (p.get("core_cost_usd") or 0) + (p.get("bounce_cost_usd") or 0)
+        age = _mark_age_seconds(p.get("last_mark_at"))
+        stale = age is None or age > _MARK_MAX_AGE_S or not mark
         positions.setdefault(p["desk_id"], []).append({
             "symbol": p["symbol"], "mint": p["mint"], "qty": qty, "cost_usd": round(cost, 4),
             "mark_price": mark, "value_usd": round(qty * mark, 4),
-            "unrealized_usd": round(qty * mark - cost, 4), "opened_at": p["opened_at"]})
+            "mark_at": p.get("last_mark_at"), "mark_age_s": age, "mark_stale": stale,
+            # a stale mark is not a price: report no unrealized P&L rather than a fake one
+            "unrealized_usd": None if stale else round(qty * mark - cost, 4),
+            "opened_at": p["opened_at"]})
     seats = []
     for d in desks.get("desks", []):
         pos = positions.get(d["desk_id"], [])
         seats.append({**d, "hired": d["status"] == "active",
-                      "unrealized_pnl_usd": round(sum(p["unrealized_usd"] for p in pos), 4),
+                      "unrealized_pnl_usd": round(sum(p["unrealized_usd"] for p in pos
+                                                      if p["unrealized_usd"] is not None), 4),
+                      "stale_marks": sum(1 for p in pos if p["mark_stale"]),
                       "positions_detail": pos, "trades": by_desk.get(d["desk_id"], [])[:6]})
     feed = latest.get("feed") or []
     chain = {

@@ -136,9 +136,7 @@ def _autonomy(conn: sqlite3.Connection, desks_pnl: float | None) -> dict[str, An
             days = round((datetime.now(UTC) - st).total_seconds() / 86400, 2)
         except ValueError:
             pass
-    eq = [(_j(p) or {}).get("equity_usd") for (p,) in _q(
-        conn, "SELECT payload_json FROM trench_desk_events WHERE event='equity_snapshot' ORDER BY id")]
-    eq = [float(e) for e in eq if e is not None]
+    eq = paper_equity_series(conn)
     dd, peak = 0.0, None
     for e in eq:
         peak = e if peak is None else max(peak, e)
@@ -153,6 +151,27 @@ def _autonomy(conn: sqlite3.Connection, desks_pnl: float | None) -> dict[str, An
             "next": nxt, "paper_return_usd": desks_pnl, "paper_max_drawdown": round(dd, 4),
             "note": "counts-only view; the authoritative level (API autonomy.level) also requires "
                     "reconciliation, calibration and drawdown gates"}
+
+
+def paper_equity_series(conn: sqlite3.Connection) -> list[float]:
+    """Paper equity over time without lineage double counting.
+
+    Older snapshots summed fired desks and their successors (which inherit the fired
+    desk's cash), inflating equity. Rebuild each point as root bankroll + total P&L,
+    which is lineage-safe for every snapshot.
+    """
+    base = (_q(conn, "SELECT COALESCE(SUM(starting_bankroll_usd),0) FROM trench_desks "
+                     "WHERE parent_desk_id IS NULL") or [(0,)])[0][0]
+    out: list[float] = []
+    for (p,) in _q(conn, "SELECT payload_json FROM trench_desk_events "
+                         "WHERE event='equity_snapshot' ORDER BY id"):
+        d = _j(p) or {}
+        pnl = d.get("pnl_after_costs_usd")
+        if pnl is not None and base:
+            out.append(float(base) + float(pnl))
+        elif d.get("equity_usd") is not None:
+            out.append(float(d["equity_usd"]))
+    return out
 
 
 def _budget(conn: sqlite3.Connection) -> dict[str, Any]:

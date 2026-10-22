@@ -384,14 +384,26 @@ class PaperDeskEngine:
                 return None
             pnl = fill.notional_usd - cost_usd
         self._record_leg(desk, mint, symbol, leg, "sell", mark, reason, fill, pnl)
-        win = pnl > 0
+        # Wins/losses are scored once per closed position (see _score_position), not per
+        # leg: a core+bounce position used to count as two losses and fire the desk.
         self.store.conn.execute(
-            f"""UPDATE trench_desks SET cash_usd=cash_usd+?, fees_usd=fees_usd+?,
-                slippage_usd=slippage_usd+?, realized_pnl_usd=realized_pnl_usd+?,
-                {'wins=wins+1, consecutive_losses=0' if win else
-                 'losses=losses+1, consecutive_losses=consecutive_losses+1'}
+            """UPDATE trench_desks SET cash_usd=cash_usd+?, fees_usd=fees_usd+?,
+                slippage_usd=slippage_usd+?, realized_pnl_usd=realized_pnl_usd+?
                 WHERE desk_id=?""",
             (fill.notional_usd, fill.fee_usd, fill.slippage_usd, pnl, desk["desk_id"]))
+        return pnl
+
+    def _score_position(self, desk_id: str, mint: str, opened_at: str) -> float:
+        """Record one win or loss for a fully closed position from all its sell legs."""
+        row = self.store.conn.execute(
+            """SELECT COALESCE(SUM(realized_pnl_usd), 0) FROM trench_desk_trades
+               WHERE desk_id=? AND mint=? AND side='sell' AND ts>=?""",
+            (desk_id, mint, opened_at)).fetchone()
+        pnl = float(row[0] or 0.0)
+        self.store.conn.execute(
+            f"""UPDATE trench_desks SET {'wins=wins+1, consecutive_losses=0' if pnl > 0 else
+                'losses=losses+1, consecutive_losses=consecutive_losses+1'} WHERE desk_id=?""",
+            (desk_id,))
         return pnl
 
     def _desk(self, desk_id: str) -> sqlite3.Row:
@@ -431,6 +443,7 @@ class PaperDeskEngine:
                bounce_qty=0, bounce_budget_usd=0, last_mark_price=?, last_mark_at=?
                WHERE desk_id=? AND mint=? AND opened_at=?""",
             (_now(), mark.price_usd, _now(), desk_id, pos["mint"], pos["opened_at"]))
+        self._score_position(desk_id, pos["mint"], pos["opened_at"])
         if unused:
             self.store.conn.execute(
                 "UPDATE trench_desks SET cash_usd=cash_usd+? WHERE desk_id=?", (unused, desk_id))

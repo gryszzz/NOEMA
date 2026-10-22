@@ -384,11 +384,16 @@ def _record_equity_snapshot(db_path: str) -> None:
     """Persist aggregate paper equity so the trading room can chart P&L over time."""
     overview = desk_overview(db_path)
     desks = overview["desks"]
+    # A fired desk's cash is handed to its successor as bankroll, so only the newest
+    # desk of each lineage holds capital; summing every desk double counts it.
+    parents = {d.get("parent_desk_id") for d in desks if d.get("parent_desk_id")}
+    current = [d for d in desks if d["desk_id"] not in parents]
+    roots = [d for d in desks if not d.get("parent_desk_id")]
     store = TrenchDeskStore(db_path)
     try:
         store.event(None, "equity_snapshot",
-                    equity_usd=round(sum(d["equity_usd"] for d in desks), 2),
-                    starting_usd=round(sum(d["starting_bankroll_usd"] for d in desks), 2),
+                    equity_usd=round(sum(d["equity_usd"] for d in current), 2),
+                    starting_usd=round(sum(d["starting_bankroll_usd"] for d in roots), 2),
                     pnl_after_costs_usd=overview.get("total_pnl_after_costs_usd", 0.0),
                     active=sum(1 for d in desks if d["status"] == "active"))
         store.conn.commit()
