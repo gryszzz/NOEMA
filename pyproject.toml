@@ -12,7 +12,7 @@ dependencies = [
   "uvicorn>=0.35,<1",
   "mcp>=1.26,<2",
   "solders>=0.29,<0.30",
-  "eth-account>=0.13,<0.14",
+  "eth-account>=0.14.0,<0.15",
   "embit>=0.8,<0.9",
   "polymarket-us>=2.4.1,<3",
 ]
