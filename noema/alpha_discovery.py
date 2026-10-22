@@ -499,18 +499,62 @@ def enter(conn: sqlite3.Connection, c: Candidate, book: dict[str, Any], now: dat
 
 # -- cycle ---------------------------------------------------------------------------------
 
-def _candidates_from_signals(conn: sqlite3.Connection, now: datetime, limit: int) -> list[Candidate]:
+ALPHA_MAX_PRICED = int(os.getenv("NOEMA_ALPHA_MAX_PRICED", "12"))
+ALPHA_MAX_AGE_H = float(os.getenv("NOEMA_ALPHA_MAX_AGE_H", "2"))
+ALPHA_RETRIGGER_BUZZ = 2.0  # buzz velocity >= 2x what it was when last priced re-admits an aged-out token
+
+SEEN_DDL = ("CREATE TABLE IF NOT EXISTS alpha_seen (chain TEXT, address TEXT, first_seen TEXT, last_priced TEXT, "
+            "times_priced INTEGER DEFAULT 0, last_buzz REAL, PRIMARY KEY (chain, address))")
+
+
+def _candidates_from_signals(conn: sqlite3.Connection, now: datetime, limit: int,
+                             stats: dict[str, Any] | None = None) -> list[Candidate]:
+    """Fresh tokens first: a token priced more than ALPHA_MAX_PRICED cycles or first seen over
+    ALPHA_MAX_AGE_H ago sits out unless its buzz re-triggers; open positions are always marked."""
+    conn.execute(SEEN_DDL)
     cutoff = (now - timedelta(hours=2)).isoformat()
-    out = []
+    age_cut = (now - timedelta(hours=ALPHA_MAX_AGE_H)).isoformat()
+    held = {(ch, a) for ch, a in conn.execute("SELECT chain, address FROM alpha_positions WHERE status='open'")}
+    fresh, aged = [], 0
     for entity, sym, chain, vel in conn.execute(
             "SELECT entity, symbol, chain, buzz_velocity FROM culture_signals WHERE kind='token' AND updated_at>=? "
-            "ORDER BY score DESC LIMIT ?", (cutoff, limit)).fetchall():
+            "ORDER BY score DESC LIMIT ?", (cutoff, limit * 6)).fetchall():
         ch, _, addr = entity.partition(":")
-        if ch == "solana" or ch in GOPLUS_CHAINS:
-            out.append(Candidate(chain=ch, address=addr, symbol=sym, buzz_velocity=float(vel or 0)))
+        if not (ch == "solana" or ch in GOPLUS_CHAINS):
+            continue
+        seen = conn.execute("SELECT first_seen, times_priced, last_buzz FROM alpha_seen WHERE chain=? AND address=?",
+                            (ch, addr)).fetchone()
+        v = float(vel or 0)
+        if seen and (ch, addr) not in held:
+            first, n, lb = seen
+            retrig = v > 0 and v >= ALPHA_RETRIGGER_BUZZ * max(float(lb or 0), 1e-9)
+            if (int(n or 0) >= ALPHA_MAX_PRICED or str(first) < age_cut) and not retrig:
+                aged += 1
+                continue
+            if retrig:
+                conn.execute("UPDATE alpha_seen SET first_seen=?, times_priced=0 WHERE chain=? AND address=?",
+                             (now.isoformat(), ch, addr))
+                seen = (now.isoformat(), 0, lb)
+        fresh.append((seen[0] if seen else now.isoformat(),
+                      Candidate(chain=ch, address=addr, symbol=sym, buzz_velocity=v)))
+    # Up to half the slots go to never-seen tokens (newest first); the rest keep re-pricing the best
+    # still-eligible tokens by score so a good setup gets more than one look before it ages out.
+    ts = now.isoformat()
+    unseen = [c for f, c in fresh if f == ts]
+    repeat = [c for f, c in fresh if f != ts]
+    k = min(len(unseen), max(limit // 2, limit - len(repeat)))
+    out = unseen[:k] + repeat[:limit - k]
+    new = k
     for chain, addr, sym in conn.execute("SELECT chain, address, symbol FROM alpha_positions WHERE status='open'"):
         if not any(c.address == addr for c in out):
             out.append(Candidate(chain=chain, address=addr, symbol=sym))
+    for c in out:
+        conn.execute("INSERT INTO alpha_seen (chain, address, first_seen, last_priced, times_priced, last_buzz) "
+                     "VALUES (?,?,?,?,1,?) ON CONFLICT(chain, address) DO UPDATE SET last_priced=excluded.last_priced,"
+                     " times_priced=times_priced+1, last_buzz=excluded.last_buzz",
+                     (c.chain, c.address, now.isoformat(), now.isoformat(), c.buzz_velocity))
+    if stats is not None:
+        stats.update(new_tokens=new, aged_out=aged)
     return out
 
 
@@ -519,7 +563,8 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
     ensure_schema(conn)
     now = now or datetime.now(UTC)
     lim = ScreenLimits.from_env()
-    cands = _candidates_from_signals(conn, now, limit)
+    nov: dict[str, Any] = {}
+    cands = _candidates_from_signals(conn, now, limit, nov)
     by_chain: dict[str, list[Candidate]] = {}
     for c in cands:
         by_chain.setdefault(c.chain, []).append(c)
@@ -603,7 +648,7 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
     conn.commit()
     return {"candidates": len(cands), "priced": sum(1 for c in cands if c.price),
             "passed": sum(1 for c in cands if c.passed), "entries": entries, "exits": exits,
-            "equity": book["equity"], "halted": bool(book["halted"])}
+            "equity": book["equity"], "halted": bool(book["halted"]), "novelty": nov}
 
 
 def _record_vetoes(conn: sqlite3.Connection, cands: list[Candidate], now: datetime) -> None:
