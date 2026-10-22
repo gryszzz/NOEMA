@@ -39,11 +39,20 @@ test('scan lane puts pools with real candles first', () => {
 
 test('candle grid never shows the same find twice at once', () => {
   const src = readFileSync(new URL('../noema/static/room-v7.js', import.meta.url), 'utf8');
-  const m = src.match(/T\.nextPick=\(pool,cur,taken\)=>\{[^\n]*\n?/);
+  const m = src.match(/T\.nextPick=\(pool,cur,taken,shown\)=>\{[^\n]*\n?/);
   assert.ok(m);
   const nextPick = eval('(' + m[0].slice('T.nextPick='.length).replace(/;\s*$/, '') + ')');
   const pool = [{ key: 'a' }, { key: 'b' }, { key: 'c' }];
   assert.equal(nextPick(pool, 0, ['b']), 2);
   assert.equal(nextPick(pool, -1, []), 0);
   assert.equal(nextPick([], 0, []), -1);
+  // newest unseen find wins over cycling; seen ones are skipped
+  assert.equal(nextPick(pool, 2, [], new Set(['a', 'c'])), 1);
+});
+
+test('side charts cycle only live launch-stream finds, not the stale sweep list', () => {
+  const v7 = readFileSync(new URL('../noema/static/room-v7.js', import.meta.url), 'utf8');
+  const cp = v7.match(/T\.candlePool=[^\n]*\n[^\n]*\n[^\n]*/)[0];
+  assert.match(cp, /TEVLive/);
+  assert.doesNotMatch(cp, /funnel/);
 });

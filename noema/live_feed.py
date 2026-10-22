@@ -139,13 +139,20 @@ def _bucket(span: float) -> int:
     return next((t for t in TFS if t >= want), TFS[-1])
 
 
-def candles_section(db: str, now: float, k: int = 6) -> dict[str, Any]:
+def candles_section(db: str, now: float, k: int = 12) -> dict[str, Any]:
+    """Newest-first rolling window of launch-stream finds with >=12 captured trades. Coins found more
+    than NOEMA_FRESH_CHART_MAX_AGE_S ago (default 30 min) age out and are never returned again."""
+    max_age = float(os.getenv("NOEMA_FRESH_CHART_MAX_AGE_S", "1800"))
     c = _ro(db)
     out = []
     try:
-        fresh = c.execute("SELECT mint, name, symbol, received_at FROM launch_stream ORDER BY received_at DESC LIMIT 80"
+        fresh = c.execute("SELECT mint, name, symbol, received_at FROM launch_stream ORDER BY received_at DESC LIMIT 300"
                           ).fetchall()
+        seen_mints: set[str] = set()
         for mint, name, sym, found in fresh:
+            if mint in seen_mints or now - _ts(found) > max_age:
+                continue
+            seen_mints.add(mint)
             rows = c.execute("SELECT received_at, market_cap_sol, sol FROM launch_trades WHERE mint=? AND market_cap_sol>0 "
                              "ORDER BY received_at", (mint,)).fetchall()
             if len(rows) < 12:
@@ -169,7 +176,7 @@ def candles_section(db: str, now: float, k: int = 6) -> dict[str, Any]:
                 break
     finally:
         c.close()
-    return {"as_of": max((x["last_at"] for x in out), default=None), "cadence_s": 10, "charts": out}
+    return {"as_of": max((x["last_at"] for x in out), default=None), "cadence_s": 10, "max_age_s": max_age, "charts": out}
 
 
 # ---- smart wallets ---------------------------------------------------------------

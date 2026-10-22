@@ -102,17 +102,21 @@ function pmCandles(){const cv=byId("v7-pmc-cv");if(!cv||!window.TEVCandles)retur
  TEVCandles.draw(cv,m.ohlc,{interval:m.interval,label:lab,key:m.venue+m.market_id,markers:m.markers,volLabel:"quotes",empty:"no candle data"});
  byId("v7-pmc-s").textContent=`${m.venue} · ${m.market_id} · yes mid · ${m.quotes} quotes · ${m.interval} auto`}
 /* candle grid: 2 charts (laptop) / 4 (big monitor), each cycling different real finds, staggered */
-/* only the newest-first novelty list (server already ages out >12 shows / >2h replays); no cached-candle preference */
-T.foundAgo=it=>{const t=Date.parse(it.first_seen_at||"");if(!isFinite(t))return"";const m=Math.max(0,(Date.now()-t)/6e4);return " · found "+(m<1?"<1m":m<60?Math.round(m)+"m":Math.round(m/60)+"h")+" ago"};
-T.candlePool=d=>{const sc=((d||{}).funnel||{}).scan||[],pm=((d||{}).pm_candles||{}).markets||[];
- return sc.filter(it=>(it.ohlc||[]).length>1&&!it.aged_out).map(it=>({key:"p:"+(it.mint||it.symbol),sym:it.symbol||"?",src:(it.candle_source||"GeckoTerminal")+T.foundAgo(it),ohlc:it.ohlc,interval:it.interval,markers:it.markers||[]}))
-  .concat(pm.map(m=>({key:"m:"+m.venue+m.market_id,sym:String(m.title||m.market_id).slice(0,24),src:m.venue+" quotes",ohlc:m.ohlc,interval:m.interval,markers:m.markers||[],vol:"quotes"})))};
-T.nextPick=(pool,cur,taken)=>{if(!pool.length)return -1;for(let s=1;s<=pool.length;s++){const j=((cur<0?-1:cur)+s)%pool.length;if(!taken.includes(pool[j].key)||pool.length<=taken.length)return j}return cur};
+/* side charts: ONLY the newest live launch-stream finds (SSE /api/live -> window.TEVLive.candles), newest first.
+   Coins past the server's rolling window (max_age_s) drop out and are never re-shown; the stale sweep list
+   (funnel.scan, GeckoTerminal) is no longer used here because it recycled hours-old coins. */
+T.foundAgo=at=>{const t=Date.parse(at||"");if(!isFinite(t))return"";const m=Math.max(0,(Date.now()-t)/6e4);return "found "+(m<1?"<1m":m<60?Math.round(m)+"m":Math.round(m/60)+"h")+" ago"};
+T.candlePool=()=>{const L=(window.TEVLive||{}).candles||{},mx=(L.max_age_s||1800)*1e3,now=Date.now();
+ return (L.charts||[]).filter(c=>(c.rows||[]).length>1&&now-Date.parse(c.found_at)<=mx).sort((a,b)=>Date.parse(b.found_at)-Date.parse(a.found_at))
+  .map(c=>({key:"p:"+c.mint,sym:c.sym||c.mint.slice(0,6),src:T.foundAgo(c.found_at)+" · "+c.n_trades+" trades",ohlc:c.rows,interval:c.tf_s,markers:[{t:Math.floor(Date.parse(c.found_at)/1e3),kind:"find"}],vol:"◎ vol"}))};
+V.shown=V.shown||new Set();
+/* newest not-yet-shown coin first; once all were shown, cycle the (still fresh) window newest-first */
+T.nextPick=(pool,cur,taken,shown)=>{if(!pool.length)return -1;const sh=shown||(typeof V!=="undefined"&&V.shown)||new Set(),ck=cur>=0&&pool[cur]?pool[cur].key:null,free=pool.map((p,j)=>j).filter(j=>!taken.includes(pool[j].key));if(!free.length)return 0;const nw=free.find(j=>pool[j].key!==ck&&!sh.has(pool[j].key));if(nw!=null)return nw;const af=free.find(j=>j>cur&&pool[j].key!==ck);return af!=null?af:free[0]};
 function cgN(){const w=window.innerWidth;return w>=2200&&window.innerHeight>=1200?4:w>=1600?3:2}
 function cgBuild(){const g=byId("v7-cg");if(!g)return null;const cm=document.querySelector(".ch-main");if(cm&&g.parentElement!==cm)cm.insertBefore(g,cm.firstChild);const n=cgN();if(g.childElementCount!==n){g.dataset.n=n;g.innerHTML=Array.from({length:n},(_,k)=>`<div class="cgc"><canvas data-k="${k}"></canvas></div>`).join("");V.cg=Array.from({length:n},(_,k)=>({i:k-1,key:null}))}return g}
 function cgTick(k){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d),S=V.cg[k],cv=g.querySelectorAll("canvas")[k];if(!cv)return;
- if(!pool.length){TEVCandles.draw(cv,[],{key:"none",empty:"no candle data yet · waiting for GeckoTerminal OHLCV / stored quotes"});return}
- const taken=V.cg.filter((_,j)=>j!==k).map(o=>o.key);S.i=T.nextPick(pool,S.i,taken);const it=pool[S.i];S.key=it.key;
+ if(!pool.length){TEVCandles.draw(cv,[],{key:"none",empty:"no fresh launch finds yet · waiting for live stream"});return}
+ const taken=V.cg.filter((_,j)=>j!==k).map(o=>o.key);S.i=T.nextPick(pool,S.i,taken);const it=pool[S.i];S.key=it.key;V.shown.add(it.key);
  TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${S.i+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})}
 function cgRefresh(){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d);(V.cg||[]).forEach((S,k)=>{const it=pool.find(p=>p.key===S.key),cv=g.querySelectorAll("canvas")[k];
  if(it&&cv)TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${pool.indexOf(it)+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})})}
