@@ -64,12 +64,13 @@ def _aid(seed: str) -> str:
 
 
 def hire(c: sqlite3.Connection, genome: dict[str, Any], *, generation: int, parent: str | None,
-         origin: str, name: str | None = None) -> str:
+         origin: str, name: str | None = None, kind: str | None = None) -> str:
+    kind = kind or genome.get("kind", "trench_rule")
     aid = _aid(json.dumps(genome, sort_keys=True) + _now() + str(random.random()))
     name = name or f"{origin.upper()[:5]}-g{generation}-{aid[:4]}"
     c.execute("INSERT INTO agents (agent_id,name,kind,generation,parent_id,status,genome_json,hired_at,origin)"
               " VALUES (?,?,?,?,?,'shadow',?,?,?)",
-              (aid, name, "trench_rule", generation, parent, json.dumps(genome), _now(), origin))
+              (aid, name, kind, generation, parent, json.dumps(genome), _now(), origin))
     _event(c, aid, "hired", f"{origin}; parent={parent}; rule={em.rule_name(genome['filters'])}")
     return aid
 
@@ -89,6 +90,10 @@ def mutate(genome: dict[str, Any], rng: random.Random) -> dict[str, Any]:
 def _bands(s: dict[str, Any]) -> dict[str, str]:
     liq = s["liq"] or 0
     age = s["x"].get("age_seconds") or 0
+    if s["disposition"] == "meta":
+        lb = "<1k" if liq < 1e3 else "1k-5k" if liq < 5e3 else "5k-25k" if liq < 2.5e4 else ">25k"
+        return {"liquidity": lb, "stage": "early" if s["x"].get("stage_early") else "late",
+                "rank": "first" if s["x"].get("first") else "copycat"}
     return {"liquidity": "<1k" if liq < 1e3 else "1k-5k" if liq < 5e3 else "5k-25k" if liq < 2.5e4 else ">25k",
             "age": "<5m" if age < 300 else "5-30m" if age < 1800 else ">30m",
             "disposition": s["disposition"]}
@@ -112,6 +117,10 @@ def postmortem(samples: list[dict[str, Any]]) -> tuple[str, dict[str, Any], dict
         elif cat == "age":
             fix = {"f": "age_seconds", "op": ">=", "v": 300.0} if band == "<5m" else \
                   {"f": "age_seconds", "op": "<=", "v": 1800.0}
+        elif cat == "stage" and band == "late":
+            fix = {"f": "stage_early", "op": ">=", "v": 1.0}
+        elif cat == "rank" and band == "copycat":
+            fix = {"f": "first", "op": ">=", "v": 1.0}
         elif cat == "disposition" and band == "quarantine":
             fix = {"f": "observe", "op": ">=", "v": 1.0}
         summary = (f"lost most in {cat}={band} (n={st['n']}, mean net {st['mean_net']:+.1%}); "
@@ -178,20 +187,62 @@ def seed(c: sqlite3.Connection, report: dict[str, Any]) -> None:
              parent=None, origin=origin)
 
 
-def cycle(db: str, life_db: str, feed_db: str | None = None, rng: random.Random | None = None) -> dict[str, Any]:
+META_SEEDS = [
+    ("shield pass & first", [{"f": "shield_ok", "op": ">=", "v": 1.0}, {"f": "first", "op": ">=", "v": 1.0}]),
+    ("shield pass & early", [{"f": "shield_ok", "op": ">=", "v": 1.0}, {"f": "stage_early", "op": ">=", "v": 1.0}]),
+    ("shield pass & liq>=5k", [{"f": "shield_ok", "op": ">=", "v": 1.0}, {"f": "liquidity_usd", "op": ">=", "v": 5000.0}]),
+    ("shield pass & X cross", [{"f": "shield_ok", "op": ">=", "v": 1.0}, {"f": "cross", "op": ">=", "v": 1.0}]),
+]
+
+
+def seed_meta(c: sqlite3.Connection) -> None:
+    """Meta-launch genomes join the roster as shadow agents (once)."""
+    if c.execute("SELECT 1 FROM agents WHERE kind='meta_launch'").fetchone():
+        return
+    from .meta_launch import META_EXIT
+    for _, filt in META_SEEDS:
+        hire(c, {"kind": "meta_launch", "filters": filt, "exit": dict(META_EXIT)}, generation=0, parent=None,
+             origin="meta", kind="meta_launch")
+
+
+def load_meta_samples(meta_db: str | None) -> list[dict[str, Any]]:
+    if not meta_db or not os.path.isfile(meta_db):
+        return []
+    c = sqlite3.connect(f"file:{meta_db}?mode=ro", uri=True, timeout=10)
+    try:
+        rows = c.execute("SELECT mint, launched_at, shield_ok, features_json, outcome_json FROM meta_matches").fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        c.close()
+    out = []
+    for mint, at, ok, fj, oj in rows:
+        oc = json.loads(oj or "{}")
+        if oc.get("net") is None:
+            continue
+        x = dict(json.loads(fj or "{}"), shield_ok=float(ok))
+        out.append({"id": mint, "at": at, "x": x, "liq": x.get("liquidity_usd", 0), "disposition": "meta",
+                    "net": oc["net"], "gross": oc["net"]})
+    return sorted(out, key=lambda s: s["at"])
+
+
+def cycle(db: str, life_db: str, feed_db: str | None = None, rng: random.Random | None = None,
+          meta_db: str | None = None) -> dict[str, Any]:
     rng = rng or random.Random()
     report = em.mine_all(db, feed_db)
-    samples = em.load_trench(db)
+    by_kind = {"trench_rule": em.load_trench(db), "meta_launch": load_meta_samples(meta_db)}
     c = connect(life_db)
     try:
         c.execute("INSERT INTO edge_reports (at, report_json) VALUES (?,?)", (report["at"], json.dumps(report)))
         c.execute("DELETE FROM edge_reports WHERE id NOT IN (SELECT id FROM edge_reports ORDER BY id DESC LIMIT 48)")
         seed(c, report)
+        if meta_db:
+            seed_meta(c)
         live = c.execute("SELECT * FROM agents WHERE status IN ('shadow','earning')").fetchall()
         fired = []
         scored: dict[str, dict[str, Any]] = {}
         for a in live:
-            st, mine = score_trench(a, samples)
+            st, mine = score_trench(a, by_kind.get(a["kind"] or "trench_rule", []))
             scored[a["agent_id"]] = st
             reason = None
             if st["n"] >= MIN_N and st["ci95"] and st["ci95"][1] < 0:
@@ -223,15 +274,16 @@ def cycle(db: str, life_db: str, feed_db: str | None = None, rng: random.Random 
             st = scored.get(r["agent_id"]) or json.loads(r["stats_json"] or "{}")
             return st.get("mean_net") if st.get("mean_net") is not None else -1.0
         for a, fix in fired:
-            if len(survivors) >= POP_CAP:
-                break
-            parent = max(survivors, key=fitness) if survivors else a
+            same = [r for r in survivors if r["kind"] == a["kind"]]
+            if len(same) >= POP_CAP:
+                continue
+            parent = max(same, key=fitness) if same else a
             g = mutate(json.loads(parent["genome_json"]), rng)
             if fix and not any(f["f"] == fix["f"] for f in g["filters"]):
                 g["filters"].append(fix)
             g["postmortem_of"] = a["agent_id"]
             hire(c, g, generation=max(a["generation"], parent["generation"]) + 1, parent=parent["agent_id"],
-                 origin="replacement")
+                 origin="replacement", kind=a["kind"])
             survivors = c.execute("SELECT * FROM agents WHERE status IN ('shadow','earning')").fetchall()
         c.commit()
         return {"fired": len(fired), "active": len(survivors), "verdict": report["verdict"]}
@@ -251,7 +303,7 @@ def roster(life_db: str, db: str | None = None) -> dict[str, Any]:
                 g = json.loads(r["genome_json"])
                 p = pm.get(r["agent_id"])
                 out["agents"].append({
-                    "id": r["agent_id"], "name": r["name"], "status": r["status"], "generation": r["generation"],
+                    "id": r["agent_id"], "name": r["name"], "kind": r["kind"], "status": r["status"], "generation": r["generation"],
                     "parent": r["parent_id"], "origin": r["origin"], "weight": r["weight"],
                     "rule": em.rule_name(g["filters"]), "exit": g.get("exit"), "hired_at": r["hired_at"],
                     "fired_at": r["fired_at"], "fire_reason": r["fire_reason"],
@@ -273,12 +325,13 @@ def main() -> None:
     ap.add_argument("--db", default=os.getenv("NOEMA_DB_PATH", "data/noema.db"))
     ap.add_argument("--life-db", default=os.getenv("NOEMA_LIFECYCLE_DB", "data/agent_lifecycle.db"))
     ap.add_argument("--feed-db", default="data/opportunity_feed.db")
+    ap.add_argument("--meta-db", default=os.getenv("NOEMA_META_DB", "data/meta_launch.db"))
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=int, default=int(os.getenv("NOEMA_LIFECYCLE_INTERVAL_SECONDS", "900")))
     a = ap.parse_args()
     while True:
         try:
-            print(_now(), json.dumps(cycle(a.db, a.life_db, a.feed_db)), flush=True)
+            print(_now(), json.dumps(cycle(a.db, a.life_db, a.feed_db, meta_db=a.meta_db)), flush=True)
         except Exception as e:  # noqa: BLE001 - keep the loop alive; the next cycle retries
             print(_now(), "cycle error:", repr(e), flush=True)
         if not a.loop:

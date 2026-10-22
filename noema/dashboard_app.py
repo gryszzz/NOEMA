@@ -1139,6 +1139,15 @@ async def timing_api() -> dict[str, Any]:
     return await asyncio.to_thread(board, tdb)
 
 
+@app.get("/api/metas")
+async def metas_api() -> dict[str, Any]:
+    """Read-only META LAUNCH board: hot metas, matched launches, shield rejections, paper positions and the
+    walk-forward result. Paper only."""
+    from .meta_launch import board as meta_board
+    meta = os.getenv("NOEMA_META_DB", os.path.join(os.path.dirname(_db_path()) or ".", "meta_launch.db"))
+    return await asyncio.to_thread(meta_board, meta)
+
+
 @app.get("/api/roster")
 async def roster_api() -> dict[str, Any]:
     """Read-only AGENT LIFECYCLE roster (hire/fire, lineage, post-mortems) + latest edge-mining report.
