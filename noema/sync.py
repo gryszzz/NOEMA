@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,6 +11,7 @@ from pathlib import Path
 import httpx
 
 from .outcomes import OutcomeStore
+from .sqlite_util import retry_write
 from .venues.kalshi_history import KalshiHistory, resolved_outcome
 
 
@@ -17,6 +20,9 @@ class SyncResult:
     scanned: int
     imported: int
     skipped: int
+
+
+OUTCOME_BATCH = int(os.getenv("NOEMA_OUTCOME_BATCH", "100"))
 
 
 def _import_market(store: OutcomeStore, venue: str, raw: dict[str, object]) -> bool:
@@ -102,15 +108,24 @@ async def sync_kalshi_outcomes(
             )
         if len(rows) > limit:
             raise ValueError("settlement page exceeds requested limit")
-        for raw in rows:
-            scanned += 1
-            ticker = raw.get("ticker")
-            if ticker and str(ticker) in canonical_propositions:
-                raw["canonical_proposition_id"] = canonical_propositions[str(ticker)]
-            if _import_market(store, venue, raw):
-                imported += 1
-            else:
-                skipped += 1
+        for start in range(0, len(rows), OUTCOME_BATCH):
+            chunk = rows[start:start + OUTCOME_BATCH]
+
+            def _write_chunk(chunk=chunk) -> tuple[int, int]:
+                done = 0
+                with store.batch():
+                    for raw in chunk:
+                        ticker = raw.get("ticker")
+                        if ticker and str(ticker) in canonical_propositions:
+                            raw["canonical_proposition_id"] = canonical_propositions[str(ticker)]
+                        done += bool(_import_market(store, venue, raw))
+                return done, len(chunk) - done
+
+            ok, bad = retry_write(_write_chunk, conn=store.conn)
+            scanned += len(chunk)
+            imported += ok
+            skipped += bad
+            await asyncio.sleep(0)  # let the trading loop run between batches
         # Never skip a page when a network request or database write fails.
         store.set_scan_cursor(source, next_cursor)
         store.set_scan_cursor(turn_key, "historical" if partition == "live" else "live")

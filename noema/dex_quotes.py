@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -18,6 +17,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 import httpx
+
+from .sqlite_util import connect as sqlite_connect
 
 EVM_CHAIN_IDS = {
     "ethereum": 1, "base": 8453, "arbitrum": 42161,
@@ -394,7 +395,7 @@ class ZeroExPriceQuoteAdapter:
 
 def persist_dex_quote(database: str, quote: NormalizedDexQuote) -> bool:
     """Append one normalized quote observation, omitting provider tx/calldata blobs."""
-    with sqlite3.connect(database, timeout=10.0) as connection:
+    with sqlite_connect(database) as connection:
         connection.execute("PRAGMA busy_timeout=10000")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS dex_quote_observations (

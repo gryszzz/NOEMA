@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from .solana_live_gate import LIVE_VENUE_NAMES, solana_venue_selected
+from .sqlite_util import connect as sqlite_connect
 
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 # The only address this swap signer will sign for. A matching env value is
@@ -295,7 +296,7 @@ def _state_path() -> Path:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_state_path(), timeout=30)
+    conn = sqlite_connect(_state_path())
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE TABLE IF NOT EXISTS solana_swap_requests (

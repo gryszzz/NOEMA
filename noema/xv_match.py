@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import edge_strategies as es
+from .sqlite_util import connect as sqlite_connect
 
 KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2"
 
@@ -373,12 +374,12 @@ def main() -> None:  # pragma: no cover
     ap.add_argument("--stats", action="store_true", help="print gap frequency vs fees+buffer and exit")
     a = ap.parse_args()
     if a.stats:
-        conn = sqlite3.connect(a.db, timeout=30)
+        conn = sqlite_connect(a.db)
         print(json.dumps(gap_stats(conn), indent=1))
         conn.close()
         return
     while True:
-        conn = sqlite3.connect(a.db, timeout=30)
+        conn = sqlite_connect(a.db)
         try:
             r = run(conn)
             print(json.dumps({k: r[k] for k in ("at", "pairs", "equivalent", "positive", "errors")}), flush=True)

@@ -9,6 +9,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""
@@ -49,7 +51,7 @@ def load_prediction_account_records(
     database = Path(path)
     if not database.is_file():
         return {}
-    conn = sqlite3.connect(database, timeout=5)
+    conn = sqlite_connect(database)
     conn.row_factory = sqlite3.Row
     try:
         _ensure_schema(conn)
@@ -77,7 +79,7 @@ def prediction_account_sync_state(path: str | Path, venue: str) -> dict[str, dic
     database = Path(path)
     if not database.is_file():
         return {}
-    conn = sqlite3.connect(database, timeout=5)
+    conn = sqlite_connect(database)
     conn.row_factory = sqlite3.Row
     try:
         _ensure_schema(conn)
@@ -109,7 +111,7 @@ def get_or_create_prediction_account_baseline(
         return None
     database = Path(path)
     database.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(database, timeout=5)
+    conn = sqlite_connect(database)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("""
@@ -171,7 +173,7 @@ def persist_prediction_account_records(
     now = observed_at or datetime.now(UTC).isoformat()
     database = Path(path)
     database.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(database, timeout=5)
+    conn = sqlite_connect(database)
     conn.row_factory = sqlite3.Row
     inserted = updated = skipped = 0
     try:

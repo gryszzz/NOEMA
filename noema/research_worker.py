@@ -12,6 +12,7 @@ from decimal import Decimal
 from .history_forecaster import MODEL_VERSION
 from .paper_execution import parse_aware_time
 from .paper_settlements import load_paper_settlements
+from .sqlite_util import connect as sqlite_connect
 from .trench_survival_model import audit_database
 
 # A fixed diagnostic grid, never an automatically selected production threshold.
@@ -21,7 +22,7 @@ THRESHOLDS = ("0.03", "0.05", "0.08", "0.10")
 def cost_threshold_sweep(path: str) -> dict:
     now = datetime.now(UTC)
     settlements = load_paper_settlements(path, now=now)
-    with sqlite3.connect(path) as conn:
+    with sqlite_connect(path) as conn:
         rows = conn.execute(
             "SELECT venue, market_id, lower_bound, quote_json, quoted_at FROM paper_quotes "
             "WHERE model_version=? ORDER BY id", (MODEL_VERSION,),
@@ -86,7 +87,7 @@ def execute(kind: str, path: str) -> dict:
 
 def commercial_opportunity_scan(path: str) -> dict:
     """Qualify public paid-work signals without treating a listing as a buyer or receipt."""
-    with sqlite3.connect(path) as conn:
+    with sqlite_connect(path) as conn:
         rows = conn.execute(
             "SELECT source,source_type,payload_json FROM evidence_records ORDER BY rowid LIMIT 2"
         ).fetchall()
@@ -135,7 +136,7 @@ def commercial_opportunity_scan(path: str) -> dict:
 
 def market_data_quality(path: str) -> dict:
     """Falsify readiness for a reusable data feed using observed data, not a trade signal."""
-    with sqlite3.connect(path) as conn:
+    with sqlite_connect(path) as conn:
         rows = conn.execute(
             "SELECT venue,market_id,captured_at,valid,snapshot_json FROM market_snapshots ORDER BY id"
         ).fetchall()

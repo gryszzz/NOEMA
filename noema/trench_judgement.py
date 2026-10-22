@@ -25,6 +25,7 @@ from .accuracy_text import anchor_probability, candidate_for_model, no_edge_skip
 from .cognition_policy import CognitionPolicy
 from .openai_client import OpenAICognitionClient, _completed_text
 from .openai_config import OpenAIConfig
+from .sqlite_util import connect as sqlite_connect
 
 JUDGEMENT_SCHEMA = {
     "type": "object",
@@ -213,7 +214,7 @@ async def judge_candidates(
     if not candidates:
         return [], {"status": "no_candidates"}
     accuracy = AccuracyConfig.from_env()
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite_connect(db_path)
     try:
         _ensure_table(conn)
         status: dict[str, Any]

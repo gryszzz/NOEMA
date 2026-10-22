@@ -24,6 +24,8 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 FEE = 0.0125          # pump.fun fee per side on the wallet's own trades
 COST_SIDE = 0.02      # our paper cost per side (fee + slippage)
 MIN_N = int(os.getenv("NOEMA_SMART_MIN_N", "8"))
@@ -50,7 +52,7 @@ def _iso(t: float) -> str:
 
 
 def connect(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
     return c
@@ -340,7 +342,7 @@ def cycle(main_db: str, smart_db: str, avenues_db: str | None, *, do_backfill: b
                       [(w, "vetted" if w in vetted else "candidate", _iso(now)) for w in watch[:WATCH_CAP]])
         sig = follow_signals(trades, pos, meta, now)
         if avenues_db:
-            a = sqlite3.connect(avenues_db, timeout=30)
+            a = sqlite_connect(avenues_db)
             a.execute("CREATE TABLE IF NOT EXISTS paper_outcomes (kind TEXT, id TEXT, at TEXT, net REAL, x_json TEXT, "
                       "PRIMARY KEY (kind, id))")
             a.executemany("INSERT OR IGNORE INTO paper_outcomes VALUES (?,?,?,?,?)",

@@ -22,6 +22,8 @@ from typing import Any
 
 import httpx
 
+from .sqlite_util import connect as sqlite_connect
+
 # The only address this swap signer will sign for. A matching env value is
 # required as well; a different derived key is refused.
 EXPECTED_EVM_SIGNER_ADDRESS = "0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8"
@@ -802,7 +804,7 @@ def _state_path() -> Path:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_state_path(), timeout=30)
+    conn = sqlite_connect(_state_path())
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE TABLE IF NOT EXISTS evm_swap_requests (

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from .news_crawler import MarketIndex, categorize, sanitize, watched_markets
+from .sqlite_util import connect as sqlite_connect
 
 SCHEMA_ID = "tev.x_inbox.v1"
 COUNTS_SCHEMA_ID = "tev.x_counts.v1"  # X recent-counts drops for burst detection (x_edge)
@@ -384,7 +385,7 @@ def ingest_inbox(db_path: str, inbox: str | os.PathLike[str] | None = None, *,
         return stats
     cfg = config or load_config()
     classes = account_classes(cfg)
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite_connect(db_path)
     # files are archived only after the DB commit: a crash / restart mid-ingest leaves them in the
     # inbox for the next run instead of losing them (post ids dedupe any partial replay)
     moves: list[tuple[Path, Path]] = []

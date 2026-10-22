@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from . import edge_strategies as es
+from .sqlite_util import connect as sqlite_connect
 
 NEW_FOR_S = 15 * 60          # an item is NEW for 15 minutes after first sighting
 HISTORY_H = 24               # keep expired finds this long
@@ -68,7 +69,7 @@ def feed_db_path(db_path: str) -> str:
 
 
 def _feed_conn(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path, timeout=5)
+    c = sqlite_connect(path)
     c.execute("""CREATE TABLE IF NOT EXISTS opp_items (
         id TEXT PRIMARY KEY, source TEXT, tier INTEGER, title TEXT, venue TEXT, ref TEXT,
         first_seen TEXT, last_seen TEXT, source_at TEXT, price_kind TEXT, ref_price REAL, last_price REAL,

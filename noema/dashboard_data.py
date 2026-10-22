@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .soak_report import SoakQualityReport, build_soak_quality_report
+from .sqlite_util import connect as sqlite_connect
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -39,7 +40,7 @@ def build_overview(path: str = "data/noema.db") -> dict[str, Any]:
             "evidence_records": 0,
         }
 
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     overview: dict[str, Any] = {
         "database_present": True,
         "soak": asdict(

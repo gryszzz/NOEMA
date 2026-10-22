@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from .fast_settle import KALSHI, Api, _f, category
+from .sqlite_util import connect as sqlite_connect
 
 SERIES = [
     # crypto (hourly/daily ranges + thresholds, 15-minute up/down)
@@ -209,7 +210,7 @@ def backfill_weather(c: sqlite3.Connection, client: httpx.Client, since: datetim
 
 def run(db: str, days: int = 45, series: list[str] | None = None, max_per_series: int = 3000) -> dict[str, Any]:
     since = datetime.now(UTC) - timedelta(days=days)
-    c = sqlite3.connect(db, timeout=30)
+    c = sqlite_connect(db)
     ensure_schema(c)
     api = Api()
     client = httpx.Client(timeout=30)

@@ -35,6 +35,8 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 LIVE_SUPPORTED = False
 STRATEGIES = ("pm_arb", "news_latency", "fav_longshot", "smart_money", "meme_catalyst", "majors_momentum")
 LABELS = {"pm_arb": "Prediction arb / relative value", "news_latency": "News latency",
@@ -1036,7 +1038,7 @@ def main() -> None:  # pragma: no cover - process entry
     db = os.getenv("NOEMA_DB_PATH", "data/noema.db")
     last_bt = 0.0
     while True:
-        conn = sqlite3.connect(db, timeout=60)
+        conn = sqlite_connect(db)
         conn.execute("PRAGMA busy_timeout=60000")
         try:
             heavy = time.time() - last_bt > 3600

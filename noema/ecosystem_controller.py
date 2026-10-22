@@ -7,6 +7,7 @@ from .ecosystem import EcosystemPlan, allocate_specialist_attention
 from .ecosystem_store import EcosystemStore
 from .research_feedback import apply_research_feedback
 from .specialists import SpecialistState
+from .sqlite_util import connect as sqlite_connect
 
 
 def ensure_default_specialists(db_path: str) -> EcosystemStore:
@@ -124,7 +125,7 @@ def record_mission_allocation_review(
     if isinstance(critic, dict):
         measurement["critic_verdict"] = critic.get("verdict")
         measurement["critic_accepted"] = critic.get("result_accepted")
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connect(db_path) as conn:
         try:
             row = conn.execute(
                 "SELECT r.elapsed_seconds,r.compute_cost_usd,s.estimated_model_cost_usd "

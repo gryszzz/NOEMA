@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import sqlite3
@@ -25,6 +26,7 @@ class OutcomeStore:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite_connect(db)
+        self._batch_depth = 0
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS outcomes (
@@ -119,8 +121,26 @@ class OutcomeStore:
             return []  # Older databases have no paper quote table yet.
         return rows
 
+    @contextlib.contextmanager
+    def batch(self):  # type: ignore[no-untyped-def]
+        """Group many upserts into one short write transaction (commit on exit)."""
+        self._batch_depth += 1
+        try:
+            yield self
+        except BaseException:
+            self._batch_depth -= 1
+            if self._batch_depth == 0 and self.conn.in_transaction:
+                self.conn.rollback()
+            raise
+        self._batch_depth -= 1
+        if self._batch_depth == 0:
+            self.conn.commit()
+
     def upsert(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
         """Upsert an outcome, retrying with backoff when noema.db is busy."""
+        if self._batch_depth:
+            self._upsert_once(**kwargs)
+            return
         retry_write(lambda: self._upsert_once(**kwargs), conn=self.conn)
 
     def _upsert_once(
@@ -188,7 +208,8 @@ class OutcomeStore:
             )
         except (sqlite3.Error, ValueError, TypeError, AttributeError):
             pass
-        self.conn.commit()
+        if not self._batch_depth:
+            self.conn.commit()
 
     def evaluate_ledger(self) -> EvaluationSummary:
         try:

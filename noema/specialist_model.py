@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .evaluation import score_forecast
 from .market_probability import snapshot_midpoint
+from .sqlite_util import connect as sqlite_connect
 
 MODEL_VERSION = "noema-calibration-v2"
 MIN_TRAIN_EVENTS = 100
@@ -116,7 +117,7 @@ def load_verified_examples(path: str) -> list[Example]:
     """Earliest matching snapshot per market, with verified event membership."""
     if not Path(path).is_file():
         return []
-    conn = sqlite3.connect(path)
+    conn = sqlite_connect(path)
     try:
         rows = conn.execute(
             """

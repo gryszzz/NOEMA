@@ -33,6 +33,7 @@ import httpx
 
 from .crawl_http import HostGate, LiveFeed, SweepMeter, fetch_concurrently, retry_after_seconds
 from .provenance import EvidenceStore
+from .sqlite_util import connect as sqlite_connect
 
 USER_AGENT = "NOEMA-evidence-crawler/1.0 (research; +https://github.com/gryszzz/NOEMA)"
 SOURCE_TYPE = "news_article"
@@ -930,7 +931,7 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
         include_sports = os.getenv("NOEMA_NEWS_INCLUDE_SPORTS", "0") == "1"
     if max_targets is None:
         max_targets = int(os.getenv("NOEMA_NEWS_TARGETS_PER_CYCLE", "2"))
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite_connect(db_path)
     ensure_schema(conn)
     pc = client or PoliteClient(conn)
     pc.conn = conn
@@ -1178,7 +1179,7 @@ def main() -> None:
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=float, default=float(os.getenv("NOEMA_NEWS_INTERVAL_SECONDS", "300")))
     args = ap.parse_args()
-    conn0 = sqlite3.connect(args.db, timeout=30)
+    conn0 = sqlite_connect(args.db)
     client = PoliteClient(conn0)  # one pooled keep-alive client + robots cache for the process
     while True:
         try:

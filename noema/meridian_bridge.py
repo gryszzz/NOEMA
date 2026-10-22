@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .sqlite_util import connect as sqlite_connect
+
 LIMIT = 65_536
 REQUEST_SCHEMA = "meridian.noema.request.v1"
 REVIEW_SCHEMA = "meridian.noema.review.v1"
@@ -180,7 +182,7 @@ def save_review(text: str, db_path: str, *, now: datetime | None = None) -> dict
     review = review_request(text, now=now)
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(path)) as conn, conn:
+    with closing(sqlite_connect(path)) as conn, conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS meridian_reviews (
             request_id TEXT PRIMARY KEY, request_sha256 TEXT NOT NULL,
             imported_at TEXT NOT NULL, request_json TEXT NOT NULL, review_json TEXT NOT NULL

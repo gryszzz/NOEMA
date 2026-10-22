@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import MarketSnapshot
+from .sqlite_util import connect as sqlite_connect
 from .validation import ValidationResult, validate_market_snapshot
 
 
@@ -26,7 +26,7 @@ class SoakStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS market_snapshots (

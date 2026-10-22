@@ -23,6 +23,7 @@ from .accuracy_ledger import ensure_accuracy_schema, record_forecast, resolve_op
 from .accuracy_scoring import score_agents
 from .accuracy_text import anchor_probability, no_edge_skip
 from .evaluation import expected_calibration_error
+from .sqlite_util import connect as sqlite_connect
 from .trench_risk import evaluate_desk_entry, spike_acceleration
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -682,7 +683,7 @@ async def run_accuracy_backtest(
         "config": config.public_dict(),
         "sources": {},
     }
-    conn = sqlite3.connect(db)
+    conn = sqlite_connect(db)
     try:
         try:
             raw = _kalshi_markets(client, cache, config.backtest_kalshi_limit)

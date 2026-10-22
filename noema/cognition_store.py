@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .cognition_models import CognitionPacket
 from .economic_ledger import EconomicEvent, ensure_economic_event_schema, record_event_on_connection
+from .sqlite_util import connect as sqlite_connect
 
 
 def _next_month(day: str) -> str:
@@ -21,7 +22,7 @@ class CognitionStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
