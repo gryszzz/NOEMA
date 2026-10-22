@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import sqlite3
@@ -26,6 +28,73 @@ TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "180"))
 MAX_FOLLOW = int(os.getenv("NOEMA_STREAM_MAX_FOLLOW", "150"))
 # PumpPortal only serves per-token trades to an API key funded with >= 0.02 SOL (paid) - off by default.
 FOLLOW_TRADES = os.getenv("NOEMA_STREAM_TRADES", "0") == "1"
+# Free per-coin trades: decode pump.fun Anchor TradeEvent/CreateEvent from the same logsSubscribe stream
+# (no extra RPC calls -> free-tier friendly). Trades kept only for mints created < TRADE_FOLLOW_S ago.
+RPC_TRADES = os.getenv("NOEMA_RPC_TRADES", "1") == "1"
+FOLLOW: dict[str, float] = {}  # mint -> first-seen epoch, shared by PumpPortal + RPC creates
+_DISC = {hashlib.sha256(f"event:{n}".encode()).digest()[:8]: n for n in ("TradeEvent", "CreateEvent")}
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def b58(b: bytes) -> str:
+    n, out = int.from_bytes(b, "big"), ""
+    while n:
+        n, r = divmod(n, 58)
+        out = _B58[r] + out
+    return "1" * (len(b) - len(b.lstrip(b"\0"))) + out
+
+
+def decode_event(data: bytes) -> dict[str, Any] | None:
+    """pump.fun Anchor events (borsh). TradeEvent: mint,sol,tokens,is_buy,user,ts,vsol,vtok,...; CreateEvent: name,symbol,uri,mint,curve,user."""
+    kind = _DISC.get(data[:8])
+    try:
+        if kind == "TradeEvent" and len(data) >= 113:
+            sol, tok = int.from_bytes(data[40:48], "little"), int.from_bytes(data[48:56], "little")
+            vsol, vtok = int.from_bytes(data[97:105], "little"), int.from_bytes(data[105:113], "little")
+            return {"kind": "trade", "mint": b58(data[8:40]), "sol": sol / 1e9, "tokens": tok / 1e6,
+                    "side": "buy" if data[56] else "sell", "trader": b58(data[57:89]),
+                    "market_cap_sol": round(vsol * 1e6 / vtok, 4) if vtok else None}
+        if kind == "CreateEvent":
+            o = 8
+            for _ in range(3):
+                o += 4 + int.from_bytes(data[o:o + 4], "little")
+            return {"kind": "create", "mint": b58(data[o:o + 32]), "creator": b58(data[o + 64:o + 96])}
+    except (IndexError, ValueError):
+        return None
+    return None
+
+
+def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], follow: dict[str, float] | None = None,
+                    now: float | None = None) -> int:
+    """Insert decoded trades for followed (recently created) mints; returns trades inserted."""
+    follow = FOLLOW if follow is None else follow
+    now = now or time.time()
+    n = 0
+    for ln in logs:
+        if not ln.startswith("Program data: "):
+            continue
+        try:
+            ev = decode_event(base64.b64decode(ln[14:]))
+        except ValueError:
+            continue
+        if not ev:
+            continue
+        if ev["kind"] == "create":
+            follow.setdefault(ev["mint"], now)
+        elif sig and now - follow.get(ev["mint"], -1e18) <= TRADE_FOLLOW_S:
+            key = sig if n == 0 else f"{sig}:{n}"
+            cur = c.execute("INSERT OR IGNORE INTO launch_trades VALUES (?,?,?,?,?,?,?,?)", (
+                key, ev["mint"], _now(), ev["side"], ev["sol"], ev["tokens"], ev["trader"], ev["market_cap_sol"]))
+            n += cur.rowcount
+    return n
+
+
+def prune_follow(follow: dict[str, float], now: float | None = None) -> None:
+    now = now or time.time()
+    for m in [m for m, t in follow.items() if now - t > TRADE_FOLLOW_S]:
+        follow.pop(m, None)
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS launch_stream (mint TEXT PRIMARY KEY, signature TEXT, received_at TEXT NOT NULL,
   source TEXT NOT NULL, name TEXT, symbol TEXT, creator TEXT, initial_sol REAL, market_cap_sol REAL, raw_json TEXT);
@@ -65,6 +134,7 @@ def handle_pumpportal(c: sqlite3.Connection, msg: dict[str, Any], follow: dict[s
             (msg.get("symbol") or "")[:24], msg.get("traderPublicKey"), msg.get("solAmount"), msg.get("marketCapSol"),
             json.dumps({k: msg.get(k) for k in ("uri", "pool", "bondingCurveKey", "initialBuy")})))
         follow[msg["mint"]] = time.time()
+        FOLLOW.setdefault(msg["mint"], time.time())
         return msg["mint"]
     if tx in ("buy", "sell") and msg.get("mint") and msg.get("signature"):
         c.execute("INSERT OR IGNORE INTO launch_trades VALUES (?,?,?,?,?,?,?,?)", (
@@ -126,8 +196,11 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                         c.execute("INSERT OR IGNORE INTO launch_rpc_events VALUES (?,?,?,?)", (
                             v.get("signature"), subs.get(p.get("subscription"), "?"), _now(),
                             ((p.get("result") or {}).get("context") or {}).get("slot")))
+                    if RPC_TRADES and v.get("err") is None:
+                        handle_rpc_logs(c, v.get("signature"), logs)
                     if time.time() - last_commit > 2:
                         c.commit()
+                        prune_follow(FOLLOW)
                         last_commit = time.time()
         except Exception as exc:  # noqa: BLE001
             print(_now(), "rpc", type(exc).__name__, flush=True)  # never print the URL (may hold a key)
