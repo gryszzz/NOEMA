@@ -1123,6 +1123,14 @@ async def proven_api() -> dict[str, Any]:
     return await asyncio.to_thread(board, _db_path())
 
 
+@app.get("/api/timing")
+async def timing_api() -> dict[str, Any]:
+    """Read-only TIMING / day-trader agent board (paper only): roster, watchlist, decisions, walk-forward report."""
+    from .timing_agent import board
+    tdb = os.getenv("NOEMA_TIMING_DB", os.path.join(os.path.dirname(_db_path()) or ".", "timing.db"))
+    return await asyncio.to_thread(board, tdb)
+
+
 @app.get("/api/roster")
 async def roster_api() -> dict[str, Any]:
     """Read-only AGENT LIFECYCLE roster (hire/fire, lineage, post-mortems) + latest edge-mining report.
