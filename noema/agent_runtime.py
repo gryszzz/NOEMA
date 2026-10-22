@@ -82,6 +82,12 @@ from .venues.polymarket_us import PolymarketUSVenue
 from .wallet_credentials import polymarket_us_credentials_present
 from .wallet_observer import PublicWalletObserver
 
+try:  # SDK timeouts (APITimeoutError) are not httpx errors and crashed the whole agent
+    from polymarket_us.errors import PolymarketUSError as _PolymarketUSError
+except ImportError:  # pragma: no cover
+    class _PolymarketUSError(Exception):  # type: ignore[no-redef]
+        pass
+
 
 def _log(event: str, **fields: object) -> None:
     print(
@@ -705,7 +711,8 @@ async def run_cycle(
                 )
             finally:
                 polymarket.close()
-        except (httpx.HTTPError, RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
+        except (httpx.HTTPError, RuntimeError, ValueError, TypeError, KeyError, OSError,
+                _PolymarketUSError) as exc:
             polymarket_connection = AgentConnectionState(
                 "degraded", f"{type(exc).__name__}: public market collection failed",
             )
