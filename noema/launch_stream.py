@@ -24,6 +24,8 @@ PROGRAMS = {"pump.fun": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
 CREATE_MARKERS = ("Instruction: Create", "Instruction: InitializeV2", "Instruction: Initialize")
 TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "180"))
 MAX_FOLLOW = int(os.getenv("NOEMA_STREAM_MAX_FOLLOW", "150"))
+# PumpPortal only serves per-token trades to an API key funded with >= 0.02 SOL (paid) - off by default.
+FOLLOW_TRADES = os.getenv("NOEMA_STREAM_TRADES", "0") == "1"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS launch_stream (mint TEXT PRIMARY KEY, signature TEXT, received_at TEXT NOT NULL,
   source TEXT NOT NULL, name TEXT, symbol TEXT, creator TEXT, initial_sol REAL, market_cap_sol REAL, raw_json TEXT);
@@ -83,10 +85,10 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                 while not stop.is_set():
                     msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
                     new = handle_pumpportal(c, msg, follow)
-                    if new and len(follow) <= MAX_FOLLOW:
+                    if FOLLOW_TRADES and new and len(follow) <= MAX_FOLLOW:
                         await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [new]}))
                     old = [m for m, t in follow.items() if time.time() - t > TRADE_FOLLOW_S]
-                    if old:
+                    if old and FOLLOW_TRADES:
                         await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": old}))
                         for m in old:
                             follow.pop(m, None)
