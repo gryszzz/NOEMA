@@ -59,6 +59,9 @@ TOKEN_PROGRAMS = ("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
 SOURCE_IDS = ("kalshi", "polymarket_us", "solana", "evm_ethereum", "evm_base", "evm_polygon")
 
 
+WALLET_SOURCES = {"solana", "evm_ethereum", "evm_base", "evm_polygon"}
+
+
 class SourceError(RuntimeError):
     """A source could not produce a complete, priced reading."""
 
@@ -88,7 +91,7 @@ def excluded_sources() -> set[str]:
 
 def feed_interval_seconds() -> int:
     try:
-        value = int(os.getenv("NOEMA_EQUITY_FEED_INTERVAL_SECONDS", "300"))
+        value = int(os.getenv("NOEMA_EQUITY_FEED_INTERVAL_SECONDS", "60"))
     except ValueError:
         value = 300
     return min(max(value, 60), 600)  # never slower than the 15-min guard freshness window allows
@@ -186,6 +189,9 @@ async def read_polymarket_us(client: httpx.AsyncClient, prices: Prices) -> Sourc
 
 def _solana_rpcs() -> list[str]:
     urls = [os.getenv("NOEMA_SOLANA_RPC_URL", "").strip(), os.getenv("NOEMA_SOLANA_RPC_FALLBACK_URL", "").strip()]
+    key = os.getenv("HELIUS_API_KEY", "").strip()  # never logged; errors report exception type only
+    if key:
+        urls.insert(0, f"https://mainnet.helius-rpc.com/?api-key={key}")
     return [u for u in urls if u] or ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"]
 
 
@@ -322,10 +328,14 @@ def detect_deposits(previous: dict[str, Any], current: dict[str, SourceReading],
         prev_holdings = {k: Decimal(v) for k, v in (prev.get("holdings") or {}).items()}
         for asset, qty in reading.holdings.items():
             delta = qty - prev_holdings.get(asset, Decimal(0))
-            if delta <= 0:
+            if delta == 0:
                 continue
             price = reading.prices.get(asset, Decimal(1))
             usd = delta * price
+            if delta < 0:  # wallet outflow with no trade = withdrawal/transfer out (booked as negative flow, not loss)
+                if source in WALLET_SOURCES and -usd >= _deposit_threshold(Decimal(str(prev.get("equity_usd") or 0))):
+                    out.append((source, asset, delta, usd))
+                continue
             if usd >= _deposit_threshold(Decimal(str(prev.get("equity_usd") or 0))):
                 out.append((source, asset, delta, usd))
     return out
@@ -427,8 +437,17 @@ async def run_equity_feed_loop(db_path: str, log: Callable[..., None] | None = N
 
 
 def main() -> None:
-    db = os.getenv("NOEMA_DB_PATH", "data/noema.db")
-    print(json.dumps(asyncio.run(take_reading(db)), indent=2))
+    import argparse
+    ap = argparse.ArgumentParser(description="Read-only equity feed (balances only, never signs).")
+    ap.add_argument("--db", default=os.getenv("NOEMA_DB_PATH", "data/noema.db"))
+    ap.add_argument("--loop", action="store_true")
+    a = ap.parse_args()
+    if a.loop:
+        def log(event: str, **kw: Any) -> None:
+            print(datetime.now(UTC).isoformat(), event, json.dumps(kw, default=str), flush=True)
+        asyncio.run(run_equity_feed_loop(a.db, log))
+    else:
+        print(json.dumps(asyncio.run(take_reading(a.db)), indent=2))
 
 
 if __name__ == "__main__":

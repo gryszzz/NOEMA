@@ -174,7 +174,7 @@ function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(
  if(!T||!T.real){head.innerHTML='<div class="dim">waiting for the first real equity reading…</div>';return}
  const r=T.real,g=T.guard||{},S=(T.series||[]).filter(p=>p.usd!=null),sg=v=>v>=0?"+":"−",pc=v=>v==null?"—":sg(v)+N(Math.abs(v),2)+"%",ago=Math.max(0,Math.round((Date.now()-Date.parse(r.last_reading_at))/1000)),agoS=ago<90?ago+"s":Math.round(ago/60)+"m",stale=ago>900;
  head.innerHTML=`<div class="tr-big">$${N(r.total_usd,4)}<span class="tr-sub">total real balance · last reading <b class="${stale?"bad":"ok"}">${agoS} ago</b>${stale?" (stale)":""}</span></div>
- <div class="tr-pnl"><span>today <b class="${cls(g.pnl_today_usd)}">${sg(g.pnl_today_usd)}$${N(Math.abs(g.pnl_today_usd||0),4)} (${pc(g.pnl_today_pct)})</b></span><span>all-time <b class="${cls(r.pnl_all_usd)}">${sg(r.pnl_all_usd)}$${N(Math.abs(r.pnl_all_usd),4)} (${pc(r.pnl_all_pct)})</b></span><span class="dim">deposits $${N(r.deposits_usd,2)} (not profit)</span></div>
+ <div class="tr-pnl"><span>today <b class="${cls(g.pnl_today_usd)}">${sg(g.pnl_today_usd)}$${N(Math.abs(g.pnl_today_usd||0),4)} (${pc(g.pnl_today_pct)})</b></span><span>all-time <b class="${cls(r.pnl_all_usd)}">${sg(r.pnl_all_usd)}$${N(Math.abs(r.pnl_all_usd),4)} (${pc(r.pnl_all_pct)})</b></span><span class="dim">net deposits $${N(r.deposits_usd,2)} (not profit)</span></div>
  <div class="tr-ven">${r.venues.map(v=>`<span class="tr-v ${v.status}"><i>${v.label}</i><b>$${N(v.usd,4)}</b></span>`).join("")}<span class="tr-v ro"><i>Stripe</i><b>read-only · not counted</b></span></div>`;
  const W=cv.clientWidth,H=cv.clientHeight,dpr=window.devicePixelRatio||1;cv.width=W*dpr;cv.height=H*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);x.font="10px monospace";
  if(S.length<2){x.fillStyle="#5f8aa3";x.fillText(`${S.length} reading(s) — chart starts at 2`,4,16)}else{
@@ -182,7 +182,7 @@ function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(
   X=t=>(Date.parse(t)-t0)/((t1-t0)||1)*(W-8)+4,Y=v=>H-12-(v-lo)/((hi-lo)||1)*(H-22);
  x.strokeStyle="#39ff9c";x.lineWidth=1.8;x.beginPath();S.forEach((p,i)=>i?x.lineTo(X(p.at),Y(p.usd)):x.moveTo(X(p.at),Y(p.usd)));x.stroke();
  const l=S.at(-1);x.fillStyle="#39ff9c";x.beginPath();x.arc(X(l.at),Y(l.usd),3,0,7);x.fill();
- (T.deposits||[]).forEach(d=>{const dx=X(d.at);if(dx<0||dx>W)return;x.strokeStyle="#b67bff";x.beginPath();x.moveTo(dx,0);x.lineTo(dx,H);x.stroke();x.fillStyle="#b67bff";x.fillText("deposit +$"+N(d.usd,2),dx+3,10)});
+ (T.deposits||[]).forEach(d=>{const dx=X(d.at);if(dx<0||dx>W)return;x.strokeStyle="#b67bff";x.beginPath();x.moveTo(dx,0);x.lineTo(dx,H);x.stroke();x.fillStyle="#b67bff";x.fillText((d.usd<0?"withdrawal −$":"deposit +$")+N(Math.abs(d.usd),2),dx+3,10)});
  x.fillStyle="#5f8aa3";x.fillText(new Date(t0).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}),4,H-1);}
  byId("v7-eq-t").textContent=`${S.length} real readings · every 5 min`;
  kv.innerHTML=`<span class="dim">"today" = UTC day (from 8 PM ET)</span>`;

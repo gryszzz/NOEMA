@@ -133,3 +133,23 @@ def test_feed_module_never_references_signer_keys():
     src = inspect.getsource(ef)
     for forbidden in ("PRIVATE_KEY", "wallet_signer", "SECRET_KEY", "keypair"):
         assert forbidden not in src
+
+
+def test_wallet_deposit_and_withdrawal_flows() -> None:
+    from decimal import Decimal as D
+    prev = {"solana": {"status": "ok", "equity_usd": "0.33", "holdings": {"SOL": "0.00089088"}}}
+    dep = {"solana": ef.SourceReading("solana", D("29.2"), {"SOL": D("0.28")}, {"SOL": D(104)})}
+    got = ef.detect_deposits(prev, dep, trades=0)
+    assert got and got[0][0] == "solana" and got[0][3] > 29
+    prev2 = {"solana": {"status": "ok", "equity_usd": "29.2", "holdings": {"SOL": "0.30"}}}
+    wd = {"solana": ef.SourceReading("solana", D("29.1"), {"SOL": D("0.28")}, {"SOL": D(104)})}
+    out = ef.detect_deposits(prev2, wd, trades=0)
+    assert out and out[0][3] < 0  # withdrawal booked as negative flow, not loss
+    assert ef.detect_deposits(prev2, wd, trades=1) == []
+
+
+def test_helius_rpc_preferred(monkeypatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "k")
+    assert ef._solana_rpcs()[0].startswith("https://mainnet.helius-rpc.com/")
+    monkeypatch.delenv("HELIUS_API_KEY")
+    assert "helius" not in ef._solana_rpcs()[0]
