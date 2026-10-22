@@ -14,6 +14,8 @@ from time import perf_counter
 import httpx
 from polymarket_us.errors import PolymarketUSError
 
+from noema.sqlite_util import retry_write
+
 from .agent_config import AgentConfig
 from .agent_identity import AgentIdentity
 from .agent_models import AgentConnectionState, AgentCycleState, AgentStatus
@@ -1156,8 +1158,9 @@ async def run_agent(
         last_heartbeat_at=datetime.now(UTC),
         last_cycle=prior_status.last_cycle,
     )
-    store.write_status(starting)
-    store.append_heartbeat(starting)
+    # Startup writes retry on SQLITE_BUSY instead of killing the process.
+    retry_write(lambda: store.write_status(starting))
+    retry_write(lambda: store.append_heartbeat(starting))
     store.append_runtime_event(
         runtime_session_id,
         "agent_runtime",

@@ -537,7 +537,7 @@ def crawl(conn: sqlite3.Connection, client: CultureClient, *, now: datetime | No
                      "status=excluded.status, items=excluded.items, fetched_at=excluded.fetched_at, url=excluded.url",
                      (src.name, src.domain, src.url, client.status.get(src.url, "?"), len(obs), now.isoformat()))
         total += len(obs)
-    conn.commit()
+        conn.commit()  # one short write txn per source instead of one long one
     signals = compute_signals(conn, now=now)
     forecasts = record_market_forecasts(conn, now=now)
     conn.execute("DELETE FROM culture_observations WHERE at < ?", ((now - timedelta(days=7)).isoformat(),))
