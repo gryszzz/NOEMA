@@ -34,3 +34,9 @@ def test_walk_forward_uses_only_earlier_days():
     assert preds and min(r["day"] for r, _ in preds) == "2026-09-04"  # first 3 days are training only
     ev = pm.evaluate(preds)
     assert ev["brier_minus_market"] < 0  # calibration learns the market is under-confident here
+
+
+def test_bars_never_use_an_unfinished_bar():
+    b = pm.Bars([(0, 100.0), (300, 101.0), (600, 102.0)])
+    assert b.spot(599)[0] == 100.0  # bar starting at 300 only closes at 600
+    assert b.spot(900)[0] == 102.0

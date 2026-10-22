@@ -70,13 +70,16 @@ class Bars:
         self.px = [p for _, p in rows]
         self.ret = [0.0] + [math.log(b / a) if a > 0 and b > 0 else 0.0 for a, b in zip(self.px, self.px[1:], strict=False)]
 
+    # Yahoo bars are stamped at their START; a bar's close is only known at ts + BAR_S.
+    BAR_S = 300
+
     def spot(self, at: int) -> tuple[float, int] | None:
-        i = bisect.bisect_right(self.ts, at) - 1
+        i = bisect.bisect_right(self.ts, at - self.BAR_S) - 1
         return (self.px[i], self.ts[i]) if i >= 0 and at - self.ts[i] < 3600 else None
 
     def vol_profile(self, at: int) -> tuple[float, list[float]] | None:
         """Per-5m vol over the prior 24h and an hour-of-day seasonality profile from the prior 30 days."""
-        i = bisect.bisect_right(self.ts, at)
+        i = bisect.bisect_right(self.ts, at - self.BAR_S)
         j = bisect.bisect_left(self.ts, at - 86400)
         k = bisect.bisect_left(self.ts, at - 30 * 86400)
         recent = [r for r in self.ret[j:i] if r != 0.0]
