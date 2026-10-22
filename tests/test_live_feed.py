@@ -42,3 +42,24 @@ def test_cached_error_retries_soon_and_keeps_last_good(monkeypatch):
     v = live_feed._cached("k", 300, boom)
     assert v["v"] == 1 and "locked" in v["last_error"]
     assert live_feed._CACHE["k"][0] < live_feed.time.monotonic() - 290
+
+
+def test_treasury_failing_source_goes_red_with_last_good(tmp_path):
+    import json
+    import time as _t
+    from datetime import UTC, datetime, timedelta
+    db = tmp_path / "noema.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE equity_feed_readings (at TEXT, status TEXT, total_usd TEXT, deposit_usd TEXT, sources_json TEXT)")
+    now = datetime.now(UTC)
+    old = (now - timedelta(seconds=600)).isoformat()
+    c.execute("INSERT INTO equity_feed_readings VALUES (?,?,?,?,?)", (old, "complete", "5", "0", json.dumps(
+        {"solana": {"status": "ok", "equity_usd": "4", "read_at": old}, "kalshi": {"status": "ok", "equity_usd": "1", "read_at": old}})))
+    c.execute("INSERT INTO equity_feed_readings VALUES (?,?,?,?,?)", (now.isoformat(), "stale", None, "0", json.dumps(
+        {"solana": {"status": "error", "error": "Timeout", "read_at": now.isoformat()},
+         "kalshi": {"status": "ok", "equity_usd": "1", "read_at": now.isoformat()}})))
+    c.commit()
+    c.close()
+    v = {x["venue"]: x for x in live_feed.treasury_section(str(db), _t.time())["venues"]}
+    assert v["kalshi"]["fresh"] == "ok" and v["kalshi"]["age_s"] < 5
+    assert v["solana"]["fresh"] == "red" and v["solana"]["usd"] == 4 and v["solana"]["age_s"] > 590
