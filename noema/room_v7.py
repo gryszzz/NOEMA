@@ -122,7 +122,7 @@ def _ohlc(candles: list, n: int = 48) -> list[list[float]]:
 def _interval_label(rows: list) -> str | None:
     if len(rows) < 2:
         return None
-    d = sorted(b[0] - a[0] for a, b in zip(rows, rows[1:]))
+    d = sorted(b[0] - a[0] for a, b in itertools.pairwise(rows))
     s = d[len(d) // 2]
     return f"{round(s / 3600)}h" if s >= 3600 else f"{max(1, round(s / 60))}m"
 
@@ -157,7 +157,7 @@ def pm_candles(conn: sqlite3.Connection, *, markets: int = 6, min_quotes: int = 
             b, a = d.get("yes_bid"), d.get("yes_ask")
             try:
                 px = (float(b) + float(a)) / 2 if b is not None and a is not None else float(b if b is not None else a)
-                t = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+                t = datetime.fromisoformat(str(at)).timestamp()
             except (TypeError, ValueError):
                 continue
             pts.append((t, px))
@@ -192,11 +192,11 @@ def _scan_chart(it: dict, sweep_ts: Any) -> dict[str, Any]:
     marks = []
     st, why = str(it.get("stage") or ""), str(it.get("reason") or "")
     try:
-        t = datetime.fromisoformat(str(sweep_ts).replace("Z", "+00:00")).timestamp() if sweep_ts else None
+        t = datetime.fromisoformat(str(sweep_ts)).timestamp() if sweep_ts else None
     except ValueError:
         t = None
     if rows and t is not None:
-        if re.search(r"enter|entry|approved|opened", st + " " + why, re.I) and st != "rejected":
+        if re.search(r"enter|entry|approved|opened", st + " " + why, re.IGNORECASE) and st != "rejected":
             marks.append({"t": t, "kind": "entry"})
         elif st != "rejected":
             marks.append({"t": t, "kind": "find"})
