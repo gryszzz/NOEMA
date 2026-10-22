@@ -1,0 +1,28 @@
+# NOT DEPLOYED. Separate blueprint for always-on PAPER-ONLY loops (public data, no API keys, no signers).
+# Render's free tier has no background workers and no persistent disks (free web services sleep after
+# 15 min idle), so always-on loops need a paid worker. Estimated: starter worker $7/mo + 5 GB disk ~$1.25/mo.
+# Requires owner approval before anyone applies this blueprint.
+services:
+  - type: worker
+    name: noema-paper-loops
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: pip install .
+    startCommand: bash scripts/paper_loops.sh
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    disk:
+      name: noema-paper-loops-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 5
+    envVars:
+      - key: NOEMA_DATA_DIR
+        value: /opt/render/project/src/data
+      - key: NOEMA_ALLOW_LIVE_ORDERS
+        value: "0"
+      - key: NOEMA_EXECUTION_GATEWAY_ENABLED
+        value: "0"
+      # Optional, owner-provided later; the stream uses the public RPC without it.
+      - key: HELIUS_API_KEY
+        sync: false
