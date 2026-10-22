@@ -412,6 +412,64 @@ def manage(conn: sqlite3.Connection, marks: dict[tuple[str, str], tuple[float, f
     return actions
 
 
+def manage_adaptive(conn: sqlite3.Connection, marks: dict[tuple[str, str], tuple[float, float]], now: datetime,
+                    params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Paper exits with adaptive_exits.decide (partial TP -> break-even, vol-trailed runner, conditional time
+    extension, liquidity-pull exit). State is kept in exits_json['adaptive_state']. Logs post-exit price paths."""
+    from . import adaptive_exits as ax
+
+    p = ax.AdaptiveExit.from_genome(params)
+    actions = []
+    ax.fill_followups(conn, marks, now.isoformat())
+    for (pid, chain, addr, sym, opened, entry, qty, cost, peak, tp_hits, realized, ej) in conn.execute(
+            "SELECT id, chain, address, symbol, opened_at, entry_price, qty, cost_usd, peak_price, tp_hits, "
+            "realized_usd, exits_json FROM alpha_positions WHERE status='open'").fetchall():
+        mk = marks.get((chain, addr))
+        if not mk or not entry:
+            continue
+        price, liq = mk
+        meta = json.loads(ej or "{}")
+        raw = meta.get("adaptive_state") or {}
+        st = ax.PosState(entry=entry, remaining=raw.get("remaining", 1.0), tp_hit=raw.get("tp_hit", bool(tp_hits)),
+                         peak=raw.get("peak", peak or entry), liq_high=raw.get("liq_high", liq or 0),
+                         rets=raw.get("rets", []), last_price=raw.get("last_price", entry),
+                         extended_h=raw.get("extended_h", 0.0))
+        age_h = (now - datetime.fromisoformat(opened)).total_seconds() / 3600
+        before = st.remaining
+        frac, reason = ax.decide(st, p, price=price, age_h=age_h, liquidity=liq)
+        meta["adaptive_state"] = {"remaining": st.remaining, "tp_hit": st.tp_hit, "peak": st.peak,
+                                  "liq_high": st.liq_high, "rets": st.rets[-20:], "last_price": st.last_price,
+                                  "extended_h": st.extended_h}
+        meta["exit_policy"] = p.as_dict()
+        if reason and frac > 0 and before > 0:
+            sell_frac = min(1.0, frac / before)
+            sell_qty = qty * sell_frac
+            fill_price, _ = _fill(price, sell_qty * price, liq, "sell")
+            gross = sell_qty * fill_price
+            fee = _fill(price, max(gross, 1e-9), liq, "sell")[1]
+            proceeds = max(0.0, gross - fee)
+            cost_part = cost * sell_frac
+            realized += proceeds - cost_part
+            qty -= sell_qty
+            cost -= cost_part
+            conn.execute("UPDATE alpha_book SET cash_usd=cash_usd+? WHERE id=1", (proceeds,))
+            closed = st.remaining <= 1e-9
+            conn.execute("UPDATE alpha_positions SET qty=?, cost_usd=?, peak_price=?, tp_hits=?, realized_usd=?, "
+                         "last_price=?, status=?, closed_at=?, close_reason=?, exits_json=? WHERE id=?",
+                         (0.0 if closed else qty, 0.0 if closed else cost, st.peak, int(st.tp_hit), realized, price,
+                          "closed" if closed else "open", now.isoformat() if closed else None,
+                          reason if closed else None, json.dumps(meta), pid))
+            ax.record_exit(conn, pid, chain, addr, now.isoformat(), price, reason)
+            act = {"symbol": sym, "address": addr, "reason": reason, "return": round(price / entry - 1, 4),
+                   "proceeds_usd": round(proceeds, 2), "closed": closed}
+            _event(conn, now, "paper_exit", **act)
+            actions.append(act)
+        else:
+            conn.execute("UPDATE alpha_positions SET peak_price=?, last_price=?, exits_json=? WHERE id=?",
+                         (st.peak, price, json.dumps(meta), pid))
+    return actions
+
+
 def enter(conn: sqlite3.Connection, c: Candidate, book: dict[str, Any], now: datetime) -> float:
     from .accuracy_ledger import record_forecast
 
@@ -479,7 +537,10 @@ def run_cycle(conn: sqlite3.Connection, client: Any, *, db_path: str | None = No
             conn.execute("UPDATE culture_signals SET symbol=? WHERE kind='token' AND entity=? AND symbol IS NULL",
                          (c.symbol, f"{c.chain}:{c.address}"))
     marks = {(c.chain, c.address): (c.price, c.liquidity or 1.0) for c in cands if c.price}
-    exits = manage(conn, marks, now)
+    if os.getenv("NOEMA_ALPHA_ADAPTIVE_EXITS", "1") != "0":
+        exits = manage_adaptive(conn, marks, now)
+    else:
+        exits = manage(conn, marks, now)
     for c in cands:
         if c.liquidity is None:
             continue

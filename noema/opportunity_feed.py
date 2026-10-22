@@ -39,6 +39,7 @@ SOURCES = {
     "culture": "culture radar (crypto · stocks · prediction buzz)",
     "trench": "pump.fun / DEX pool sweeps",
     "strategy": "strategy book signals",
+    "setup": "fresh setups (new pools, new markets, early X; majors excluded)",
 }
 
 
@@ -279,6 +280,24 @@ def refresh(db_path: str, *, now: datetime | None = None, feed_path: str | None 
     fc = _feed_conn(fpath)
     try:
         items, status = collect(src, now)
+        try:
+            from .setup_universe import collect_setups, is_major, load_config
+            cfg = load_config()
+            items = [it for it in items if not (it["source"] in ("alpha", "culture") and is_major(
+                (it.get("title") or "").split(" ")[0].rstrip(":"), None, None, cfg))]
+            setups, sst = collect_setups(src, fc, now)
+            by_ref = {it.get("ref"): it for it in items if it.get("ref")}
+            for su_it in setups:
+                twin = by_ref.get(su_it.get("ref"))
+                if twin is not None:   # same token/market already listed: tag it instead of duplicating
+                    twin["reason"] = f"{twin['reason']} · {su_it['reason']}"
+                else:
+                    items.append({"source": "setup", **su_it})
+            sst["status"] = "ok" if sst["n"] else "empty"
+            sst["label"] = SOURCES["setup"]
+            status["setup"] = sst
+        except Exception as e:  # noqa: BLE001 - never break the feed over setups
+            status["setup"] = {"n": 0, "note": f"setup scan error: {e!r}"[:200], "status": "error", "label": SOURCES["setup"]}
         live_ids = set()
         for it in items:
             if it["id"] in live_ids:
