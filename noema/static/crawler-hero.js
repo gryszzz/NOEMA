@@ -36,7 +36,10 @@ function scaffold(){const top=q(".center-top");if(!top||byId("ch"))return!!byId(
  (h2||top.firstChild).insertAdjacentHTML(h2?"afterend":"beforebegin",html);return true}
 function wires(){const app=q(".app");if(!app)return;let w=byId("ch-wires");if(!w){app.insertAdjacentHTML("beforeend",'<div id="ch-wires"></div>');w=byId("ch-wires")}
  /* one page everywhere: news, X wire, strategies and health always live in #ch-wires (no tabs) */
- for(const s of [".wire",".xw"]){const el=q(s);if(el&&el.parentElement!==w)w.appendChild(el)}
+ /* NEWS wire lives in the left column where the heat map used to be */
+ const left=q(".left");let nw=byId("aw-news-b");if(left&&!nw){left.insertAdjacentHTML("beforeend",'<section class="pnl" id="aw-news"><h2>NEWS<span class="tag">live evidence wire · real fetches</span></h2><div class="body" id="aw-news-b"></div></section>');nw=byId("aw-news-b")}
+ const wi=q(".wire");if(wi&&nw&&wi.parentElement!==nw)nw.appendChild(wi);else if(wi&&!nw&&wi.parentElement!==w)w.appendChild(wi);
+ const xw=q(".xw");if(xw&&xw.parentElement!==w)w.appendChild(xw)
  const sp=byId("strat-pnl");if(sp&&sp.parentElement!==w)w.appendChild(sp);
  const hp=byId("health")&&byId("health").closest(".pnl");if(hp&&hp.parentElement!==w)w.appendChild(hp)}
 function adoptScan(){const s=byId("v7-scan"),st=byId("ch-stage");if(s&&st&&s.parentElement!==st)st.appendChild(s)}
