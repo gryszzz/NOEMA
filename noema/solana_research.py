@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import time
 from dataclasses import dataclass
@@ -61,7 +62,7 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
         value = response.headers.get("retry-after")
         if value:
             try:
-                return min(5.0, max(0.0, float(value)))
+                return min(30.0, max(0.0, float(value)))
             except ValueError:
                 try:
                     until = parsedate_to_datetime(value)
@@ -71,6 +72,8 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
                     pass
     # Small process-local jitter prevents synchronized retries from multiple
     # read-only collectors while keeping the delay bounded and provider-safe.
+    if response is not None and response.status_code == 429:
+        return min(30.0, 2.0 * (2 ** attempt)) * random.uniform(0.8, 1.2)
     base = min(2.0, 0.2 * (2 ** attempt))
     return base * random.uniform(0.8, 1.2)
 
@@ -244,6 +247,40 @@ def jupiter_launch_tick(
     )
 
 
+class _TokenBucket:
+    """Process-wide async token bucket; one per RPC host so all clients share the budget."""
+
+    def __init__(self, rate: float, burst: float = 1.0) -> None:
+        self.rate = max(0.05, rate)
+        self.next_at = 0.0
+        self.requests = 0
+
+    async def take(self) -> None:
+        # Slot reservation: loop-agnostic and safe for concurrent coroutines.
+        now = time.monotonic()
+        self.next_at = max(self.next_at, now)
+        wait = self.next_at - now
+        self.next_at += 1.0 / self.rate
+        self.requests += 1
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+
+_BUCKETS: dict[str, _TokenBucket] = {}
+
+
+def rpc_bucket(url: str) -> _TokenBucket:
+    """Keyed Helius gets NOEMA_HELIUS_RPS (default 4, well under the plan limit); public
+    endpoints get NOEMA_PUBLIC_RPC_RPS (default 0.5) because they reject bursts."""
+    host = httpx.URL(url).host
+    if host not in _BUCKETS:
+        helius = "helius" in host
+        rate = float(os.getenv("NOEMA_HELIUS_RPS" if helius else "NOEMA_PUBLIC_RPC_RPS",
+                               "4" if helius else "0.5"))
+        _BUCKETS[host] = _TokenBucket(rate, burst=max(1.0, rate))
+    return _BUCKETS[host]
+
+
 class SolanaRpcResearchClient:
     """Minimal read-only RPC client for token concentration research."""
 
@@ -300,6 +337,8 @@ class SolanaRpcResearchClient:
                     self._http_client = httpx.AsyncClient(
                         timeout=self.timeout, follow_redirects=False,
                     )
+                if os.getenv("NOEMA_RPC_BUCKET", "1") != "0":
+                    await rpc_bucket(url).take()
                 response = await self._http_client.post(url, json=payload)
                 if response.is_error:
                     error_class, retryable = _http_error_class(response.status_code)

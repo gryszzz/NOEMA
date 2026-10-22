@@ -5,12 +5,14 @@ is opened for them unless a test is marked ``capital_guard`` (which uses the rea
 """
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 
 import pytest
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    os.environ.setdefault("NOEMA_RPC_BUCKET", "0")  # rate limiting is tested directly
     config.addinivalue_line("markers", "capital_guard: run against the real capital guard")
 
 

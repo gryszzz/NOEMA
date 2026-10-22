@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS accuracy_lessons (
     forecast_id INTEGER NOT NULL UNIQUE,
     lesson TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_accuracy_venue_market ON accuracy_forecasts(venue, market_id);
 CREATE INDEX IF NOT EXISTS idx_accuracy_agent_time
     ON accuracy_forecasts(agent_id, recorded_at);
 """
@@ -77,7 +78,11 @@ def reasoning_hash(payload: dict[str, Any]) -> str:
 
 
 def ensure_accuracy_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(_SCHEMA)
+    # Not executescript(): that COMMITs any open transaction, which broke batched outcome
+    # writes and re-took the noema.db write lock once per market.
+    for statement in _SCHEMA.split(";"):
+        if statement.strip():
+            conn.execute(statement)
 
 
 def lessons_path(db_path: str) -> Path:
