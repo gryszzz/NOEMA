@@ -24,3 +24,5 @@ dist-site/
 *.sqlite3
 *.log
 *.box-store-snap-*
+private.env
+config/private.env

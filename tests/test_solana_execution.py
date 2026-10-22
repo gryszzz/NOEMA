@@ -491,7 +491,7 @@ def test_wrong_fee_payer_is_not_signed_onto_the_network(monkeypatch, tmp_path):
 def test_expected_solana_address_is_the_owner_wallet():
     from noema.solana_swap import EXPECTED_SOLANA_SIGNER_ADDRESS
 
-    assert EXPECTED_SOLANA_SIGNER_ADDRESS == "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv"
+    assert isinstance(EXPECTED_SOLANA_SIGNER_ADDRESS, str)  # pin comes from private env
 
 
 def test_refuses_a_key_that_is_not_the_pinned_address(monkeypatch, tmp_path):
@@ -502,7 +502,7 @@ def test_refuses_a_key_that_is_not_the_pinned_address(monkeypatch, tmp_path):
     _arm(monkeypatch, tmp_path, signer)
     monkeypatch.setattr(
         "noema.solana_swap.EXPECTED_SOLANA_SIGNER_ADDRESS",
-        "J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv",
+        "So1anaPinTestAddress1111111111111111111111",
     )
     monkeypatch.setenv("NOEMA_SOLANA_WALLET_ADDRESS", str(signer.pubkey()))
     with pytest.raises(RuntimeError, match="does not match"):

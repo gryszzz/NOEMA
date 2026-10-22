@@ -1,5 +1,7 @@
 <div align="center">
 
+> **Public repo, paper-only by default, no keys.** No API or private keys are in this repository. Owner-specific values (wallet addresses, signer pins, tuned parameters) load from a gitignored private env file — see `config/private.env.example` and [SECURITY.md](SECURITY.md).
+
 <img src="docs/images/tev-banner.svg" alt="TEV // NOEMA trading terminal" width="100%" />
 
 <br />
@@ -174,7 +176,7 @@ Every flag defaults to off; all must be set for any live order.
 
 ## Swap signers
 
-Solana (Jupiter) and EVM (KyberSwap on Ethereum, Base, and Polygon, with Robinhood Chain reserved) swaps run in a **separate signer process**. Keys are read only from `NOEMA_SOLANA_SIGNER_SECRET` and `NOEMA_EVM_SIGNER_SECRET` in that process. The signers refuse any key whose address is not `J57oJ1GAraQuts7htkrRN7mzhkq93sqM3iRKMRuHn5sv` (Solana) or `0x92B9a0C66a37fE9635e55045b3bf40cB035a59C8` (EVM). They ship **disabled**, simulate before send, and size caps from the autonomy ladder. Enablement checklists: `docs/solana-live-swaps.md` and `docs/evm-live-swaps.md`.
+Solana (Jupiter) and EVM (KyberSwap on Ethereum, Base, and Polygon, with Robinhood Chain reserved) swaps run in a **separate signer process**. Keys are read only from `NOEMA_SOLANA_SIGNER_SECRET` and `NOEMA_EVM_SIGNER_SECRET` in that process. The signers refuse any key whose address is not `<YOUR_SOLANA_ADDRESS>` (Solana) or `<YOUR_EVM_ADDRESS>` (EVM). They ship **disabled**, simulate before send, and size caps from the autonomy ladder. Enablement checklists: `docs/solana-live-swaps.md` and `docs/evm-live-swaps.md`.
 
 ## In progress
 
