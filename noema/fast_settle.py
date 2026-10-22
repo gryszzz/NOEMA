@@ -286,10 +286,12 @@ def capture_microstructure(c: sqlite3.Connection, api: Api, now: datetime, horiz
             t, now.isoformat(), yes[0][0] if yes else None, (1 - no[0][0]) if no and no[0][0] is not None else None,
             bd, ad, (bd - ad) / (bd + ad) if bd + ad else None, (_dt(close) - now).total_seconds()))
         books += 1
+        c.commit()  # never hold the noema.db write lock across the next HTTP fetch
     tracked = {r[0] for r in c.execute("SELECT ticker FROM fs_markets WHERE category='crypto' AND result IS NULL")}
     last = c.execute("SELECT MAX(created_time) FROM fs_trades").fetchone()[0]
     since = int(_dt(last).timestamp()) if last else int((now - timedelta(minutes=10)).timestamp())
     trades = 0
+    c.commit()
     try:
         d = api.get(f"{KALSHI}/markets/trades", {"limit": 1000, "min_ts": since})
         for tr in d.get("trades") or []:
