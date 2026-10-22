@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS carry_positions (venue TEXT, coin TEXT, opened_ts INT
   funding REAL DEFAULT 0, PRIMARY KEY (venue, coin, opened_ts));
 CREATE TABLE IF NOT EXISTS avenue_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, report_json TEXT);
 """
-KINDS = ("funding_carry", "kalshi_mm", "news_lag")
+KINDS = ("funding_carry", "kalshi_mm", "news_lag", "pm_weather", "pm_thin", "pm_politics")
 
 
 def connect(path: str) -> sqlite3.Connection:

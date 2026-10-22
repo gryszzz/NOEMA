@@ -207,7 +207,10 @@ def seed_meta(c: sqlite3.Connection) -> None:
 
 AVENUE_SEEDS = {"funding_carry": "carry: spot long / perp short when trailing funding clears costs+buffer",
                 "kalshi_mm": "kalshi passive MM 1c inside spread, fills only on trades through",
-                "news_lag": "news/X lag continuation, 2c move at +5m, exit +60m"}
+                "news_lag": "news/X lag continuation, 2c move at +5m, exit +60m",
+                "pm_weather": "kalshi weather: market + Open-Meteo prior-run forecast stack, 08:00 LST entry",
+                "pm_thin": "wide-spread (>=3c) markets: walk-forward calibration / favourite-longshot correction",
+                "pm_politics": "long-dated politics: calibration + 14d drift mean-reversion at 30d to close"}
 
 
 def seed_avenues(c: sqlite3.Connection) -> None:
