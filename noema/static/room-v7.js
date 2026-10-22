@@ -184,7 +184,7 @@ function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(
  const l=S.at(-1);x.fillStyle="#39ff9c";x.beginPath();x.arc(X(l.at),Y(l.usd),3,0,7);x.fill();
  (T.deposits||[]).forEach(d=>{const dx=X(d.at);if(dx<0||dx>W)return;x.strokeStyle="#b67bff";x.beginPath();x.moveTo(dx,0);x.lineTo(dx,H);x.stroke();x.fillStyle="#b67bff";x.fillText((d.usd<0?"withdrawal −$":"deposit +$")+N(Math.abs(d.usd),2),dx+3,10)});
  x.fillStyle="#5f8aa3";x.fillText(new Date(t0).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}),4,H-1);}
- byId("v7-eq-t").textContent=`${S.length} real readings · every 5 min`;
+ byId("v7-eq-t").textContent=`${S.length} real readings · every 60 s`;
  kv.innerHTML=`<span class="dim">"today" = UTC day (from 8 PM ET)</span>`;
 }
 async function pollTreasury(){try{const r=await fetch("/api/treasury",{cache:"no-store"});if(r.ok){V.tr=await r.json();equity()}}catch(e){}}
