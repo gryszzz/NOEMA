@@ -100,6 +100,21 @@ def load_launches(c: sqlite3.Connection, since: str) -> list[dict[str, Any]]:
         name, sym = d.get("name") or "", d.get("symbol") or ""
         out.append({"mint": r["mint"], "at": at, "name": name, "symbol": sym, "terms": tokens(f"{name} {sym}"),
                     "d": d})
+    # live stream (noema.launch_stream): creates the poller has not seen yet count toward meta velocity at once
+    seen = {x["mint"] for x in out}
+    try:
+        rows = c.execute("SELECT mint, received_at, name, symbol FROM launch_stream WHERE received_at>=? "
+                         "ORDER BY received_at", (since,)).fetchall()
+    except sqlite3.Error:
+        rows = []
+    for mint, rat, name, sym in rows:
+        at = _ts(rat)
+        if mint in seen or not at:
+            continue
+        out.append({"mint": mint, "at": at, "name": name or "", "symbol": sym or "",
+                    "terms": tokens(f"{name or ''} {sym or ''}"),
+                    "d": {"name": name, "symbol": sym, "launchpad": "pump.fun", "stream_only": True}})
+    out.sort(key=lambda x: x["at"])
     return out
 
 
@@ -214,6 +229,8 @@ def shield(launch: dict[str, Any], ca: dict[str, tuple[int, int, float]], warn: 
     s1 = d.get("stats5m") or d.get("stats1h") or {}
     bad: list[str] = []
     soft = 0.0
+    if d.get("stream_only"):
+        bad.append("stream-only: no audit/holder data yet")  # fail closed until the poller enriches it
     if a.get("mintAuthorityDisabled") is False or a.get("freezeAuthorityDisabled") is False:
         bad.append("mint/freeze authority live")
     dev_mints = a.get("devMints") or 0
@@ -553,7 +570,8 @@ def main() -> None:
             print("meta cycle error:", repr(e), flush=True)
         if not a.loop:
             break
-        time.sleep(a.interval)
+        from .agent_lifecycle import throttle_factor
+        time.sleep(a.interval * throttle_factor(a.life_db, "meta_launch"))
 
 
 if __name__ == "__main__":

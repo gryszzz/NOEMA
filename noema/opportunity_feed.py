@@ -39,6 +39,7 @@ SOURCES = {
     "culture": "culture radar (crypto · stocks · prediction buzz)",
     "trench": "pump.fun / DEX pool sweeps",
     "strategy": "strategy book signals",
+    "launch_stream": "live pump.fun creates (PumpPortal stream, first 3 min of trades)",
     "setup": "fresh setups (new pools, new markets, early X; majors excluded)",
 }
 
@@ -218,6 +219,19 @@ def collect(conn: sqlite3.Connection, now: datetime) -> tuple[list[dict[str, Any
             price_kind="trench", price=_f(px), url=f"https://dexscreener.com/solana/{mint}")
     st["trench"] = {"n": len(tr), "note": "best-scored fresh pools, last 20 min (watch only)"
                     + ("" if tr else " · no fresh pools")}
+
+    # 6b) live launch stream: creates in the last 10 min ranked by early net buy flow (watch only)
+    since = (now - timedelta(minutes=10)).isoformat()
+    ls = _q(conn, "SELECT s.mint, s.name, s.symbol, s.received_at, COALESCE(SUM(CASE WHEN t.side='buy' THEN t.sol ELSE "
+                  "-t.sol END), 0) AS net, COUNT(t.signature), COUNT(DISTINCT t.trader) FROM launch_stream s LEFT JOIN "
+                  "launch_trades t ON t.mint=s.mint WHERE s.received_at>=? GROUP BY s.mint ORDER BY net DESC LIMIT 6",
+            (since,))
+    for mint, name, sym, at, net, ntr, traders in ls:
+        add("launch_stream", id=f"launch:{mint}", tier=2, title=f"{sym or mint[:6]} · {(name or '')[:30]}", venue="solana",
+            ref=mint, edge=None, score=_f(net), source_at=_iso(at),
+            reason=f"new create · net buys {(_f(net) or 0):.2f} SOL · {ntr} trades / {traders} traders (observe)",
+            price_kind="trench", price=None, url=f"https://pump.fun/coin/{mint}")
+    st["launch_stream"] = {"n": len(ls), "note": "live creates, last 10 min (watch only)" + ("" if ls else " · stream idle")}
 
     # 7) strategy book: open / shadow signals
     since = (now - timedelta(hours=24)).isoformat()

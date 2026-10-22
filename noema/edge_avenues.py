@@ -333,15 +333,29 @@ def _record(c: sqlite3.Connection, kind: str, rows: list[tuple[str, str, float, 
                   [(kind, i, at, net, json.dumps(x)) for i, at, net, x in rows])
 
 
-def run(db: str, main_db: str, *, fetch: bool = True) -> dict[str, Any]:
+RUN_COUNTER = {"n": 0}
+
+
+def _due(kind: str, life_db: str | None) -> bool:
+    """Throttle losing / fired kinds: run them every Nth cycle (agent_lifecycle.throttle_factor)."""
+    from .agent_lifecycle import throttle_factor
+    return RUN_COUNTER["n"] % throttle_factor(life_db, kind) == 0
+
+
+def run(db: str, main_db: str, *, fetch: bool = True, life_db: str | None = None) -> dict[str, Any]:
     import httpx
     c = connect(db)
+    RUN_COUNTER["n"] += 1
+    due = {k: _due(k, life_db) for k in ("funding_carry", "kalshi_mm", "news_lag")}
     rep: dict[str, Any] = {"schema": "tev.edge_avenues.v1", "at": datetime.now(UTC).isoformat(), "mode": "paper only",
                            "buffer": entry_buffer()}
+    rep["throttled"] = [k for k, v in due.items() if not v]
     if fetch:
         with httpx.Client(timeout=20) as cl:
-            rep["fetched_funding"] = fetch_funding(c, cl)
-            rep["fetched_mm_trades"] = fetch_mm_trades(c, main_db, cl)
+            if due["funding_carry"]:
+                rep["fetched_funding"] = fetch_funding(c, cl)
+            if due["kalshi_mm"]:
+                rep["fetched_mm_trades"] = fetch_mm_trades(c, main_db, cl)
     rep["funding_carry"] = backtest_carry(c)
     rep["forward_carry_closed"] = forward_carry(c, int(time.time()) // 3600 * 3600)
     mm = backtest_mm(c, main_db)
@@ -382,10 +396,11 @@ def main() -> None:  # pragma: no cover
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=int, default=3600)
     ap.add_argument("--no-fetch", action="store_true")
+    ap.add_argument("--life-db", default=os.getenv("NOEMA_LIFECYCLE_DB", "data/agent_lifecycle.db"))
     a = ap.parse_args()
     while True:
         try:
-            rep = run(a.db, a.main_db, fetch=not a.no_fetch)
+            rep = run(a.db, a.main_db, fetch=not a.no_fetch, life_db=a.life_db)
             print(json.dumps({"at": rep["at"], "carry": {h: v["all"] for h, v in rep["funding_carry"].items()},
                               "mm": rep["kalshi_mm"]["per_market_pnl_usd_1lot"],
                               "news": rep["news_lag"]["continuation_trades"]}), flush=True)

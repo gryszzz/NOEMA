@@ -312,6 +312,29 @@ def cycle(db: str, life_db: str, feed_db: str | None = None, rng: random.Random 
         c.close()
 
 
+def throttle_factor(life_db: str | None, kind: str) -> int:
+    """Compute budget per agent kind: 1 = full speed (earning, or still collecting / not losing),
+    4 = every active agent of the kind is losing after costs with n >= MIN_N, 8 = none active (all fired).
+    Unknown roster -> 1 (never starve a kind because the roster is missing)."""
+    if not life_db or not os.path.isfile(life_db):
+        return 1
+    try:
+        c = sqlite3.connect(f"file:{life_db}?mode=ro", uri=True, timeout=10)
+        rows = c.execute("SELECT status, stats_json FROM agents WHERE kind=?", (kind,)).fetchall()
+        c.close()
+    except sqlite3.Error:
+        return 1
+    if not rows:
+        return 1
+    active = [json.loads(sj or "{}") for st, sj in rows if st in ("shadow", "earning")]
+    if not active:
+        return 8
+    if any(st == "earning" for st, _ in rows):
+        return 1
+    losing = [a for a in active if (a.get("n") or 0) >= MIN_N and (a.get("mean_net") or 0) < 0]
+    return 4 if len(losing) == len(active) else 1
+
+
 def roster(life_db: str, db: str | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {"schema": "tev.roster.v1", "mode": "paper/shadow only", "min_n": MIN_N,
                            "population_cap": POP_CAP, "agents": [], "events": [], "forecasters": []}
