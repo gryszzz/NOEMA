@@ -169,7 +169,7 @@ window.wireSources=function(){const ev=(SS().v6||{}).lanes?.find(l=>l.lane==="ev
  const T2=((ev&&ev.targets)||[]).filter(t=>!T.isBoilerplateQuery(t.query)),dropped=((ev&&ev.targets)||[]).length-T2.length;
  const tg=byId("wire-tgt");if(tg)tg.innerHTML=T2.slice(0,3).map(t=>`<div><i>TARGET</i> ${E(t.market||"")} ⟵ <i>${E(t.backend)}</i> “${E(t.query||"")}” · ${t.results??0} results · ${t.linked??0} linked</div>`).join("")+(dropped?`<div class="dim">${dropped} rulebook-boilerplate quer${dropped>1?"ies":"y"} hidden</div>`:"")};
 
-/* ---------- equity vs floor ---------- */
+/* ---------- treasury: real balance only (guard runs server-side, not drawn) ---------- */
 function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(!cv)return;const head=byId("v7-tr-head"),kv=byId("v7-eq-kv"),pp=byId("v7-tr-paper");
  if(!T||!T.real){head.innerHTML='<div class="dim">waiting for the first real equity reading…</div>';return}
  const r=T.real,g=T.guard||{},S=(T.series||[]).filter(p=>p.usd!=null),sg=v=>v>=0?"+":"−",pc=v=>v==null?"—":sg(v)+N(Math.abs(v),2)+"%",ago=Math.max(0,Math.round((Date.now()-Date.parse(r.last_reading_at))/1000)),agoS=ago<90?ago+"s":Math.round(ago/60)+"m",stale=ago>900;
@@ -178,16 +178,14 @@ function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(
  <div class="tr-ven">${r.venues.map(v=>`<span class="tr-v ${v.status}"><i>${v.label}</i><b>$${N(v.usd,4)}</b></span>`).join("")}<span class="tr-v ro"><i>Stripe</i><b>read-only · not counted</b></span></div>`;
  const W=cv.clientWidth,H=cv.clientHeight,dpr=window.devicePixelRatio||1;cv.width=W*dpr;cv.height=H*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);x.font="10px monospace";
  if(S.length<2){x.fillStyle="#5f8aa3";x.fillText(`${S.length} reading(s) — chart starts at 2`,4,16)}else{
- const t0=Date.parse(S[0].at),t1=Date.parse(S.at(-1).at)||t0+1,vals=S.map(p=>p.usd),lv=[g.floor_usd,g.peak_usd,g.daily_stop_usd].filter(v=>v!=null),lo=Math.min(...vals,...lv)*.995,hi=Math.max(...vals,...lv)*1.005,
+ const t0=Date.parse(S[0].at),t1=Date.parse(S.at(-1).at)||t0+1,vals=S.map(p=>p.usd),lo=Math.min(...vals)*.995,hi=Math.max(...vals)*1.005,
   X=t=>(Date.parse(t)-t0)/((t1-t0)||1)*(W-8)+4,Y=v=>H-12-(v-lo)/((hi-lo)||1)*(H-22);
- const hl=(v,col,lab)=>{if(v==null)return;const y=Y(v);x.strokeStyle=col;x.setLineDash([5,4]);x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();x.setLineDash([]);x.fillStyle=col;x.fillText(lab+" $"+N(v,4),W-150,y-3)};
- hl(g.peak_usd,"#7fd4ff","peak");hl(g.daily_stop_usd,"#ff9a3c","daily stop");hl(g.floor_usd,"#ffd23f","floor");
  x.strokeStyle="#39ff9c";x.lineWidth=1.8;x.beginPath();S.forEach((p,i)=>i?x.lineTo(X(p.at),Y(p.usd)):x.moveTo(X(p.at),Y(p.usd)));x.stroke();
  const l=S.at(-1);x.fillStyle="#39ff9c";x.beginPath();x.arc(X(l.at),Y(l.usd),3,0,7);x.fill();
  (T.deposits||[]).forEach(d=>{const dx=X(d.at);if(dx<0||dx>W)return;x.strokeStyle="#b67bff";x.beginPath();x.moveTo(dx,0);x.lineTo(dx,H);x.stroke();x.fillStyle="#b67bff";x.fillText("deposit +$"+N(d.usd,2),dx+3,10)});
  x.fillStyle="#5f8aa3";x.fillText(new Date(t0).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}),4,H-1);}
  byId("v7-eq-t").textContent=`${S.length} real readings · every 5 min`;
- kv.innerHTML=`<span>floor <b class="warn">$${N(g.floor_usd,4)}</b> (${N((g.floor_fraction||0)*100,0)}% of peak)</span><span>daily stop <b style="color:#ff9a3c">$${N(g.daily_stop_usd,4)}</b> (−${N((g.daily_stop_fraction||0)*100,0)}% from $${N(g.day_start_usd,4)})</span><span>cushion <b>${N((1-g.floor_usd/r.total_usd)*100,1)}%</b></span><span>guard <b class="${g.tripped?"bad":"ok"}">${g.tripped?"TRIPPED":"armed"}</b></span><span class="dim">"today" = UTC day (from 8 PM ET)</span>`;
+ kv.innerHTML=`<span class="dim">"today" = UTC day (from 8 PM ET)</span>`;
  const P=T.paper||{},D=(P.desks||[]).filter(p=>p.usd!=null),ab=P.alpha_book,dl=D.at(-1);
  pp.innerHTML=`<div class="tr-paper"><b>PAPER · simulated, not real money</b>${dl?`<span>desk book $${N(dl.usd,2)} <b class="${cls(dl.pnl_usd)}">${sg(dl.pnl_usd)}${N(Math.abs(dl.pnl_usd),2)}</b></span>`:""}${ab?`<span>alpha book cash $${N(ab.cash_usd,2)} of $${N(ab.start_usd,0)}</span>`:""}<canvas id="v7-tr-pcv"></canvas></div>`;
  const pc2=byId("v7-tr-pcv");if(pc2&&D.length>1){const w=pc2.clientWidth,h=pc2.clientHeight,c2=pc2.getContext("2d");pc2.width=w*dpr;pc2.height=h*dpr;c2.scale(dpr,dpr);const v=D.map(p=>p.usd),a=Math.min(...v),b=Math.max(...v);c2.strokeStyle="rgba(182,123,255,.9)";c2.lineWidth=1.3;c2.beginPath();v.forEach((y,i)=>{const X=i/(v.length-1)*w,YY=h-2-(y-a)/((b-a)||1)*(h-4);i?c2.lineTo(X,YY):c2.moveTo(X,YY)});c2.stroke()}}
