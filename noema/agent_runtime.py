@@ -457,6 +457,38 @@ async def _trench_desk_loop(db_path: str, config: DeskRuntimeConfig,
         await solana.close()
 
 
+async def _fresh_launch_loop(db_path: str) -> None:
+    """Paper-only fresh pump.fun launch path (never signs or swaps)."""
+    from .heartbeats import gate as _fresh_gate
+    from .trench_fresh import FreshLaunchRunner
+
+    runner = FreshLaunchRunner(db_path)
+    dex = DexScreenerTrenchPriceClient()
+    sol_usd, sol_at = float(os.getenv("NOEMA_SOL_USD_FALLBACK", "150")), -1e9
+    while True:
+        started = asyncio.get_running_loop().time()
+        try:
+            if started - sol_at > 300:
+                try:
+                    pair = (await dex.tokens_by_mint(["So11111111111111111111111111111111111111112"])).get(
+                        "So11111111111111111111111111111111111111112") or {}
+                    price = float(pair.get("priceUsd") or 0)
+                    if 10 < price < 10_000:
+                        sol_usd, sol_at = price, started
+                except Exception as exc:  # noqa: BLE001 - keep last SOL price
+                    _log("fresh_launch_sol_price_error", error=type(exc).__name__)
+            stale = _fresh_gate("fresh-launch", ["feed:launch_stream"], "new entries")
+            summary = await asyncio.to_thread(runner.tick, sol_usd=sol_usd, stale=stale)
+            if summary["entries"] or summary["exits"]:
+                _log("fresh_launch_cycle", **summary)
+        except asyncio.CancelledError:
+            raise
+        except (sqlite3.Error, OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            _log("fresh_launch_cycle_error", error=type(exc).__name__, detail=str(exc)[:200])
+        elapsed = asyncio.get_running_loop().time() - started
+        await asyncio.sleep(max(0.0, runner.cfg.interval_seconds - elapsed))
+
+
 async def _market_discovery_sampler_loop(
     db_path: str,
     config: MarketDiscoveryConfig,
@@ -1183,6 +1215,7 @@ async def run_agent(
 
     trench_sampler: asyncio.Task[None] | None = None
     trench_desks: asyncio.Task[None] | None = None
+    fresh_launch: asyncio.Task[None] | None = None
     market_discovery_sampler: asyncio.Task[None] | None = None
     polymarket_stream: asyncio.Task[None] | None = None
     polymarket_rest_sampler: asyncio.Task[None] | None = None
@@ -1228,6 +1261,10 @@ async def run_agent(
         )
         _log("trench_desks_started", enabled=True, desks=desk_config.desk_count,
              interval_seconds=desk_config.interval_seconds, paper_only=True)
+    if os.getenv("NOEMA_FRESH_LAUNCH_ENABLED", "0") == "1":
+        fresh_launch = asyncio.create_task(_fresh_launch_loop(config.db_path),
+                                           name="noema-fresh-launch-paper")
+        _log("fresh_launch_started", enabled=True, paper_only=True)
     market_discovery_config = MarketDiscoveryConfig.from_env()
     if market_discovery_config.enabled:
         market_discovery_sampler = asyncio.create_task(
@@ -1328,7 +1365,7 @@ async def run_agent(
             await asyncio.sleep(max(0.0, config.cycle_interval_seconds - elapsed))
     finally:
         for task in (
-            trench_sampler, trench_desks, market_discovery_sampler, polymarket_stream,
+            trench_sampler, trench_desks, fresh_launch, market_discovery_sampler, polymarket_stream,
             polymarket_rest_sampler, changed_snapshot_task, equity_feed,
         ):
             if task is None:
