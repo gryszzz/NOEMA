@@ -830,6 +830,7 @@ def shield(conn: sqlite3.Connection, now: datetime) -> list[dict[str, Any]]:
                       len(r["posts"]), r["first"].isoformat() if r["first"] else None, now.isoformat(), r["sample"]))
         out.append({"entity": ent, "score": round(r["score"], 3), "reasons": sorted(r["reasons"]),
                     "authors": sorted(r["authors"])})
+    conn.commit()  # short txn: the caller does network work before its own commit
     return out
 
 
