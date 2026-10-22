@@ -1123,6 +1123,13 @@ async def live_api() -> dict[str, Any]:
     return await asyncio.to_thread(build_live, _db_path())
 
 
+@app.get("/api/heartbeats")
+async def heartbeats_api() -> dict[str, Any]:
+    """Machine-readable connection heartbeats (tev.heartbeats.v1): fresh/amber/red per wallet, feed, crawler, loop."""
+    from .live_feed import _cached, heartbeats_section
+    return await asyncio.to_thread(_cached, "heartbeats", 10, lambda: heartbeats_section(_db_path()))
+
+
 @app.get("/api/live/stream")
 async def live_stream(request: Request) -> Any:
     """Server push (SSE): a fresh snapshot whenever it changes (checked every 2 s), heartbeat every 15 s."""

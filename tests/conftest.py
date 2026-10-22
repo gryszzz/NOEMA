@@ -24,3 +24,14 @@ def _open_capital_guard(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
                         lambda self, *a, **k: [])
     monkeypatch.setattr(capital_guard.CapitalGuard, "max_trade_usd",
                         lambda self, *a, **k: Decimal("1e12"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_heartbeats(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never read or write the live runtime's heartbeat registry / skip log from tests."""
+    d = tmp_path_factory.mktemp("hb")
+    monkeypatch.setenv("NOEMA_HEARTBEAT_DIR", str(d / "beats"))
+    monkeypatch.setenv("NOEMA_HEARTBEATS_JSON", str(d / "heartbeats.json"))
+    from noema import heartbeats
+
+    monkeypatch.setattr(heartbeats, "RUN_DIR", str(d / "run"))
