@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -363,13 +364,18 @@ async def take_reading(db_path: str, *, sources: dict[str, Reader] | None = None
             if source in skip:
                 report[source] = {"status": "excluded"}
                 continue
+            t0 = time.perf_counter()
             try:
                 reading = await reader(client, prices)
             except Exception as exc:  # noqa: BLE001 - any failure makes the whole reading stale
-                report[source] = {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:120]}"}
+                report[source] = {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:120]}",
+                                  "read_at": datetime.now(UTC).isoformat(),
+                                  "latency_ms": round((time.perf_counter() - t0) * 1000)}
                 continue
             readings[source] = reading
             report[source] = {"status": "ok", "equity_usd": str(reading.equity_usd),
+                              "read_at": datetime.now(UTC).isoformat(),
+                              "latency_ms": round((time.perf_counter() - t0) * 1000),
                               "holdings": {k: str(v) for k, v in reading.holdings.items()},
                               "prices": {k: str(v) for k, v in reading.prices.items()}}
     finally:

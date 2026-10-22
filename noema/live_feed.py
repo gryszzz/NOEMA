@@ -357,21 +357,45 @@ def looking_section(dd: str, main_db: str, smart_db: str, now: float) -> dict[st
 
 
 # ---- treasury / PM history / near-close / cross-venue -------------------------------
-def treasury_section(db: str) -> dict[str, Any]:
+def treasury_section(db: str, now: float | None = None) -> dict[str, Any]:
+    """Each venue is read live from its own source every cycle; age = time since ITS last successful read.
+
+    A source that failed this cycle is shown as error/stale with its last good number and age, never as fresh.
+    """
+    now = now or time.time()
     c = _ro(db)
     try:
-        r = c.execute("SELECT at, status, total_usd, sources_json FROM equity_feed_readings ORDER BY rowid DESC LIMIT 1"
-                      ).fetchone()
+        rows = c.execute("SELECT at, status, total_usd, sources_json FROM equity_feed_readings "
+                         "ORDER BY rowid DESC LIMIT 1440").fetchall()
         dep = c.execute("SELECT COALESCE(SUM(CAST(deposit_usd AS REAL)),0) FROM equity_feed_readings").fetchone()[0]
     finally:
         c.close()
-    if not r:
+    if not rows:
         return {"as_of": None, "cadence_s": 60}
-    src = _j(r[3])
-    return {"as_of": r[0], "cadence_s": 60, "status": r[1], "total_usd": float(r[2]) if r[2] else None,
-            "net_deposits_usd": round(dep, 4),
-            "venues": [{"venue": k, "status": v.get("status"), "usd": float(v["equity_usd"]) if v.get("equity_usd") else None,
-                        "holdings": {h[:6]: q for h, q in (v.get("holdings") or {}).items()}} for k, v in src.items()]}
+    at, status, total, sj = rows[0]
+    cur = _j(sj)
+    venues = []
+    for k, v in cur.items():
+        st = v.get("status")
+        if st == "excluded":
+            venues.append({"venue": k, "status": "excluded", "usd": None, "last_ok_at": None, "age_s": None,
+                           "fresh": "excluded"})
+            continue
+        last_ok, usd = (v.get("read_at") or at, v.get("equity_usd")) if st == "ok" else (None, None)
+        if st != "ok":
+            for r in rows[1:]:
+                pv = _j(r[3]).get(k) or {}
+                if pv.get("status") == "ok":
+                    last_ok, usd = pv.get("read_at") or r[0], pv.get("equity_usd")
+                    break
+        age = now - _ts(last_ok) if last_ok else None
+        fresh = "red" if st != "ok" or age is None or age > 360 else "amber" if age > 150 else "ok"
+        venues.append({"venue": k, "status": st, "error": v.get("error"), "usd": float(usd) if usd else None,
+                       "last_ok_at": last_ok, "age_s": round(age, 1) if age is not None else None,
+                       "attempt_at": v.get("read_at") or at, "latency_ms": v.get("latency_ms"), "fresh": fresh,
+                       "holdings": {h[:6]: q for h, q in (v.get("holdings") or {}).items()}})
+    return {"as_of": at, "cadence_s": 60, "status": status, "total_usd": float(total) if total else None,
+            "net_deposits_usd": round(dep, 4), "venues": venues}
 
 
 def pm_history_section(dd: str) -> dict[str, Any]:
@@ -443,7 +467,7 @@ def build_live(main_db: str) -> dict[str, Any]:
            "smart": _cached("smart", 20, lambda: smart_section(smart_db)),
            "agents": _cached("agents", 30, lambda: agents_section(dd)),
            "looking": _cached("looking", 4, lambda: looking_section(dd, main_db, smart_db, now)),
-           "treasury": _cached("treasury", 5, lambda: treasury_section(main_db)),
+           "treasury": _cached("treasury", 5, lambda: treasury_section(main_db, now)),
            "pm_history": _cached("pmh", 300, lambda: pm_history_section(dd)),
            "near_close": _cached("near", 30, lambda: near_close_section(dd)),
            "xv": _cached("xv", 30, lambda: xv_section(main_db))}
