@@ -121,6 +121,8 @@ def pumpportal_wallet_check(warn_sol: float | None = None, fetch: Any = sol_bala
     if warn_sol is None:
         warn_sol = float(os.getenv("NOEMA_PUMPPORTAL_WARN_SOL", "0.025"))
     bal = fetch(addr)
+    if os.getenv("NOEMA_STREAM_TRADES", "0") != "1":  # keyed (metered) stream off -> balance is informational only
+        return True, f"{bal:.4f} SOL - keyed trade stream off (free Helius trades), no top-up needed"
     if bal < PUMPPORTAL_CUTOFF_SOL:
         return False, f"{bal:.4f} SOL - below PumpPortal's 0.02 SOL cutoff, keyed trades will stop"
     if bal < warn_sol:

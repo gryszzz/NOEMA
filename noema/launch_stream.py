@@ -29,7 +29,8 @@ CREATE_MARKERS = ("Instruction: Create", "Instruction: InitializeV2", "Instructi
 TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "180"))
 COMMIT_S = float(os.getenv("NOEMA_STREAM_COMMIT_S", "0.5"))  # short write txns: noema.db has many writers
 MAX_FOLLOW = int(os.getenv("NOEMA_STREAM_MAX_FOLLOW", "150"))
-# PumpPortal only serves per-token trades to an API key funded with >= 0.02 SOL (paid) - off by default.
+# PumpPortal per-token trades are METERED (0.01 SOL / 10k msgs, key wallet must hold >= 0.02 SOL). Off by default:
+# the free Helius logsSubscribe decoder below already sees every pump.fun bonding-curve trade.
 FOLLOW_TRADES = os.getenv("NOEMA_STREAM_TRADES", "0") == "1"
 # Free per-coin trades: decode pump.fun Anchor TradeEvent/CreateEvent from the same logsSubscribe stream
 # (no extra RPC calls -> free-tier friendly). Trades kept only for mints created < TRADE_FOLLOW_S ago.
@@ -304,6 +305,9 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
         try:
             async with websockets.connect(pumpportal_url(), ping_interval=20, max_size=2**22) as ws:
                 await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                await ws.send(json.dumps({"method": "subscribeMigration"}))  # free, unmetered
+                if not FOLLOW_TRADES:
+                    _pp_beat(True, None)
                 backoff, last_commit, fund_errs = 1.0, time.time(), 0
                 print(_now(), "pumpportal connected", flush=True)
                 while not stop.is_set():

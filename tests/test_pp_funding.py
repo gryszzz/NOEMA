@@ -15,3 +15,14 @@ def test_note_clears_on_accepted(tmp_path, monkeypatch):
     assert lf._pumpportal_note()
     log.write_text(log.read_text() + "pumpportal keyed trades accepted\n")
     assert lf._pumpportal_note() is None
+
+
+def test_wallet_check_informational_when_keyed_stream_off(monkeypatch):
+    from noema import watchdog
+    monkeypatch.setenv("NOEMA_PUMPPORTAL_WALLET_ADDRESS", "Addr111")
+    monkeypatch.delenv("NOEMA_STREAM_TRADES", raising=False)
+    ok, msg = watchdog.pumpportal_wallet_check(fetch=lambda a: 0.0)
+    assert ok and "no top-up needed" in msg
+    monkeypatch.setenv("NOEMA_STREAM_TRADES", "1")
+    ok, _ = watchdog.pumpportal_wallet_check(fetch=lambda a: 0.0)
+    assert not ok

@@ -101,9 +101,13 @@ def launch_section(db: str, now: float) -> dict[str, Any]:
     if "helius_launchlab" not in health and ll and ll[0]:
         health["helius_launchlab"] = {"last_at": _iso(ll[0]), "per_min": 0.0, "status": "idle (few LaunchLab trades)",
                                       "total": ll[1]}
+    keyed = os.getenv("NOEMA_STREAM_TRADES", "0") == "1"
+    if not keyed and health.get("pumpportal", {}).get("status") != "ok":
+        health["pumpportal"] = {"last_at": health.get("pumpportal", {}).get("last_at"), "per_min": 0.0,
+                                "status": "off (paid keyed trades disabled; helius supplies trades free)"}
     for src in ("helius", "pumpportal", "helius_launchlab"):
         health.setdefault(src, {"last_at": None, "per_min": 0.0, "status": "down (no trades in recent window)"})
-    note = _pumpportal_note()
+    note = _pumpportal_note() if keyed else None
     if note and health["pumpportal"]["status"] != "ok":
         health["pumpportal"]["status"] = note
     if cr:
