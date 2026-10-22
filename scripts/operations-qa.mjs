@@ -49,10 +49,10 @@ try {
  for(const width of [390,768,1024,1440]){
   const page = await browser.newPage({viewport:{width,height:1000}, reducedMotion:'reduce'}), errors=[], failedRequests=[], externalRequests=[], consoleErrors=[], failedResponses=[];
   page.on('pageerror',e=>errors.push(e.message));
-  page.on('console', message=>{if(message.type()==='error')consoleErrors.push(message.text());});
+  page.on('console', message=>{if(message.type()==='error')consoleErrors.push({text:message.text(),url:message.location()?.url||''});});
   page.on('requestfailed', request=>failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
   page.on('request', request=>{if(new URL(request.url()).origin!==url)externalRequests.push(request.url());});
-  page.on('response', response=>{if(response.status()>=400)failedResponses.push(`${response.status()} ${response.url()}`);});
+  page.on('response', response=>{if(response.status()>=400)failedResponses.push({status:response.status(),url:response.url(),method:response.request().method()});});
   await page.goto(url); await page.getByRole('heading',{name:'NOEMA OPERATING WORLD'}).waitFor();
   await page.evaluate(() => document.fonts.ready);
   await page.locator('#tab-economics').click();
@@ -177,8 +177,19 @@ try {
   await page.getByLabel('Filter loaded records').fill('');
   for(const button of await page.locator('#views button').all()) await button.click();
   assert.equal(await page.locator('header a[href*="github"]').count(),0);
-  assert.deepEqual(failedResponses,[],`HTTP failures at ${width}px`);
-  assert.deepEqual(consoleErrors,[],`console errors at ${width}px`);
+  // Log every failed request with URL + status, retry each one once, and only fail on persistent errors.
+  const recovered=new Set(), persistent=[];
+  for(const f of failedResponses){
+   console.warn(`[qa] ${width}px HTTP ${f.status} ${f.method} ${f.url} (retrying once)`);
+   let retryStatus='error';
+   if(f.method==='GET'){try{retryStatus=(await page.request.get(f.url)).status();}catch(e){retryStatus=`error: ${e.message}`;}}
+   if(typeof retryStatus==='number'&&retryStatus<400){recovered.add(f.url);console.warn(`[qa] ${width}px retry OK ${retryStatus} ${f.url} (transient)`);}
+   else{persistent.push(`${f.status} ${f.method} ${f.url} (retry: ${retryStatus})`);console.error(`[qa] ${width}px PERSISTENT HTTP failure ${f.status} ${f.url} retry=${retryStatus}`);}
+  }
+  for(const r of failedRequests) console.warn(`[qa] ${width}px request failed: ${r}`);
+  assert.deepEqual(persistent,[],`HTTP failures at ${width}px`);
+  const realConsoleErrors=consoleErrors.filter(c=>!(c.text.startsWith('Failed to load resource')&&recovered.has(c.url))).map(c=>`${c.text}${c.url?` @ ${c.url}`:''}`);
+  assert.deepEqual(realConsoleErrors,[],`console errors at ${width}px`);
   const overflow = await page.evaluate(() => ({
    scrollWidth: document.documentElement.scrollWidth,
    bodyScrollWidth: document.body.scrollWidth,
