@@ -46,6 +46,11 @@ class TrenchResearchStore:
             )
             """
         )
+        # pending_reconciliation_mints() probes candidates by token every sampler pass; without this
+        # index the probe grew to ~30s at 50k observations and starved the 30s-120s windows.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_trench_candidates_token ON trench_candidates(token_mint)"
+        )
         self.conn.execute(
             """CREATE TABLE IF NOT EXISTS trench_candidate_maturities (
                 candidate_id TEXT PRIMARY KEY,
