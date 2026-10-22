@@ -1108,6 +1108,14 @@ async def crawl_live_api() -> dict[str, Any]:
     return await asyncio.to_thread(crawl_live, _db_path())
 
 
+@app.get("/api/treasury")
+async def treasury_api() -> dict[str, Any]:
+    """Read-only treasury board (tev.treasury.v1): real equity series + per-venue balances, deposits,
+    capital-guard floor/peak/daily stop, and a separate clearly-labelled paper block."""
+    from .treasury import treasury_board
+    return await asyncio.to_thread(treasury_board, _db_path())
+
+
 @app.get("/api/strategies")
 async def strategies_api() -> dict[str, Any]:
     """Read-only structural-edge strategy book (paper): per-strategy P&L, n, EV, backtest verdict,
