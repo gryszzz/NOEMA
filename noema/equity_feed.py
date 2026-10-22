@@ -265,7 +265,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Prices], Awaitable[SourceReading
 # -- storage, deposits, guard handoff --------------------------------------------
 def _connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=10)
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("""CREATE TABLE IF NOT EXISTS equity_feed_readings (
         at TEXT NOT NULL, status TEXT NOT NULL, total_usd TEXT, deposit_usd TEXT NOT NULL,
         sources_json TEXT NOT NULL)""")

@@ -301,6 +301,7 @@ function pm(){const m=(S.cc||{}).markets||{},w=m.watched_counts||{};$("pm-tag").
 /* ---------- treasury ---------- */
 function treas(){const t=S.tr||{},v6=S.v6||{},rows=[];
  for(const v of t.venues||[]){if(v.venue==="Solana wallet")rows.push(["SOL "+(v.address?v.address.slice(0,4)+"…"+v.address.slice(-4):"wallet"),`${f2(v.sol,5)} SOL`,v.status]);else rows.push([v.venue,usd(v.cash_usd),`${v.status} · ${v.position_count} pos`])}
+ if(!rows.some(r=>/^SOL /.test(r[0]))){const so=(((v6.capital||{}).feed||{}).sources||{}).solana;if(so)rows.unshift(["Solana wallet",so.equity_usd==null?"—":usd(+so.equity_usd),so.status||"—"])}
  for(const e of v6.evm_balances||[])rows.push([`${e.chain} 0x92B9…59C8`,e.balance==null?"—":`${(+e.balance).toPrecision(3)} ${e.unit}`,e.status]);
  const sg=(v6.signers||[]).map(s=>`<span class="pill" style="font-size:10px">${s.family.toUpperCase()} <b class="${s.state==="ARMED"?"bad":"ok"}">${esc(s.state)}</b></span>`).join(" ");
  $("treas").innerHTML=(rows.length?`<table>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td><b>${esc(r[1])}</b></td><td class="dim">${esc(r[2])}</td></tr>`).join("")}</table>`:'<div class="empty">No balances available.</div>')+`<div style="margin:4px 0">signers ${sg||'<span class="dim">unknown</span>'}</div><canvas id="eq" style="width:100%;height:60px"></canvas><div class="dim" style="font-size:10px">paper desk equity (${(t.equity_series||[]).length} snapshots)</div>`;
@@ -354,4 +355,5 @@ load();setInterval(load,15000);setTimeout(flipNext,300);
 <link rel="stylesheet" href="/static/opp-feed.css"><script src="/static/opp-feed.js" defer></script>
 <link rel="stylesheet" href="/static/room-v7-onepage.css"><script src="/static/room-v7-onepage.js" defer></script>
 <script src="/static/room-roam.js" defer></script>
+<link rel="stylesheet" href="/static/live-panels.css"><script src="/static/live-panels.js" defer></script>
 </body></html>

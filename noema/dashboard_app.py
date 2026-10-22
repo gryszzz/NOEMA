@@ -1116,6 +1116,39 @@ async def treasury_api() -> dict[str, Any]:
     return await asyncio.to_thread(treasury_board, _db_path())
 
 
+@app.get("/api/live")
+async def live_api() -> dict[str, Any]:
+    """Poll fallback for the live room: same snapshot the SSE stream pushes (paper/read-only)."""
+    from .live_feed import build_live
+    return await asyncio.to_thread(build_live, _db_path())
+
+
+@app.get("/api/live/stream")
+async def live_stream(request: Request) -> Any:
+    """Server push (SSE): a fresh snapshot whenever it changes (checked every 2 s), heartbeat every 15 s."""
+    from fastapi.responses import StreamingResponse
+
+    from .live_feed import build_live
+
+    async def gen() -> Any:
+        last, beat = "", time.monotonic()
+        yield "retry: 3000\n\n"
+        while not await request.is_disconnected():
+            snap = await asyncio.to_thread(build_live, _db_path())
+            body = json.dumps({k: v for k, v in snap.items() if k not in ("at", "build_ms")}, default=str)
+            if body != last:
+                last = body
+                snap["pushed_at"] = datetime.now(UTC).isoformat()
+                yield f"data: {json.dumps(snap, default=str)}\n\n"
+                beat = time.monotonic()
+            elif time.monotonic() - beat > 15:
+                yield ": hb\n\n"
+                beat = time.monotonic()
+            await asyncio.sleep(2)
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/smart-wallets")
 async def smart_wallets_api() -> dict[str, Any]:
     """Smart-wallet study (paper/read-only): vetted wallets, patterns, SMART-FOLLOW paper results, recent moves."""
