@@ -23,6 +23,19 @@ R.newOpps=(seen,items)=>{if(!seen)return[];return(items||[]).filter(it=>it&&it.i
 R.land=(rect,vw,vh)=>{const x=rect.left+Math.min(70,rect.width/2),y=rect.top+12;const cx=Math.max(16,Math.min(vw-16,x)),cy=Math.max(16,Math.min(vh-16,y));
  return{x:cx,y:cy,off:cy!==y?(y<cy?"up":"down"):cx!==x?(x<cx?"left":"right"):null}};
 R.step=(p,t,dt,speed)=>{const dx=t.x-p.x,dy=t.y-p.y,d=Math.hypot(dx,dy),m=speed*dt;if(d<=m||d<.5)return{x:t.x,y:t.y,done:true,moved:d};return{x:p.x+dx/d*m,y:p.y+dy/d*m,done:false,moved:m}};
+/* ---------- /api/crawl-live: one leg per real concurrent request ---------- */
+R.kindOf=e=>{const h=String((e&&e.host)||"").toLowerCase(),s=String((e&&e.source)||"").toLowerCase(),c=String((e&&e.crawler)||"").toLowerCase();
+ if(/(^|\.)x\.com|twitter/.test(h)||s==="x")return"x";if(/gecko/.test(h))return"geckoterminal";if(/dexscreener/.test(h))return"dexscreener";if(/pump/.test(h))return"pumpfun";
+ if(/kalshi/.test(h))return"kalshi";if(/polymarket/.test(h))return"polymarket";if(c.includes("culture"))return"culture";if(c.includes("news"))return"news";return"rpc"};
+R.liveState=(d,now)=>{const E=(d&&d.entries)||[],fl=[],done=[];let items=0;
+ for(const e of E){const st=ts(e.started_at);if(!st)continue;
+  if(e.status==="in_flight"){if(now-st<60e3)fl.push(e);continue}
+  const end=st+(+e.duration_ms||0);if(now-end<60e3)items+=(+e.items||0);
+  if(now-end<3500)done.push({...e,end,ok:/^(2\d\d|304|ok)$/i.test(String(e.status)),rl:String(e.status)==="429"})}
+ return{inflight:fl.slice(0,8),done,itemsPerMin:items,caption:fl.length||items?`${fl.length} fetch${fl.length===1?"":"es"} in flight · ${items} items/min`:"idle · legs resting"}};
+R.live=null;R.liveOk=null;R.seenDone=new Set();R.fx=[];
+async function pollLive(){if(R.liveOk===false&&Math.random()>.05)return;try{const r=await fetch("/api/crawl-live",{cache:"no-store",credentials:"same-origin"});
+ if(!r.ok){R.liveOk=false;R.live=null;return}const d=await r.json();if(d&&d.schema==="tev.crawl_live.v1"){R.live=d;R.liveOk=true}else{R.liveOk=false;R.live=null}}catch(e){R.liveOk=false;R.live=null}}
 /* ---------- DOM ---------- */
 const doc=typeof document!=="undefined"?document:null;
 function el(kind){for(const id of R.TARGETS[kind]||[]){const e=doc.getElementById(id);if(e&&e.getClientRects().length){const r=e.getBoundingClientRect();if(r.width>4&&r.height>4)return{e,r}}}return null}
@@ -51,11 +64,11 @@ R.ik=(hx,hy,fx,fy,l1,l2,ox,fa)=>{let dx=fx-hx,dy=fy-hy,d=Math.hypot(dx,dy)||1e-6
  const sc=k=>k.x*ox+(fa||0)*-k.y*1;const k=sc(k1)>sc(k2)?k1:k2;return{knee:k,foot:{x:fx,y:fy}}};
 R.legPose=(c,j,side,t)=>{const st=c.stride||0,ph=R.legPhase(c.gait||0,j,side),S=3.4*st,lift=ph.lift*st;
  let tw=0;if(!R.reduced&&st<.2){const n=Math.sin(t*.0021*(1+j*.37)+j*2.1+side)*Math.sin(t*.0013+j*1.3*side);tw=n>.82?(n-.82)*9:0}
- const hx=side*3,hy=R.HIPS[j],fx=side*(R.REST[j][0]-lift*1+tw*.6),fy=R.REST[j][1]-ph.off*S-tw*1.4;
+ const rc=((c.reach||[])[(side>0?4:0)+j])||0;const hx=side*3,hy=R.HIPS[j],fx=side*(R.REST[j][0]-lift*1+tw*.6+rc*5),fy=R.REST[j][1]-ph.off*S-tw*1.4-rc*5;
  const r=R.ik(hx,hy,fx,fy,R.L1[j],R.L2[j],side,j<2?1:-1);
  /* tarsus: last ~30% of the tibia, kinked downward/outward so each leg reads as 3 segments */
  const kx=r.knee.x,ky=r.knee.y,ax=kx+(r.foot.x-kx)*.68+side*(1.3+lift),ay=ky+(r.foot.y-ky)*.68+(j<2?-1:1)*.6;
- return{hip:{x:hx,y:hy},knee:r.knee,ankle:{x:ax,y:ay},foot:r.foot,lift}};
+ return{hip:{x:hx,y:hy},knee:r.knee,ankle:{x:ax,y:ay},foot:r.foot,lift:Math.max(lift,rc*.6)}};
 let GLOW=null;function glow(){if(GLOW||!doc)return GLOW;const g=doc.createElement("canvas");g.width=g.height=32;const x=g.getContext("2d"),rg=x.createRadialGradient(16,16,0,16,16,16);
  rg.addColorStop(0,"rgba(220,255,255,1)");rg.addColorStop(.18,"rgba(39,231,255,.95)");rg.addColorStop(.5,"rgba(39,231,255,.28)");rg.addColorStop(1,"rgba(39,231,255,0)");x.fillStyle=rg;x.fillRect(0,0,32,32);return GLOW=g}
 function node(x,g,p,r,a){x.globalAlpha=a;x.drawImage(g,p.x-r,p.y-r,r*2,r*2)}
@@ -79,6 +92,19 @@ function drawSpider(x,c,size,moving,t){const s=size,mini=c!==R.main,g=glow();
  if(g){x.globalCompositeOperation="lighter";node(x,g,{x:0,y:7},mini?4:6,.35);x.globalCompositeOperation="source-over";x.globalAlpha=1}
  x.fillStyle="#ff3b6b";x.beginPath();x.arc(-1.4,-4.6,.9,0,7);x.arc(1.4,-4.6,.9,0,7);x.fill();x.restore()}
 R.draw=drawSpider;
+function footWorld(c,i,t){const side=i<4?-1:1,j=i%4,P=R.legPose(c,j,side,t),h=c.heading||0,s=c.size,co=Math.cos(h),si=Math.sin(h);return{x:c.x+(P.foot.x*co-P.foot.y*si)*s,y:c.y+(P.foot.x*si+P.foot.y*co)*s}}
+function liveDraw(x,c,t,now,vw,vh){const L=R.live;if(!L){c.reach=null;return}const S=R.liveState(L,now);c.reach=c.reach||new Array(8).fill(0);
+ const want=new Array(8).fill(0);S.inflight.forEach((e,i)=>{want[i]=1});for(let i=0;i<8;i++)c.reach[i]+=(want[i]-c.reach[i])*.12;
+ S.inflight.forEach((e,i)=>{const tg=el(R.kindOf(e));if(!tg)return;const T=R.land(tg.r,vw,vh),F=footWorld(c,i,t);const sh=.5+.5*Math.sin(now/180+i);
+  x.strokeStyle=`rgba(39,231,255,${.35+.4*sh})`;x.lineWidth=1.1;x.shadowColor="#27e7ff";x.shadowBlur=6;x.beginPath();x.moveTo(F.x,F.y);x.quadraticCurveTo((F.x+T.x)/2,Math.min(F.y,T.y)-30,T.x,T.y);x.stroke();x.shadowBlur=0;
+  x.fillStyle="#9ff";x.font="9px ui-monospace,monospace";x.fillText(String(e.host||"").slice(0,22),T.x+6,T.y-4)});
+ for(const e of S.done){const k=e.id+":"+e.status;if(R.seenDone.has(k))continue;R.seenDone.add(k);if(R.seenDone.size>400)R.seenDone=new Set([...R.seenDone].slice(-200));R.fx.push({e,t:now,kind:R.kindOf(e)})}
+ R.fx=R.fx.filter(f=>now-f.t<1400);for(const f of R.fx){const tg=el(f.kind);if(!tg)continue;const T=R.land(tg.r,vw,vh),q=(now-f.t)/1400;
+  if(f.e.ok){const px=T.x+(c.x-T.x)*q,py=T.y+(c.y-T.y)*q,r=2+Math.min(6,Math.log2(1+(+f.e.items||0))*1.5);x.strokeStyle=`rgba(57,255,156,${1-q})`;x.lineWidth=.6+r*.25;
+   x.beginPath();x.moveTo(T.x,T.y);x.lineTo(c.x,c.y);x.stroke();x.fillStyle=`rgba(57,255,156,${1-q*.6})`;x.beginPath();x.arc(px,py,r,0,7);x.fill()}
+  else{x.strokeStyle=`rgba(255,59,107,${1-q})`;x.lineWidth=2.4;x.beginPath();x.moveTo(T.x,T.y);x.lineTo(c.x,c.y);x.stroke();x.fillStyle="#ff3b6b";x.font="bold 10px ui-monospace,monospace";x.fillText(f.e.rl?"429":"ERR "+f.e.status,T.x+6,T.y+12)}}
+ x.font="10px ui-monospace,monospace";const cap=S.caption,tw=x.measureText(cap).width+8,lx=Math.max(4,Math.min(vw-tw-4,c.x-tw/2)),ly=Math.min(vh-16,c.y+c.size*26);
+ x.fillStyle="rgba(4,14,22,.85)";x.fillRect(lx,ly,tw,14);x.fillStyle=S.inflight.length?"#27e7ff":"#5f8aa3";x.fillText(cap,lx+4,ly+10.5)}
 function tick(t){R.raf=0;const cv=canvas(),vw=innerWidth,vh=innerHeight,dpr=devicePixelRatio||1;if(cv.width!==Math.round(vw*dpr)||cv.height!==Math.round(vh*dpr)){cv.width=Math.round(vw*dpr);cv.height=Math.round(vh*dpr)}
  const x=cv.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,vw,vh);const now=Date.now(),dt=Math.min(.05,R.lastT?(t-R.lastT)/1e3:.016);R.lastT=t;
  const sc=Math.max(1.4,Math.min(2.4,vw/1100));if(!R.main)R.main=crawler(sc);R.main.size=sc;
@@ -103,12 +129,12 @@ function tick(t){R.raf=0;const cv=canvas(),vw=innerWidth,vh=innerHeight,dpr=devi
   /* dragline from where it last stood */
   x.strokeStyle="rgba(39,231,255,.45)";x.lineWidth=.8;x.beginPath();x.moveTo(c.anchor.x,c.anchor.y);x.lineTo(c.x,c.y);x.stroke();
   c.stride=R.reduced?0:(c.stride||0)+((c.moving?1:0)-(c.stride||0))*Math.min(1,dt*7);
-  drawSpider(x,c,c.size,c.moving,t)}
+  drawSpider(x,c,c.size,c.moving,t);if(c===R.main)liveDraw(x,c,t,now,vw,vh)}
  /* idle minis retire back into the main spider */
  R.minis=R.minis.filter(m=>m.ev||(Math.hypot(m.x-R.main.x,m.y-R.main.y)>4&&(m.moving=true,m.dir=Math.atan2(R.main.y-m.y,R.main.x-m.x),Object.assign(m,R.step(m,R.main,dt,speed)),m.gait=(m.gait||0)+m.moved/(m.size*19),!m.done)));
  R.raf=requestAnimationFrame(tick)}
 function boot(){if(!doc||!doc.body)return;const mq=W_.matchMedia&&W_.matchMedia("(prefers-reduced-motion: reduce)");R.reduced=!!(mq&&mq.matches);mq&&mq.addEventListener&&mq.addEventListener("change",e=>{R.reduced=e.matches});
- setInterval(()=>{try{poll()}catch(e){console.error(e)}},1000);if(!R.raf)R.raf=requestAnimationFrame(tick);
+ setInterval(()=>{try{poll()}catch(e){console.error(e)}},1000);pollLive();setInterval(pollLive,2000);if(!R.raf)R.raf=requestAnimationFrame(tick);
  doc.addEventListener("visibilitychange",()=>{if(!doc.hidden&&!R.raf){R.lastT=0;R.raf=requestAnimationFrame(tick)}})}
 if(doc&&doc.addEventListener){if(doc.readyState==="loading")doc.addEventListener("DOMContentLoaded",()=>setTimeout(boot,200));else setTimeout(boot,200)}
 })();

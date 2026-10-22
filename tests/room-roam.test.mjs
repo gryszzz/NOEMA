@@ -42,3 +42,23 @@ test("legs at rest with no stride stay planted (no gait offset)", () => {
   const a = R.legPose({ gait: 0.1, stride: 0 }, 1, 1, 0), b = R.legPose({ gait: 0.7, stride: 0 }, 1, 1, 0);
   assert.ok(Math.abs(a.foot.y - b.foot.y) < 1e-9);
 });
+
+test('crawl-live maps hosts to sources and builds an honest caption', () => {
+  const src = readFileSync(new URL('../noema/static/room-roam.js', import.meta.url), 'utf8');
+  const ctx = { window: {} }; ctx.globalThis = ctx;
+  (new Function('window', 'document', src))(ctx.window, undefined);
+  const R = ctx.window.TEV_ROAM;
+  assert.equal(R.kindOf({ host: 'api.geckoterminal.com' }), 'geckoterminal');
+  assert.equal(R.kindOf({ host: 'feeds.reuters.com', crawler: 'news' }), 'news');
+  assert.equal(R.kindOf({ host: 'api.elections.kalshi.com' }), 'kalshi');
+  const now = Date.parse('2026-10-22T01:00:10Z');
+  const s = R.liveState({ entries: [
+    { id: 1, host: 'a', started_at: '2026-10-22T01:00:08Z', status: 'in_flight' },
+    { id: 2, host: 'b', started_at: '2026-10-22T01:00:05Z', duration_ms: 3000, status: '200', items: 12 },
+    { id: 3, host: 'c', started_at: '2026-10-22T01:00:06Z', duration_ms: 2000, status: '429' },
+    { id: 4, host: 'd', started_at: '2026-10-22T00:50:00Z', status: 'in_flight' }] }, now);
+  assert.equal(s.inflight.length, 1); // stale in-flight rows are not shown as live
+  assert.equal(s.caption, '1 fetch in flight · 12 items/min');
+  assert.equal(s.done.find(d => d.id === 3).rl, true);
+  assert.equal(R.liveState({ entries: [] }, now).caption, 'idle · legs resting');
+});
