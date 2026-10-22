@@ -19,7 +19,7 @@ T.isSportsOrSettled=(r)=>{const p=+r.market_p;return SPORTS.test(r.title||r.mark
 function scaffold(){const app=document.querySelector(".app"),hdr=app&&app.querySelector("header");if(!hdr||byId("v7-tape"))return;
  hdr.insertAdjacentHTML("afterend",`<div id="v7-tape" title="real values only; hover to pause"><div class="trk" id="v7-trk"></div></div><div id="v7-pulse"><span class="think">TEV IS THINKING ▸</span><span class="hl" id="v7-hl">connecting to /api/room-v7…</span><span class="v7-regime UNKNOWN" id="v7-reg" title="">REGIME —</span><div class="tl" id="v7-tl" title="last real desk events (green approve/entry · red veto/fire · cyan sweep)"></div></div>`);
  const bay=document.querySelector(".bay");if(bay&&!byId("v7-scan"))bay.insertAdjacentHTML("afterbegin",`<div id="v7-scan"><div class="lh"><b>SCAN LANE</b><span id="v7-sc-t">waiting for a real sweep…</span><span style="margin-left:auto" id="v7-sc-n"></span></div><div class="judge" id="v7-judge">TO<br>JUDGE</div><div class="pf"><span id="v7-pf">pump.fun new launches: waiting for sweep</span></div></div>`);
- const right=document.querySelector(".right");if(right&&!byId("v7-eqp"))right.insertAdjacentHTML("afterbegin",`<section class="pnl v7p" id="v7-eqp"><h2>TREASURY · REAL MONEY<span class="tag" id="v7-eq-t">read-only equity feed</span></h2><div class="body"><div id="v7-tr-head"></div><canvas id="v7-eq"></canvas><div class="v7-kv" id="v7-eq-kv"></div><div id="v7-tr-paper"></div></div></section><section class="pnl v7p" id="v7-pmc"><h2>PREDICTION MKT CANDLES<span class="tag" id="v7-pmc-t">our stored quotes → OHLC</span></h2><div class="body"><canvas id="v7-pmc-cv"></canvas><div class="dim" id="v7-pmc-s"></div></div></section><section class="pnl v7p" id="v7-stp"><h2>STRIPE · FINANCES<span class="tag">read-only · never funds trades</span></h2><div class="body" id="v7-stripe"><div class="empty">loading…</div></div></section>`);
+ const right=document.querySelector(".right");if(right&&!byId("v7-eqp"))right.insertAdjacentHTML("afterbegin",`<section class="pnl v7p" id="v7-eqp"><h2>TREASURY · REAL MONEY<span class="tag" id="v7-eq-t">read-only equity feed</span></h2><div class="body"><div id="v7-tr-head"></div><canvas id="v7-eq"></canvas><div class="v7-kv" id="v7-eq-kv"></div></div></section><section class="pnl v7p" id="v7-pmc"><h2>PREDICTION MKT CANDLES<span class="tag" id="v7-pmc-t">our stored quotes → OHLC</span></h2><div class="body"><canvas id="v7-pmc-cv"></canvas><div class="dim" id="v7-pmc-s"></div></div></section><section class="pnl v7p" id="v7-stp"><h2>STRIPE · FINANCES<span class="tag">read-only · never funds trades</span></h2><div class="body" id="v7-stripe"><div class="empty">loading…</div></div></section>`);
  const left=document.querySelector(".left");/* heat map removed: NEWS wire takes its place in the left column (see room-v6 aw-news) */if(false)left.insertAdjacentHTML("beforeend",`<section class="pnl v7p" id="v7-hp" style="flex:0 0 auto;max-height:34%"><h2>HEAT MAP<span class="tag" id="v7-heat-t">scanned pools · 5m move</span></h2><div class="body"><div id="v7-heat"></div></div></section>`);
  document.body.insertAdjacentHTML("beforeend",`<svg id="v7-links"></svg><div id="v7-flash"></div><div id="v7-keys"><div><h3>TEV · SHORTCUTS</h3><p><kbd>?</kbd>this overlay</p><p><kbd>S</kbd>decision sound <b id="v7-k-s"></b></p><p><kbd>F</kbd>decision flash <b id="v7-k-f"></b></p><p><kbd>P</kbd>pause / resume scan lane</p><p><kbd>A</kbd>prediction board: show all / actionable</p><p><kbd>R</kbd>refresh all feeds now</p><p><kbd>Esc</kbd>close</p><p class="dim">Cmd-R reload · Cmd-F full screen (Mac app)</p></div></div>`);
  const ch=byId("chain");if(bay&&ch)bay.after(ch);
@@ -30,7 +30,7 @@ function scaffold(){const app=document.querySelector(".app"),hdr=app&&app.queryS
 function tape(){const d=V.d||{},g=(d.equity||{}).guard,px=d.prices||{},tr=SS().tr||{};
  const openPos=(tr.seats||[]).reduce((a,s)=>a+(+s.open_positions||0),0);const it=[];
  const cls=v=>v>0?"up":v<0?"dn":"";
- it.push(["EQUITY",g?U(g.equity_usd):"—"],["FLOOR",g?U(g.floor_usd):"—"],["PEAK",g?U(g.peak_usd):"—"]);
+ it.push(["EQUITY",g?U(g.equity_usd):"—"]);
  it.push(["DAY P&L",g?`<span class="${cls(g.day_pnl_usd)}">${g.day_pnl_usd>=0?"+":""}${N(g.day_pnl_usd,4)}</span>`:"—"]);
  for(const k of ["BTC","SOL","ETH"]){const p=px[k];it.push([k,p?`${U(p.usd)}${p.change_24h_pct!=null?` <span class="${cls(p.change_24h_pct)}">${p.change_24h_pct>0?"+":""}${N(p.change_24h_pct,2)}%</span>`:""}`:"—"])}
  it.push(["PAPER POSITIONS",tr.seats?String(openPos):"—"]);
@@ -170,7 +170,7 @@ window.wireSources=function(){const ev=(SS().v6||{}).lanes?.find(l=>l.lane==="ev
  const tg=byId("wire-tgt");if(tg)tg.innerHTML=T2.slice(0,3).map(t=>`<div><i>TARGET</i> ${E(t.market||"")} ⟵ <i>${E(t.backend)}</i> “${E(t.query||"")}” · ${t.results??0} results · ${t.linked??0} linked</div>`).join("")+(dropped?`<div class="dim">${dropped} rulebook-boilerplate quer${dropped>1?"ies":"y"} hidden</div>`:"")};
 
 /* ---------- treasury: real balance only (guard runs server-side, not drawn) ---------- */
-function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(!cv)return;const head=byId("v7-tr-head"),kv=byId("v7-eq-kv"),pp=byId("v7-tr-paper");
+function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(!cv)return;const head=byId("v7-tr-head"),kv=byId("v7-eq-kv");
  if(!T||!T.real){head.innerHTML='<div class="dim">waiting for the first real equity reading…</div>';return}
  const r=T.real,g=T.guard||{},S=(T.series||[]).filter(p=>p.usd!=null),sg=v=>v>=0?"+":"−",pc=v=>v==null?"—":sg(v)+N(Math.abs(v),2)+"%",ago=Math.max(0,Math.round((Date.now()-Date.parse(r.last_reading_at))/1000)),agoS=ago<90?ago+"s":Math.round(ago/60)+"m",stale=ago>900;
  head.innerHTML=`<div class="tr-big">$${N(r.total_usd,4)}<span class="tr-sub">total real balance · last reading <b class="${stale?"bad":"ok"}">${agoS} ago</b>${stale?" (stale)":""}</span></div>
@@ -186,9 +186,7 @@ function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(
  x.fillStyle="#5f8aa3";x.fillText(new Date(t0).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}),4,H-1);}
  byId("v7-eq-t").textContent=`${S.length} real readings · every 5 min`;
  kv.innerHTML=`<span class="dim">"today" = UTC day (from 8 PM ET)</span>`;
- const P=T.paper||{},D=(P.desks||[]).filter(p=>p.usd!=null),ab=P.alpha_book,dl=D.at(-1);
- pp.innerHTML=`<div class="tr-paper"><b>PAPER · simulated, not real money</b>${dl?`<span>desk book $${N(dl.usd,2)} <b class="${cls(dl.pnl_usd)}">${sg(dl.pnl_usd)}${N(Math.abs(dl.pnl_usd),2)}</b></span>`:""}${ab?`<span>alpha book cash $${N(ab.cash_usd,2)} of $${N(ab.start_usd,0)}</span>`:""}<canvas id="v7-tr-pcv"></canvas></div>`;
- const pc2=byId("v7-tr-pcv");if(pc2&&D.length>1){const w=pc2.clientWidth,h=pc2.clientHeight,c2=pc2.getContext("2d");pc2.width=w*dpr;pc2.height=h*dpr;c2.scale(dpr,dpr);const v=D.map(p=>p.usd),a=Math.min(...v),b=Math.max(...v);c2.strokeStyle="rgba(182,123,255,.9)";c2.lineWidth=1.3;c2.beginPath();v.forEach((y,i)=>{const X=i/(v.length-1)*w,YY=h-2-(y-a)/((b-a)||1)*(h-4);i?c2.lineTo(X,YY):c2.moveTo(X,YY)});c2.stroke()}}
+}
 async function pollTreasury(){try{const r=await fetch("/api/treasury",{cache:"no-store"});if(r.ok){V.tr=await r.json();equity()}}catch(e){}}
 setTimeout(pollTreasury,300);setInterval(pollTreasury,30000);setInterval(()=>{try{equity()}catch(e){}},15000);
 
