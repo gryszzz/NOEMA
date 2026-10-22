@@ -118,7 +118,7 @@ def _pumpportal_note() -> str | None:
     p = os.getenv("NOEMA_LAUNCH_LOG", "/workspace/noema-run/launch_stream.log")
     try:
         with open(p, "rb") as f:
-            f.seek(max(0, os.path.getsize(p) - 6000))
+            f.seek(max(0, os.path.getsize(p) - 200_000))
             tail = f.read().decode("utf-8", "replace")
     except OSError:
         return None
