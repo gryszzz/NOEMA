@@ -19,7 +19,7 @@ T.isSportsOrSettled=(r)=>{const p=+r.market_p;return SPORTS.test(r.title||r.mark
 function scaffold(){const app=document.querySelector(".app"),hdr=app&&app.querySelector("header");if(!hdr||byId("v7-tape"))return;
  hdr.insertAdjacentHTML("afterend",`<div id="v7-tape" title="real values only; hover to pause"><div class="trk" id="v7-trk"></div></div><div id="v7-pulse"><span class="think">TEV IS THINKING ▸</span><span class="hl" id="v7-hl">connecting to /api/room-v7…</span><span class="v7-regime UNKNOWN" id="v7-reg" title="">REGIME —</span><div class="tl" id="v7-tl" title="last real desk events (green approve/entry · red veto/fire · cyan sweep)"></div></div>`);
  const bay=document.querySelector(".bay");if(bay&&!byId("v7-scan"))bay.insertAdjacentHTML("afterbegin",`<div id="v7-scan"><div class="lh"><b>SCAN LANE</b><span id="v7-sc-t">waiting for a real sweep…</span><span style="margin-left:auto" id="v7-sc-n"></span></div><div class="judge" id="v7-judge">TO<br>JUDGE</div><div class="pf"><span id="v7-pf">pump.fun new launches: waiting for sweep</span></div></div>`);
- const right=document.querySelector(".right");if(right&&!byId("v7-eqp"))right.insertAdjacentHTML("afterbegin",`<section class="pnl v7p" id="v7-eqp"><h2>EQUITY vs FLOOR<span class="tag" id="v7-eq-t">real equity feed</span></h2><div class="body"><canvas id="v7-eq"></canvas><div class="v7-kv" id="v7-eq-kv"></div></div></section><section class="pnl v7p" id="v7-stp"><h2>STRIPE · FINANCES<span class="tag">read-only · never funds trades</span></h2><div class="body" id="v7-stripe"><div class="empty">loading…</div></div></section>`);
+ const right=document.querySelector(".right");if(right&&!byId("v7-eqp"))right.insertAdjacentHTML("afterbegin",`<section class="pnl v7p" id="v7-eqp"><h2>EQUITY vs FLOOR<span class="tag" id="v7-eq-t">real equity feed</span></h2><div class="body"><canvas id="v7-eq"></canvas><div class="v7-kv" id="v7-eq-kv"></div></div></section><section class="pnl v7p" id="v7-pmc"><h2>PREDICTION MKT CANDLES<span class="tag" id="v7-pmc-t">our stored quotes → OHLC</span></h2><div class="body"><canvas id="v7-pmc-cv"></canvas><div class="dim" id="v7-pmc-s"></div></div></section><section class="pnl v7p" id="v7-stp"><h2>STRIPE · FINANCES<span class="tag">read-only · never funds trades</span></h2><div class="body" id="v7-stripe"><div class="empty">loading…</div></div></section>`);
  const left=document.querySelector(".left");/* heat map removed: NEWS wire takes its place in the left column (see room-v6 aw-news) */if(false)left.insertAdjacentHTML("beforeend",`<section class="pnl v7p" id="v7-hp" style="flex:0 0 auto;max-height:34%"><h2>HEAT MAP<span class="tag" id="v7-heat-t">scanned pools · 5m move</span></h2><div class="body"><div id="v7-heat"></div></div></section>`);
  document.body.insertAdjacentHTML("beforeend",`<svg id="v7-links"></svg><div id="v7-flash"></div><div id="v7-keys"><div><h3>TEV · SHORTCUTS</h3><p><kbd>?</kbd>this overlay</p><p><kbd>S</kbd>decision sound <b id="v7-k-s"></b></p><p><kbd>F</kbd>decision flash <b id="v7-k-f"></b></p><p><kbd>P</kbd>pause / resume scan lane</p><p><kbd>A</kbd>prediction board: show all / actionable</p><p><kbd>R</kbd>refresh all feeds now</p><p><kbd>Esc</kbd>close</p><p class="dim">Cmd-R reload · Cmd-F full screen (Mac app)</p></div></div>`);
  const ch=byId("chain");if(bay&&ch)bay.after(ch);
@@ -80,11 +80,8 @@ function metricBars(x,W,H,it){const R=T.metricRows(it);x.font="9px monospace";x.
  if(!R.length)return;const bh=Math.max(5,Math.min(12,(H-16)/R.length-3));let k=0;
  const step=()=>{k=Math.min(1,k+.08);R.forEach((r,i)=>{const y=14+i*(bh+3),w=(W-64)*r[2](r[1])*k;x.clearRect(56,y,W-56,bh);x.fillStyle="#5f8aa3";x.fillText(r[0],4,y+bh-1);
   x.fillStyle=r[0]==="5m %"?(r[1]<0?"#ff3b6b":"#39ff9c"):"#27e7ff";x.fillRect(56,y,Math.max(1,w),bh)});if(k<1)requestAnimationFrame(step)};step()}
-function miniChart(cv,c){const W=cv.clientWidth,H=cv.clientHeight,dpr=window.devicePixelRatio||1;if(!W||!H)return;cv.width=W*dpr;cv.height=H*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);
- if(!c||c.length<2){metricBars(x,W,H,cv._it||{});return}
- const hi=Math.max(...c),lo=Math.min(...c),r=(hi-lo)||1,up=c.at(-1)>=c[0];let k=1;x.lineWidth=1.6;x.strokeStyle=up?"#39ff9c":"#ff3b6b";
- const P=i=>[i/(c.length-1)*W,H-3-(c[i]-lo)/r*(H-6)];
- const step=()=>{if(!cv.isConnected)return;for(let s=0;s<3&&k<c.length;s++,k++){x.beginPath();x.moveTo(...P(k-1));x.lineTo(...P(k));x.stroke()}if(k<c.length)requestAnimationFrame(step)};step()}
+/* real OHLC candles (GeckoTerminal) via tev-candles.js; never a price line */
+function miniChart(cv,it,lab){if(!window.TEVCandles)return;TEVCandles.draw(cv,it.ohlc||[],{interval:it.interval,label:lab,key:lab,markers:it.markers||[],empty:"no candle data from GeckoTerminal for this pool"})}
 function scanNext(){if(V.paused)return;const f=(V.d||{}).funnel||{},L=f.scan||[],lane=byId("v7-scan");if(!lane)return;
  if(!L.length){byId("v7-sc-t").textContent="no sweep recorded yet — the lane only shows real scanned pools";return}
  if(V.scanCycle!==f.cycle_id){V.scanCycle=f.cycle_id;V.scanI=0}
@@ -93,9 +90,14 @@ function scanNext(){if(V.paused)return;const f=(V.d||{}).funnel||{},L=f.scan||[]
  lane.querySelectorAll(".v7c").forEach(o=>{o.classList.add(o.dataset.fail==="1"?"drop":"fly");setTimeout(()=>o.remove(),800)});
  const px=it.price_usd==null?"—":(+it.price_usd<1?(+it.price_usd).toPrecision(4):N(it.price_usd));
  lane.insertAdjacentHTML("beforeend",`<div class="v7c" data-fail="${fail?1:0}"><div><div class="sy">${E(it.symbol||"?")}<small>${E(it.source||"")} · ${E((it.mint||"").slice(0,4))}…</small></div><div class="mt"><span>px <b>${px}</b></span><span>liq <b>${U(it.liquidity_usd)}</b></span><span>vol1h <b>${U(it.volume_h1_usd)}</b></span><span>5m <b class="${it.price_change_m5<0?"bad":"ok"}">${N(it.price_change_m5)}%</b></span><span>age <b>${N(it.pool_age_hours,1)}h</b></span>${it.trades_h1!=null?`<span>trades1h <b>${E(it.trades_h1)}</b></span>`:""}${it.probability!=null?`<span>judge p <b>${N(it.probability)}</b></span>`:""}</div></div><canvas></canvas><div class="ck">${ck.map(c=>`<div data-s="${c.state}"><i>·</i>${E(c.name)}</div>`).join("")}</div><div class="stp ${fail?"rej":"pass"}">${fail?"REJECTED":"PASSED"}<small>${E(it.reason||it.stage||"")}</small></div></div>`);
- const card=lane.lastElementChild;requestAnimationFrame(()=>{card.classList.add("in");const cv=card.querySelector("canvas");cv._it=it;miniChart(cv,it.closes)});
+ const card=lane.lastElementChild;requestAnimationFrame(()=>{card.classList.add("in");const cv=card.querySelector("canvas");miniChart(cv,it,`${i+1}/${L.length} ${it.symbol||"?"}`)});
  const rows=[...card.querySelectorAll(".ck div")];rows.forEach((r,k)=>setTimeout(()=>{if(!card.isConnected)return;r.classList.add("on",r.dataset.s);r.querySelector("i").textContent=r.dataset.s==="p"?"✔":r.dataset.s==="f"?"✖":"–"},450+k*170));
  setTimeout(()=>{if(!card.isConnected)return;card.querySelector(".stp").classList.add("on");if(!fail){const j=byId("v7-judge");j.classList.remove("hit");void j.offsetWidth;j.classList.add("hit");link("ag-judge",card)}},450+rows.length*170+120)}
+function pmCandles(){const cv=byId("v7-pmc-cv");if(!cv||!window.TEVCandles)return;const P=(V.d||{}).pm_candles||{},M=P.markets||[];
+ if(!M.length){TEVCandles.draw(cv,[],{key:"none",empty:"no candle data · "+(P.status||"waiting")});byId("v7-pmc-s").textContent=P.quotes_seen!=null?`${P.quotes_seen} quotes stored across ${P.markets_seen} markets in ${P.lookback_hours}h — need ${P.min_quotes}+ per market`:"";return}
+ V.pmI=((V.pmI??-1)+1)%M.length;const m=M[V.pmI],lab=`${V.pmI+1}/${M.length} ${String(m.title||m.market_id).slice(0,28)}`;
+ TEVCandles.draw(cv,m.ohlc,{interval:m.interval,label:lab,key:m.venue+m.market_id,markers:m.markers,volLabel:"quotes",empty:"no candle data"});
+ byId("v7-pmc-s").textContent=`${m.venue} · ${m.market_id} · yes mid · ${m.quotes} quotes · ${m.interval} auto`}
 function link(fromId,toEl){const a=byId(fromId),svg=byId("v7-links");if(!a||!svg||!toEl)return;const r1=a.getBoundingClientRect(),r2=toEl.getBoundingClientRect();
  const x1=r1.right,y1=r1.top+r1.height/2,x2=r2.left,y2=r2.top+r2.height/2,mx=(x1+x2)/2;
  const p=document.createElementNS("http://www.w3.org/2000/svg","path");p.setAttribute("d",`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);svg.appendChild(p);vote(fromId.slice(3));setTimeout(()=>p.remove(),1600);while(svg.childNodes.length>6)svg.firstChild.remove()}
@@ -185,7 +187,7 @@ let busy=false;
 async function poll(){if(busy||document.hidden)return;busy=true;try{const r=await fetch(`/api/room-v7?since=${V.since}`,{cache:"no-store"});if(r.ok){const d=await r.json();const first=!V.d;V.d=d;ingest(d.events||[],first);render7()}}catch(e){}finally{busy=false}}
 function render7(){for(const f of [tape,pulse,pumpfun,chainV7,equity,stripe,heat,window.dial&&(()=>window.dial(null))])try{f&&f()}catch(e){console.error(e)}}
 window.chain=chainV7;
-function boot(){scaffold();poll();every(poll,2000);every(scanNext,2600);every(()=>{try{window.wireSources();window.pm()}catch(e){}},5000);setTimeout(scanNext,400);
+function boot(){scaffold();poll();every(poll,2000);every(scanNext,10000);every(pmCandles,10000);setTimeout(pmCandles,900);every(()=>{try{window.wireSources();window.pm()}catch(e){}},5000);setTimeout(scanNext,400);
  window.addEventListener("resize",()=>{V.eqN=-1;equity()})}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot);else boot();
 })();

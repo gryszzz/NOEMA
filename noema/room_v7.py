@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import re
 import sqlite3
 import statistics
 import threading
@@ -104,6 +105,104 @@ def _closes(candles: list) -> list[float]:
     return out[-48:]
 
 
+def _ohlc(candles: list, n: int = 48) -> list[list[float]]:
+    """Real provider OHLCV rows [t, o, h, l, c, v] (GeckoTerminal), newest n, never synthesised."""
+    out = []
+    for c in candles or []:
+        if isinstance(c, (list, tuple)) and len(c) >= 5:
+            try:
+                row = [float(v) for v in c[:6]]
+            except (TypeError, ValueError):
+                continue
+            out.append(row + [0.0] * (6 - len(row)))
+    out.sort(key=lambda r: r[0])
+    return out[-n:]
+
+
+def _interval_label(rows: list) -> str | None:
+    if len(rows) < 2:
+        return None
+    d = sorted(b[0] - a[0] for a, b in zip(rows, rows[1:]))
+    s = d[len(d) // 2]
+    return f"{round(s / 3600)}h" if s >= 3600 else f"{max(1, round(s / 60))}m"
+
+
+PM_BUCKETS = (900, 3600, 4 * 3600, 24 * 3600)
+
+
+def pm_candles(conn: sqlite3.Connection, *, markets: int = 6, min_quotes: int = 4,
+               lookback_hours: int = 72) -> dict[str, Any]:
+    """Aggregate our stored Kalshi/Polymarket quote snapshots (yes mid) into OHLC candles.
+
+    Volume is the number of stored quotes in the bucket (we do not store traded volume).
+    The interval is auto-picked per market (15m/1h/4h/1d) so each chart has ~24 candles."""
+    since = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat()
+    try:
+        tops = conn.execute(
+            "SELECT venue, market_id, COUNT(*) n FROM market_snapshots WHERE captured_at >= ? AND valid = 1 "
+            "GROUP BY venue, market_id HAVING n >= ? ORDER BY n DESC LIMIT ?",
+            (since, min_quotes, markets)).fetchall()
+        total = conn.execute("SELECT COUNT(DISTINCT market_id), COUNT(*) FROM market_snapshots WHERE captured_at >= ?",
+                             (since,)).fetchone()
+    except sqlite3.Error:
+        return {"markets": [], "status": "no market_snapshots table"}
+    out = []
+    for venue, mid, _n in tops:
+        rows = conn.execute("SELECT captured_at, snapshot_json FROM market_snapshots WHERE venue=? AND market_id=? "
+                            "AND captured_at >= ? ORDER BY captured_at", (venue, mid, since)).fetchall()
+        pts, title = [], mid
+        for at, js in rows:
+            d = _j(js)
+            title = d.get("title") or title
+            b, a = d.get("yes_bid"), d.get("yes_ask")
+            try:
+                px = (float(b) + float(a)) / 2 if b is not None and a is not None else float(b if b is not None else a)
+                t = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                continue
+            pts.append((t, px))
+        if len(pts) < min_quotes:
+            continue
+        span = pts[-1][0] - pts[0][0]
+        bucket = next((b for b in PM_BUCKETS if span / b <= 36), PM_BUCKETS[-1])
+        candles: dict[int, list[float]] = {}
+        for t, px in pts:
+            k = int(t // bucket * bucket)
+            c = candles.get(k)
+            if c is None:
+                candles[k] = [float(k), px, px, px, px, 1.0]
+            else:
+                c[2], c[3], c[4], c[5] = max(c[2], px), min(c[3], px), px, c[5] + 1
+        marks = []
+        try:
+            for (qa,) in conn.execute("SELECT quoted_at FROM paper_quotes WHERE market_id=? AND selected=1", (mid,)):
+                marks.append({"t": datetime.fromisoformat(qa).timestamp(), "kind": "entry"})
+        except (sqlite3.Error, ValueError, TypeError):
+            pass
+        lab = f"{bucket // 3600}h" if bucket >= 3600 else f"{bucket // 60}m"
+        out.append({"venue": venue, "market_id": mid, "title": title, "interval": lab,
+                    "ohlc": sorted(candles.values())[-48:], "quotes": len(pts), "markers": marks})
+    return {"markets": out, "markets_seen": total[0] if total else 0, "quotes_seen": total[1] if total else 0,
+            "min_quotes": min_quotes, "lookback_hours": lookback_hours,
+            "status": "ok" if out else f"no market has {min_quotes}+ stored quotes in {lookback_hours}h"}
+
+
+def _scan_chart(it: dict, sweep_ts: Any) -> dict[str, Any]:
+    rows = _ohlc(it.get("candles"))
+    marks = []
+    st, why = str(it.get("stage") or ""), str(it.get("reason") or "")
+    try:
+        t = datetime.fromisoformat(str(sweep_ts).replace("Z", "+00:00")).timestamp() if sweep_ts else None
+    except ValueError:
+        t = None
+    if rows and t is not None:
+        if re.search(r"enter|entry|approved|opened", st + " " + why, re.I) and st != "rejected":
+            marks.append({"t": t, "kind": "entry"})
+        elif st != "rejected":
+            marks.append({"t": t, "kind": "find"})
+    return {"ohlc": rows, "interval": _interval_label(rows), "markers": marks}
+
+
 def funnel(conn: sqlite3.Connection, cycles: int = 30) -> dict[str, Any]:
     rows = _rows(conn, "SELECT id, ts, payload_json FROM trench_desk_events WHERE event='desk_cycle' "
                        "ORDER BY id DESC LIMIT ?", (cycles,))
@@ -130,7 +229,7 @@ def funnel(conn: sqlite3.Connection, cycles: int = 30) -> dict[str, Any]:
                                             "liquidity_usd", "volume_h1_usd", "price_change_m5",
                                             "pool_age_hours", "trades_h1", "fdv_usd",
                                             "top10_holder_fraction", "probability", "confidence")}
-                    | {"closes": _closes(it.get("candles"))})
+                    | {"closes": _closes(it.get("candles"))} | _scan_chart(it, latest.get("_ts")))
     return {"cycle_id": latest.get("_id"), "ts": latest.get("_ts"), "series": series,
             "latest": series[-1] if series else None, "rejects": rejects, "scan": scan,
             "judgement": latest.get("judgement"), "chief_gate": latest.get("chief"),
@@ -430,6 +529,7 @@ def build_room_v7(db_path: str, *, since_id: int = 0, fetch: bool = True,
                            "equity": {"real": [], "paper": [], "guard": None},
                            "news": {"articles_per_min": None, "sources": []},
                            "crawl": {"hits": [], "counters": {}, "next": {}},
+                           "pm_candles": {"markets": [], "status": "no database yet"},
                            "stripe": stripe_panel(env) if fetch else {"status": "not_fetched"}}
     if Path(db_path).exists():
         conn = _ro(db_path)
@@ -440,6 +540,7 @@ def build_room_v7(db_path: str, *, since_id: int = 0, fetch: bool = True,
             out["equity"] = equity_curve(conn)
             out["news"] = news_rate(conn)
             out["crawl"] = crawl_feed(conn, out["funnel"])
+            out["pm_candles"] = pm_candles(conn)
         finally:
             conn.close()
     out["regime"] = regime(out["funnel"], px)
