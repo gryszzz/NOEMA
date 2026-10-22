@@ -46,7 +46,7 @@
     info.innerHTML=`<b class="lvy">${esc(c.sym||sh(c.mint))}</b><span class="lvm">${esc(c.name||"")}</span><span class="lvchip">found ${ago(Date.now()-T(c.found_at))} ago</span><span class="lvchip">${c.n_trades} trades · tf ${c.tf_s}s</span><span class="lvm">${ci%C.length+1}/${C.length}</span>`;
     if(window.TEVCandles)TEVCandles.draw(cv,c.rows,{interval:c.tf_s,label:"mcap ◎ · our captured trades",markers:[{t:Math.floor(T(c.found_at)/1e3),kind:"find"}],volLabel:"◎ vol"});
   }
-  function onData(d){const t=Date.now();if(lastPush)gaps=gaps.concat([t-lastPush]).slice(-10);lastPush=t;D=d;try{render()}catch(e){console.error(e)}}
+  function onData(d){const t=Date.now();if(lastPush)gaps=gaps.concat([t-lastPush]).slice(-10);lastPush=t;D=d;window.TEVLive=d;try{render()}catch(e){console.error(e)}}
   let poll=null; function startPoll(){if(poll)return;mode="poll /api/live 5s";const f=()=>fetch("/api/live",{cache:"no-store"}).then(r=>r.json()).then(onData).catch(()=>{});f();poll=setInterval(f,5000)}
   function startSSE(){ if(!window.EventSource)return startPoll(); const es=new EventSource("/api/live/stream"); let ok=false;
     es.onmessage=(e)=>{ok=true;mode="SSE push";if(poll){clearInterval(poll);poll=null}onData(JSON.parse(e.data))};
