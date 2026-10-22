@@ -98,7 +98,8 @@ def test_room_v4_offline(tmp_path):
 
 
 def test_paper_equity_series_is_lineage_safe(tmp_path):
-    import json, sqlite3
+    import json
+    import sqlite3
     from noema.command_center import paper_equity_series
     db = tmp_path / "e.db"
     c = sqlite3.connect(db)
