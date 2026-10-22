@@ -1007,22 +1007,22 @@ def knowledge() -> dict[str, Any]:
 
 
 @app.get("/api/agent")
-async def agent() -> dict[str, Any]:
+def agent() -> dict[str, Any]:
     return build_agent_overview(_db_path())
 
 
 @app.get("/api/doctor")
-async def doctor() -> dict[str, Any]:
+def doctor() -> dict[str, Any]:
     return doctor_report(_db_path())
 
 
 @app.get("/api/ladder")
-async def ladder() -> dict[str, Any]:
+def ladder() -> dict[str, Any]:
     return build_ladder_report(_db_path())
 
 
 @app.get("/api/trench-desks")
-async def trench_desks() -> dict[str, Any]:
+def trench_desks() -> dict[str, Any]:
     return desk_overview(_db_path())
 
 
@@ -1054,7 +1054,7 @@ async def trading_room() -> dict[str, Any]:
 @app.get("/api/command-center")
 async def command_center() -> dict[str, Any]:
     """Read-only v3 room aggregate: markets, ledger, coordinator, autonomy, budget, health."""
-    pnl = desk_overview(_db_path()).get("total_pnl_after_costs_usd")
+    pnl = (await asyncio.to_thread(desk_overview, _db_path())).get("total_pnl_after_costs_usd")
     return await asyncio.to_thread(build_command_center, _db_path(), desks_pnl=pnl)
 
 
@@ -1284,7 +1284,7 @@ async def command_center_page() -> str:
 
 
 @app.get("/api/compare")
-async def compare() -> dict[str, Any]:
+def compare() -> dict[str, Any]:
     return compare_history_to_market(_db_path()).as_dict()
 
 
@@ -1326,12 +1326,12 @@ def provider_health() -> dict[str, Any]:
 
 
 @app.get("/api/overview")
-async def overview() -> dict[str, Any]:
+def overview() -> dict[str, Any]:
     return build_overview(_db_path())
 
 
 @app.get("/api/economy")
-async def economy() -> dict[str, Any]:
+def economy() -> dict[str, Any]:
     return build_economic_overview(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
@@ -1342,37 +1342,37 @@ def stripe_economy() -> dict[str, Any]:
 
 
 @app.get("/api/ecosystem")
-async def ecosystem() -> dict[str, Any]:
+def ecosystem() -> dict[str, Any]:
     return build_ecosystem_overview(_db_path())
 
 
 @app.get("/api/economic-measurement")
-async def economic_measurement() -> dict[str, Any]:
+def economic_measurement() -> dict[str, Any]:
     return build_economic_measurement(_db_path(), additional_paths=(_console_state_db_path(),))
 
 
 @app.get("/api/bill")
-async def bill() -> dict[str, Any]:
+def bill() -> dict[str, Any]:
     return BillTracker(_db_path()).overview()
 
 
 @app.get("/api/radar")
-async def radar() -> list[dict[str, Any]]:
+def radar() -> list[dict[str, Any]]:
     return [row.__dict__ for row in build_radar(_db_path())]
 
 
 @app.get("/api/trench")
-async def trench() -> dict[str, Any]:
+def trench() -> dict[str, Any]:
     return build_trench_overview(_db_path())
 
 
 @app.get("/api/wallet-policy")
-async def wallet_policy() -> dict[str, Any]:
+def wallet_policy() -> dict[str, Any]:
     return public_wallet_policy()
 
 
 @app.get("/api/execution-gateway")
-async def execution_gateway_status() -> dict[str, Any]:
+def execution_gateway_status() -> dict[str, Any]:
     return ExecutionGateway(_db_path(), initialize=False).overview()
 
 

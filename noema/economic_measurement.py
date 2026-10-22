@@ -195,8 +195,12 @@ def build_economic_measurement(
                     "completed_at", "updated_at", "compute_cost_usd", "elapsed_seconds",
                     "result_json", "evidence_path",
                 ) if name in run_columns]
+                # result_json is only needed as a has-result flag for merge preference; never load
+                # the multi-hundred-MB payloads into the dashboard process (OOM-killed at 11.7 GB).
+                exprs = [("CASE WHEN trim(coalesce(result_json,'')) IN ('','{}','[]') THEN NULL ELSE '1' END"
+                          if name == "result_json" else name) for name in selected]
                 for row in run_conn.execute(
-                    f"SELECT {','.join(selected)} FROM autonomous_research_runs"):
+                    f"SELECT {','.join(exprs)} FROM autonomous_research_runs"):
                     item = dict(zip(selected, row, strict=True))
                     key = research_run_identity(item)
                     current = research_runs.get(key)
