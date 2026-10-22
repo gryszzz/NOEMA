@@ -1,0 +1,277 @@
+{
+ "coins": 848,
+ "samples": 1894,
+ "hours": 2.42,
+ "variants_tested": 288,
+ "latency_s": 1.5,
+ "usd": 5.0,
+ "sol_usd": 105.0,
+ "prio_sol": 0.0003,
+ "features": [
+  "buy_sol",
+  "buyer_accel",
+  "buyer_rate",
+  "cluster_share",
+  "dd_peak",
+  "dev_sell_ratio",
+  "dev_sold",
+  "first1s_share",
+  "n",
+  "ofi",
+  "progress",
+  "ret_10s",
+  "ret_launch",
+  "sell_accel",
+  "sell_sol",
+  "sell_traders",
+  "size_max_share",
+  "size_med",
+  "smart_n",
+  "top3_share",
+  "uniq_buyers",
+  "velocity"
+ ],
+ "top": [
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.1,
+   "rule": 3,
+   "n": 48,
+   "hit": 0.375,
+   "mean": -0.0098,
+   "ci95": [
+    -0.1024,
+    0.0944
+   ],
+   "p": 0.5789,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0558,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 600,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.1,
+   "rule": 7,
+   "n": 48,
+   "hit": 0.375,
+   "mean": -0.0224,
+   "ci95": [
+    -0.1321,
+    0.0943
+   ],
+   "p": 0.6492,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0666,
+   "exit": {
+    "tp": 0.6,
+    "sl": 0.35,
+    "tmax": 600,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 15,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.1,
+   "rule": 3,
+   "n": 36,
+   "hit": 0.444,
+   "mean": -0.0274,
+   "ci95": [
+    -0.1574,
+    0.11
+   ],
+   "p": 0.6522,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0726,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 600,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 120,
+   "top": 0.1,
+   "rule": 3,
+   "n": 51,
+   "hit": 0.353,
+   "mean": -0.0286,
+   "ci95": [
+    -0.1256,
+    0.0643
+   ],
+   "p": 0.7265,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0558,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 600,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.2,
+   "rule": 3,
+   "n": 88,
+   "hit": 0.341,
+   "mean": -0.024,
+   "ci95": [
+    -0.0994,
+    0.0517
+   ],
+   "p": 0.7371,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0558,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 600,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.2,
+   "rule": 2,
+   "n": 88,
+   "hit": 0.318,
+   "mean": -0.0251,
+   "ci95": [
+    -0.098,
+    0.0511
+   ],
+   "p": 0.7497,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0534,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 120,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 30,
+   "top": 0.1,
+   "rule": 0,
+   "n": 46,
+   "hit": 0.413,
+   "mean": -0.0351,
+   "ci95": [
+    -0.147,
+    0.0738
+   ],
+   "p": 0.7318,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0511,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.2,
+    "tmax": 120,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.1,
+   "rule": 2,
+   "n": 48,
+   "hit": 0.354,
+   "mean": -0.0347,
+   "ci95": [
+    -0.1172,
+    0.0511
+   ],
+   "p": 0.7936,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0534,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 120,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 45,
+   "model": "gbm",
+   "h": 30,
+   "top": 0.1,
+   "rule": 2,
+   "n": 46,
+   "hit": 0.435,
+   "mean": -0.0371,
+   "ci95": [
+    -0.1522,
+    0.0711
+   ],
+   "p": 0.7432,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0534,
+   "exit": {
+    "tp": 0.3,
+    "sl": 0.35,
+    "tmax": 120,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  },
+  {
+   "age": 15,
+   "model": "gbm",
+   "h": 600,
+   "top": 0.1,
+   "rule": 7,
+   "n": 36,
+   "hit": 0.389,
+   "mean": -0.042,
+   "ci95": [
+    -0.1799,
+    0.107
+   ],
+   "p": 0.7143,
+   "p_bonf": 1.0,
+   "baseline_mean": -0.0913,
+   "exit": {
+    "tp": 0.6,
+    "sl": 0.35,
+    "tmax": 600,
+    "trail": 0.2,
+    "part": 0.5
+   }
+  }
+ ],
+ "n_positive_bonf": 0
+}
