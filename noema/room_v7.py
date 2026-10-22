@@ -105,7 +105,7 @@ def _closes(candles: list) -> list[float]:
     return out[-48:]
 
 
-def _ohlc(candles: list, n: int = 48) -> list[list[float]]:
+def _ohlc(candles: list, n: int = 120) -> list[list[float]]:
     """Real provider OHLCV rows [t, o, h, l, c, v] (GeckoTerminal), newest n, never synthesised."""
     out = []
     for c in candles or []:
@@ -220,9 +220,61 @@ def _gt_fallback(mint: str, symbol: str, *, allow_fetch: bool) -> list[list[floa
     return _ohlc((val or {}).get("candles"))
 
 
+# interval ladder: pick the finest one that fits the token's whole life in <= ~120 candles
+FIT_LADDER = (("minute", 1, 60), ("minute", 5, 300), ("minute", 15, 900), ("hour", 1, 3600),
+              ("hour", 4, 14400), ("day", 1, 86400))
+FIT_MAX = 120
+
+
+def fit_interval(age_hours: float | None) -> tuple[str, int, int, int]:
+    """(timeframe, aggregate, seconds, limit) so the full history since launch fits 40-120 candles."""
+    life = max(60.0, float(age_hours or 0) * 3600)
+    for tf, agg, sec in FIT_LADDER:
+        if life / sec <= FIT_MAX:
+            return tf, agg, sec, max(40, min(FIT_MAX, int(life / sec) + 2))
+    tf, agg, sec = FIT_LADDER[-1]
+    return tf, agg, sec, FIT_MAX
+
+
+def _gt_fit(mint: str, symbol: str, age_hours: Any, *, allow_fetch: bool) -> list[list[float]]:
+    """Whole-life GeckoTerminal OHLCV for one token at the fitted interval. Cached 10 min (misses too),
+    sharing the one-call-per-GT_MIN_GAP_S budget with _gt_fallback."""
+    from noema import room_v4
+    try:
+        age = float(age_hours) if age_hours is not None else None
+    except (TypeError, ValueError):
+        age = None
+    if age is None:
+        return []
+    tf, agg, _sec, limit = fit_interval(age)
+    key = f"v7fit:{mint}:{tf}{agg}"
+    hit = room_v4._CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < 600:
+        return _ohlc((hit[1] or {}).get("candles"), n=limit)
+    if not allow_fetch or time.monotonic() - _GT_STATE["last"] < GT_MIN_GAP_S:
+        return []
+    _GT_STATE["last"] = time.monotonic()
+
+    def go() -> dict[str, Any]:
+        with httpx.Client(timeout=6, headers={"accept": "application/json"}) as c:
+            pools = c.get(f"{room_v4.GT}/networks/solana/tokens/{mint}/pools", params={"page": 1}).json()
+            pool = (pools.get("data") or [{}])[0].get("attributes", {}).get("address")
+            if not pool:
+                return {"candles": []}
+            data = c.get(f"{room_v4.GT}/networks/solana/pools/{pool}/ohlcv/{tf}",
+                         params={"aggregate": agg, "limit": limit, "token": mint}).json()
+        return {"candles": ((data.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []}
+    val = room_v4._cached(key, 600, go)
+    return _ohlc((val or {}).get("candles"), n=limit)
+
+
 def _scan_chart(it: dict, sweep_ts: Any, history: dict | None = None, allow_fetch: bool = False) -> dict[str, Any]:
-    rows, src = _ohlc(it.get("candles")), "GeckoTerminal (desk)"
     mint = str(it.get("mint") or "")
+    desk = _ohlc(it.get("candles"))
+    rows, src = (_gt_fit(mint, str(it.get("symbol") or ""), it.get("pool_age_hours"), allow_fetch=allow_fetch)
+                 if mint else []), "GeckoTerminal (full life)"
+    if len(rows) < 2:
+        rows, src = desk, "GeckoTerminal (desk, last ~3h)"
     if len(rows) < 2 and mint:
         rows, src = _gt_fallback(mint, str(it.get("symbol") or ""), allow_fetch=allow_fetch), "GeckoTerminal (by mint)"
     if len(rows) < 2 and history and mint:

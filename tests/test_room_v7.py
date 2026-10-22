@@ -219,3 +219,15 @@ def test_scan_novelty_ages_out_replayed_trending_and_puts_new_first(tmp_path):
     assert "OLD" not in mints and mints[0] in {"NEW", "PUMPED"}
     assert out["stats"]["aged_out"] == 1 and out["stats"]["last_new_token_min_ago"] == 0.0
     assert all(x["is_new"] for x in out["items"])
+
+
+def test_fit_interval_keeps_whole_life_in_40_to_120_candles():
+    from noema.room_v7 import fit_interval
+    assert fit_interval(0.5)[:2] == ("minute", 1)
+    assert fit_interval(6)[:2] == ("minute", 5)
+    assert fit_interval(24)[:2] == ("minute", 15)
+    assert fit_interval(100)[:2] == ("hour", 1)
+    for age in (0.2, 1, 3, 10, 48, 300, 1043):
+        tf, _agg, sec, limit = fit_interval(age)
+        assert 40 <= limit <= 120
+        assert age * 3600 / sec <= 120 or tf == "day"
