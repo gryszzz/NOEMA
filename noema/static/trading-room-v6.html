@@ -203,17 +203,10 @@ function flipNext(){const f=feed();const card=$("card");
  card.innerHTML=`<div class="sym">${esc(it.symbol||"?")} <span class="dim" style="font-size:12px">${i+1}/${f.length} · ${esc(it.source||"")}</span></div>
  <div class="meta"><span>px <b>${it.price_usd<1?(+it.price_usd).toPrecision(4):f2(it.price_usd)}</b></span><span>liq <b>${usd(it.liquidity_usd)}</b></span><span>vol1h <b>${usd(it.volume_h1_usd)}</b></span><span>5m <b class="${it.price_change_m5<0?"bad":"ok"}">${f2(it.price_change_m5)}%</b></span><span>age <b>${f2(it.pool_age_hours,1)}h</b></span>${it.top10_holder_fraction!=null?`<span>top10 <b>${f2(it.top10_holder_fraction*100,1)}%</b></span>`:""}${it.probability!=null?`<span>judge p <b>${f2(it.probability)}</b> conf <b>${f2(it.confidence)}</b></span>`:""}</div>
  <div class="stamp ${cls}">${lab}<small>${esc(why)}</small></div><canvas class="cand" id="cv"></canvas>`;
- drawCandles($("cv"),it.candles||[]);
+ drawCandles($("cv"),it.candles||[],`${i+1}/${f.length} ${it.symbol||"?"}`);
  const pool=it.pool_address||it.mint||"";S.lane.solana={url:`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/ohlcv/minute`,line:`${hm(new Date().toISOString())} ${it.symbol} → ${lab} ${why}`,prog:(i+1)/f.length};
  laneTick("solana_dex");}
-function drawCandles(cv,c){const r={width:cv.offsetWidth,height:cv.offsetHeight},dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);const W=r.width,H=r.height;
- x.strokeStyle="#0b2a3c";for(let g=0;g<6;g++){x.beginPath();x.moveTo(0,H*g/5);x.lineTo(W,H*g/5);x.stroke()}
- if(!c.length){x.fillStyle="#5f8aa3";x.font="12px monospace";x.fillText("no candles returned for this pool (GeckoTerminal)",10,20);return}
- const hi=Math.max(...c.map(k=>k[2])),lo=Math.min(...c.map(k=>k[3])),vm=Math.max(...c.map(k=>k[5]||0))||1,n=c.length,w=W/n,y=v=>H*.82-(v-lo)/((hi-lo)||1)*H*.78;
- let k=0;const step=()=>{for(let s=0;s<4&&k<n;s++,k++){const [t,o,h,l,cl,v]=c[k],up=cl>=o;x.strokeStyle=x.fillStyle=up?"#39ff9c":"#ff3b6b";
-  x.globalAlpha=.25;x.fillRect(k*w+1,H-(v/vm)*H*.15,Math.max(1,w-2),(v/vm)*H*.15);x.globalAlpha=1;
-  x.beginPath();x.moveTo(k*w+w/2,y(h));x.lineTo(k*w+w/2,y(l));x.stroke();x.fillRect(k*w+1,Math.min(y(o),y(cl)),Math.max(1,w-2),Math.max(1,Math.abs(y(o)-y(cl))))}
-  if(k<n)requestAnimationFrame(step);else{x.fillStyle="#bfe9ff";x.font="10px monospace";x.fillText(`${n} real 5m candles · hi ${hi.toPrecision(4)} lo ${lo.toPrecision(4)}`,6,12)}};step();}
+function drawCandles(cv,c,lab){if(window.TEVCandles)TEVCandles.draw(cv,c,{label:lab,key:lab,empty:"no candle data from GeckoTerminal for this pool"})}
 function chain(){const c=(S.tr||{}).chain||{};const rj=Object.entries(c.rejections||{}).map(([k,v])=>`${v}× ${k}`).join(" · ");
  $("chain").title=rj;$("chain").innerHTML=[["CRAWLED",c.crawler],["FILTERS",c.filters],["HOLDERS",c.holders],["JUDGED",c.judgement],["ENTERED",c.desk],["PUMP.FUN NEW",c.pumpfun_new_launches]].map(([a,b])=>`<div>${a}<b>${b??"—"}</b></div>`).join("")+(rj?`<div style="flex:3;text-align:left;font-size:10px" class="warn">REJECTS: ${esc(rj)}</div>`:"");
  const iv=(S.tr||{}).interval_seconds;$("bay-tag").textContent=c.ts?`sweep ${hm(c.ts)} · ${f2((c.crawler||0)/(iv||120)*60,1)} pools/min · replaying real cycle`:"no sweep yet";}
@@ -256,7 +249,7 @@ function wireSources(){const ev=((S.v6||{}).lanes||[]).find(l=>l.lane==="evidenc
   return `<b class="${ok?"ok":"bad"}${x.reliability>=1?" pri":""}" title="${esc(st)} · every ${Math.round((x.interval_s||0)/60)}m · reliability ${x.reliability}">${esc(x.name)}${ok?"":" ("+esc(st==="999"?"robots":st)+")"}</b>`}).join(""):"";
  const T=ev.targets||[];$("wire-tgt").innerHTML=T.slice(0,4).map(t=>`<div><i>TARGET</i> ${esc(t.market||"")} ⟵ <i>${esc(t.backend)}</i> “${esc(t.query||"")}” · ${t.results??0} results · ${t.linked??0} linked</div>`).join("");}
 setInterval(()=>{try{wire();wireSources();xwire()}catch(e){console.error(e)}},4200);
-setInterval(flipNext,1900);setInterval(()=>["kalshi","polymarket"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);
+setInterval(flipNext,10000);setInterval(()=>["kalshi","polymarket"].forEach((n,i)=>setTimeout(()=>laneTick(n),i*350)),1300);
 /* ---------- agents ---------- */
 function typeIn(el,txt){if(el.dataset.full===txt)return;el.dataset.full=txt;let i=0;clearInterval(el._t);el._t=setInterval(()=>{el.textContent=txt.slice(0,i+=2);if(i>=txt.length)clearInterval(el._t)},18);el.closest(".ag").classList.remove("flash");void el.offsetWidth;el.closest(".ag").classList.add("flash")}
 function agents(){const t=S.tr||{},cc=S.cc||{},v4=S.v4||{},A=[];
@@ -353,7 +346,7 @@ function health(){const v6=S.v6||{},h=(S.cc||{}).health||{};const up=v6.uptime_s
  <table>${(v6.providers||[]).map(p=>`<tr><td>${esc(p.provider)}</td><td class="${p.state==="healthy"?"ok":"warn"}">${esc(p.state)}</td><td class="dim">${p.consecutive_failures} fails · ${esc(p.last_error_class||"")}</td></tr>`).join("")||'<tr><td class="dim">no provider health rows</td></tr>'}</table>`;}
 load();setInterval(load,15000);setTimeout(flipNext,300);
 </script>
-<link rel="stylesheet" href="/static/room-v7.css"><script src="/static/room-v7.js" defer></script>
+<script src="/static/tev-candles.js"></script><link rel="stylesheet" href="/static/room-v7.css"><script src="/static/room-v7.js" defer></script>
 <script src="/static/strategies-panel.js" defer></script>
 <link rel="stylesheet" href="/static/room-v7-x.css"><script src="/static/room-v7-x.js" defer></script>
 <link rel="stylesheet" href="/static/crawler-hero.css"><script src="/static/crawler-hero.js" defer></script>

@@ -119,3 +119,6 @@
 .v7rj{display:flex;flex-wrap:wrap;gap:3px;align-items:center}
 .v7rj .v7cut{border:1px solid #4a1f2a;border-radius:9px;padding:0 7px;font-size:10px;color:#ffb3c4}.v7rj .v7cut b{color:var(--r)}
 #chain.v7chain{display:block;padding:0 6px 6px;flex:0 0 auto}
+
+#v7-pmc-cv{width:100%;height:96px;display:block}#v7-pmc-s{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#v7-scan canvas{cursor:crosshair}

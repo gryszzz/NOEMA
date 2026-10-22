@@ -158,3 +158,37 @@ def test_source_lights_survive_feed_truncation():
     by = _latest_by_light(hits)
     assert by["x"]["at"].startswith("2026-10-21T18") and "dexscreener" in by
     assert light_of({"kind": "prediction", "source": "kalshi_markets"}) == "kalshi"
+
+
+def test_scan_items_carry_real_ohlc_and_interval(tmp_path):
+    out = build_room_v7(_db(tmp_path), fetch=False)
+    a, b = out["funnel"]["scan"][:2]
+    assert a["ohlc"] == [[1.0, 1.0, 1.0, 1.0, 1.0, 5.0], [2.0, 1.0, 1.0, 1.0, 1.2, 5.0]]
+    assert a["markers"] == [] and b["ohlc"] == [] and b["interval"] is None  # no synthetic candles
+
+
+def test_pm_candles_aggregate_stored_quotes(tmp_path):
+    from datetime import UTC, datetime, timedelta
+    p = _db(tmp_path)
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE market_snapshots (id INTEGER PRIMARY KEY, venue TEXT, market_id TEXT, captured_at TEXT, "
+              "valid INT, validation_json TEXT, snapshot_json TEXT)")
+    t0 = datetime.now(UTC) - timedelta(hours=2)
+    for i, (b, a) in enumerate([(0.40, 0.44), (0.45, 0.47), (0.38, 0.40), (0.50, 0.52), (0.48, 0.50)]):
+        c.execute("INSERT INTO market_snapshots (venue, market_id, captured_at, valid, snapshot_json) VALUES (?,?,?,?,?)",
+                  ("kalshi", "KX1", (t0 + timedelta(minutes=20 * i)).isoformat(), 1,
+                   json.dumps({"title": "T", "yes_bid": b, "yes_ask": a})))
+    c.execute("INSERT INTO market_snapshots (venue, market_id, captured_at, valid, snapshot_json) VALUES (?,?,?,?,?)",
+              ("kalshi", "ONE", t0.isoformat(), 1, json.dumps({"yes_bid": 0.1, "yes_ask": 0.2})))
+    c.commit()
+    c.close()
+    pm = build_room_v7(p, fetch=False)["pm_candles"]
+    assert [m["market_id"] for m in pm["markets"]] == ["KX1"]  # single-quote market gets no fake candle
+    m = pm["markets"][0]
+    assert m["interval"] == "15m" and m["quotes"] == 5
+    assert sum(k[5] for k in m["ohlc"]) == 5
+    assert all(k[3] <= min(k[1], k[4]) and k[2] >= max(k[1], k[4]) for k in m["ohlc"])
+
+
+def test_pm_candles_empty_state_is_explicit(tmp_path):
+    assert "no market_snapshots" in build_room_v7(_db(tmp_path), fetch=False)["pm_candles"]["status"]
