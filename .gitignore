@@ -11,3 +11,16 @@ build/
 .env.local
 node_modules/
 dist-site/
+# security: never commit secrets, databases or logs
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+*.box-store-snap-*
