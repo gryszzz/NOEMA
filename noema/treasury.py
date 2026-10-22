@@ -18,6 +18,33 @@ VENUES = (("solana", "Solana", ("solana",)), ("evm", "EVM (Ethereum/Base/Polygon
 MAX_POINTS = 600
 
 
+def promo_bonuses() -> dict[str, float]:
+    """Venue promo credits (e.g. NOEMA_TREASURY_BONUSES="polymarket_us=15"). Counted as funding, never profit."""
+    import os
+    out: dict[str, float] = {}
+    for part in os.getenv("NOEMA_TREASURY_BONUSES", "").split(","):
+        k, _, v = part.partition("=")
+        if k.strip() and _f(v) is not None:
+            out[k.strip()] = out.get(k.strip(), 0.0) + float(v)
+    return out
+
+
+def label_deposits(deposits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Split each venue's first deposits into owner deposit vs promo bonus (bonus allocated first-come)."""
+    left = promo_bonuses()
+    out = []
+    for d in deposits:
+        usd, src = d.get("usd") or 0.0, d.get("source")
+        b = min(max(usd, 0.0), left.get(src, 0.0))
+        if b > 0:
+            left[src] -= b
+            out.append({**d, "usd": round(b, 6), "kind": "bonus", "label": "promo bonus (not profit)"})
+        if usd - b != 0:
+            out.append({**d, "usd": round(usd - b, 6), "kind": "deposit" if usd - b > 0 else "withdrawal",
+                        "label": "deposit" if usd - b > 0 else "withdrawal"})
+    return out
+
+
 def _f(v: Any) -> float | None:
     try:
         return float(v)
@@ -57,8 +84,9 @@ def treasury_board(db_path: str, *, days: int = 7, now: datetime | None = None) 
             step = max(1, len(recent) // MAX_POINTS)
             pts = recent[::step] + ([recent[-1]] if recent and (len(recent) - 1) % step else [])
             out["series"] = [{"at": r[0], "usd": _f(r[1])} for r in pts]
-            out["deposits"] = [{"at": a, "source": s, "asset": asset, "usd": _f(u)} for a, s, asset, u in c.execute(
-                "SELECT at, source, asset, amount_usd FROM equity_feed_deposits ORDER BY at")]
+            out["deposits"] = label_deposits([{"at": a, "source": s, "asset": asset, "usd": _f(u)} for a, s, asset, u in
+                                              c.execute("SELECT at, source, asset, amount_usd FROM "
+                                                        "equity_feed_deposits ORDER BY at")])
             last = c.execute("SELECT at, status, total_usd, sources_json FROM equity_feed_readings "
                              "ORDER BY at DESC LIMIT 1").fetchone()
             lastok = rows[-1] if rows else None
@@ -75,6 +103,7 @@ def treasury_board(db_path: str, *, days: int = 7, now: datetime | None = None) 
                            "age_s": int((now - at).total_seconds()),
                            "latest_status": last[1] if last else None, "venues": _venues(src),
                            "first_reading_at": first[0], "start_usd": start, "deposits_usd": dep_total,
+                           "bonus_usd": round(sum(d["usd"] for d in out["deposits"] if d.get("kind") == "bonus"), 6),
                            "pnl_all_usd": round(total - start - dep_total, 6),
                            "pnl_all_pct": round((total - start - dep_total) / (start + dep_total) * 100, 3)
                            if start + dep_total > 0 else None}
