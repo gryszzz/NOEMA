@@ -58,3 +58,40 @@ def test_rpc_trade_decode_follow_window(tmp_path):
 def test_b58_known():
     assert ls.b58(bytes(32)) == "1" * 32
     assert ls.b58(bytes([0, 0, 1])) == "112"
+
+
+def test_launchlab_decode_and_dedupe(tmp_path):
+    import base64
+    import hashlib
+    c = ls.connect(str(tmp_path / "l.db"))
+    pool = bytes([7]) * 32
+    d = lambda n: hashlib.sha256(f"event:{n}".encode()).digest()[:8]
+    u = lambda *xs: b"".join(x.to_bytes(8, "little") for x in xs)
+    create = "Program data: " + base64.b64encode(d("PoolCreateEvent") + pool + bytes(64)).decode()
+    tr = d("TradeEvent") + pool + u(0, 10**15, 30 * 10**9, 0, 0, 5 * 10**6, 10**9) + bytes(48) + b"\x00\x00\x01"
+    assert len(tr) == 147
+    trade = "Program data: " + base64.b64encode(tr).decode()
+    pools: dict = {}
+    n, new = ls.handle_launchlab_logs(c, "C1", [create], pools, now=10)
+    assert new == [ls.b58(pool)] and n == 0
+    assert ls.handle_launchlab_logs(c, "T1", [trade], pools, now=11)[0] == 0  # mint not resolved yet
+    pools[ls.b58(pool)]["mint"] = "MINTx"
+    assert ls.handle_launchlab_logs(c, "T2", [trade], pools, now=12)[0] == 1
+    r = c.execute("SELECT mint, side, sol, tokens, source FROM launch_trades WHERE signature='T2'").fetchone()
+    assert r == ("MINTx", "buy", 1.0, 5.0, "helius_launchlab")
+    # PumpPortal + Helius same signature -> one trade row, both arrivals recorded
+    ls.insert_trade(c, "S9", "M", "buy", 1, 1, "u", 1, "helius")
+    assert ls.insert_trade(c, "S9", "M", "buy", 1, 1, "u", 1, "pumpportal") == 0
+    assert c.execute("SELECT COUNT(*) FROM launch_trade_seen WHERE signature='S9'").fetchone()[0] == 2
+
+
+def test_mint_from_tx():
+    tx = {"meta": {"postTokenBalances": [{"mint": ls.WSOL}, {"mint": "BASE"}]}}
+    assert ls.mint_from_tx(tx) == ("BASE", True)
+
+
+def test_pumpportal_url(monkeypatch):
+    monkeypatch.delenv("PUMPPORTAL_API_KEY", raising=False)
+    assert ls.pumpportal_url() == ls.PUMPPORTAL
+    monkeypatch.setenv("PUMPPORTAL_API_KEY", "k")
+    assert ls.pumpportal_url().startswith(ls.PUMPPORTAL + "?api-key=")
