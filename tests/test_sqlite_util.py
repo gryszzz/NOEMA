@@ -35,3 +35,24 @@ def test_outcome_upsert_waits_out_a_short_lock(tmp_path, monkeypatch):
     store = OutcomeStore(str(tmp_path / "noema.db"))
     store.upsert(venue="kalshi", market_id="M", outcome_yes=1, resolved_at=None, raw={})
     assert store.conn.execute("SELECT count(*) FROM outcomes").fetchone()[0] == 1
+
+
+def test_rpc_bucket_spaces_requests(monkeypatch):
+    import asyncio
+
+    from noema import solana_research as sr
+
+    slept = []
+
+    async def fake_sleep(d):
+        slept.append(d)
+
+    monkeypatch.setattr(sr.asyncio, "sleep", fake_sleep)
+    b = sr._TokenBucket(rate=2.0)
+
+    async def go():
+        for _ in range(3):
+            await b.take()
+
+    asyncio.run(go())
+    assert b.requests == 3 and len(slept) == 2 and slept[-1] >= 0.9

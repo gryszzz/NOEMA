@@ -573,6 +573,17 @@ def _market_label(title: str, ctx: str) -> str:
 
 
 GDELT_BASE_COOLDOWN = 1800.0
+GDELT_MIN_INTERVAL = float(os.getenv("NOEMA_GDELT_MIN_INTERVAL_S", "6"))  # GDELT asks for at most 1 per 5s
+_gdelt_last = 0.0
+
+
+def _gdelt_get(pc: Any, url: str) -> tuple[int, Any]:
+    global _gdelt_last
+    wait = _gdelt_last + GDELT_MIN_INTERVAL - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _gdelt_last = time.monotonic()
+    return pc.get(url)
 GDELT_MAX_COOLDOWN = 6 * 3600.0
 
 
@@ -930,7 +941,7 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
     if include_sports is None:
         include_sports = os.getenv("NOEMA_NEWS_INCLUDE_SPORTS", "0") == "1"
     if max_targets is None:
-        max_targets = int(os.getenv("NOEMA_NEWS_TARGETS_PER_CYCLE", "2"))
+        max_targets = int(os.getenv("NOEMA_NEWS_TARGETS_PER_CYCLE", "1"))
     conn = sqlite_connect(db_path)
     ensure_schema(conn)
     pc = client or PoliteClient(conn)
@@ -984,7 +995,7 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
         rotated = (qs[start:] + qs[:start])[:max_queries]  # rotate so every query gets a turn
         ok = True
         for q in rotated:
-            status, body = pc.get(_gdelt_url(q))
+            status, body = _gdelt_get(pc, _gdelt_url(q))
             stats["fetched"][f"GDELT: {q}"] = status
             for a in parse_gdelt(body) if body else []:
                 if _store(conn, a, index, include_sports, now, stats):
@@ -1012,7 +1023,7 @@ def crawl_once(db_path: str, *, client: PoliteClient | None = None, max_queries:
                 fq = " ".join(w.strip('"') for w in q.split()[:4])
                 backends.append(("federal_register", _fedreg_url(fq)))
             for backend, url in backends:
-                status, body = pc.get(url)
+                status, body = _gdelt_get(pc, url) if backend == "gdelt" else pc.get(url)
                 arts = (parse_gdelt(body) if backend == "gdelt" else parse_federal_register(body)) if body else []
                 linked = 0
                 for a in arts:
