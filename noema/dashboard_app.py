@@ -1104,6 +1104,15 @@ async def proven_api() -> dict[str, Any]:
     return await asyncio.to_thread(board, _db_path())
 
 
+@app.get("/api/roster")
+async def roster_api() -> dict[str, Any]:
+    """Read-only AGENT LIFECYCLE roster (hire/fire, lineage, post-mortems) + latest edge-mining report.
+    Paper/shadow only."""
+    from .agent_lifecycle import roster
+    life = os.getenv("NOEMA_LIFECYCLE_DB", os.path.join(os.path.dirname(_db_path()) or ".", "agent_lifecycle.db"))
+    return await asyncio.to_thread(roster, life, _db_path())
+
+
 @app.get("/api/opportunities")
 async def opportunities_api() -> dict[str, Any]:
     """Read-only unified OPPORTUNITY FEED: deduped finds across every crawler source with first-seen

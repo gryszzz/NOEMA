@@ -193,3 +193,14 @@ def test_safe_but_no_catalyst_is_not_a_buy():
     assert res["passed"] == 1 and res["entries"] == []
     screens = json.loads(conn.execute("SELECT screens_json FROM alpha_candidates").fetchone()[0])
     assert screens["catalyst_gate"]["pass"] is False
+
+
+def test_adaptive_manage_partial_then_break_even():
+    conn = _conn()
+    _open(conn)
+    acts = ad.manage_adaptive(conn, {("solana", MINT): (1.35, 1e6)}, NOW + timedelta(hours=1))
+    assert acts[0]["reason"].startswith("take profit 1") and not acts[0]["closed"]
+    acts = ad.manage_adaptive(conn, {("solana", MINT): (0.99, 1e6)}, NOW + timedelta(hours=2))
+    assert acts[0]["reason"] == "break-even stop" and acts[0]["closed"]
+    n = conn.execute("SELECT COUNT(*) FROM alpha_exit_paths").fetchone()[0]
+    assert n == 2

@@ -1,0 +1,11 @@
+{
+  "schema": "tev.setup_universe.v1",
+  "note": "Fresh-setup discovery: majors/large caps are excluded; things already surfaced are on cooldown unless something materially changed.",
+  "mcap_ceiling_usd": 250000000,
+  "blocklist_symbols": ["BTC","WBTC","ETH","WETH","STETH","SOL","WSOL","JITOSOL","MSOL","USDC","USDT","DAI","PYUSD","USDE","BNB","XRP","ADA","DOGE","TRX","TON","AVAX","LINK","DOT","MATIC","POL","SHIB","LTC","BCH","UNI","NEAR","APT","ICP","SUI","PEPE","WIF","BONK","JUP","RAY","PUMP","TRUMP","ARB","OP","HYPE","ATOM","XLM","FIL","AAVE","ONDO","SPY","QQQ","AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA"],
+  "cooldown_hours": 6,
+  "material_change": {"volume_mult": 2.0, "liquidity_mult": 1.5, "price_move": 0.20},
+  "min_exit_liquidity_usd": 5000,
+  "new_market_hours": 6,
+  "min_new_market_liquidity_usd": 200
+}
