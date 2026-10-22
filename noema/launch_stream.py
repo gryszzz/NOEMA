@@ -279,19 +279,39 @@ def handle_pumpportal(c: sqlite3.Connection, msg: dict[str, Any], follow: dict[s
     return None
 
 
+class PumpPortalUnfunded(RuntimeError):
+    """PumpPortal refused keyed trade data (key wallet below its minimum); reconnect later to re-check funding."""
+
+
+def _is_funding_error(text: str) -> bool:
+    t = text.lower()
+    return "funded with at least" in t or "minimum balance not met" in t
+
+
 async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
     import websockets
     follow: dict[str, float] = {}
-    backoff = 1.0
+    backoff, fund_backoff = 1.0, 30.0
     while not stop.is_set():
         try:
             async with websockets.connect(pumpportal_url(), ping_interval=20, max_size=2**22) as ws:
                 await ws.send(json.dumps({"method": "subscribeNewToken"}))
-                backoff, last_commit = 1.0, time.time()
+                backoff, last_commit, fund_errs = 1.0, time.time(), 0
+                print(_now(), "pumpportal connected", flush=True)
                 while not stop.is_set():
                     msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
+                    if msg.get("txType") in ("buy", "sell"):
+                        if fund_backoff > 30.0:
+                            print(_now(), "pumpportal keyed trades accepted", flush=True)
+                        fund_backoff, fund_errs = 30.0, 0
                     if "txType" not in msg and msg.get("message") or msg.get("errors"):
-                        print(_now(), "pumpportal msg", str(msg.get("message") or msg.get("errors"))[:160], flush=True)
+                        text = str(msg.get("message") or msg.get("errors"))
+                        if _is_funding_error(text):
+                            fund_errs += 1
+                            if fund_errs >= 3 and FOLLOW_TRADES:
+                                raise PumpPortalUnfunded(text[:160])
+                        else:
+                            print(_now(), "pumpportal msg", text[:160], flush=True)
                     new = handle_pumpportal(c, msg, follow)
                     if FOLLOW_TRADES and new and len(follow) <= MAX_FOLLOW:
                         await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [new]}))
@@ -303,6 +323,13 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                     if time.time() - last_commit > COMMIT_S:
                         c.commit()
                         last_commit = time.time()
+        except PumpPortalUnfunded as exc:
+            # a fresh connection re-checks the key's funding; back off 30 s -> 10 min so we don't hammer it
+            print(_now(), "pumpportal unfunded", str(exc)[:120], f"retry in {fund_backoff:.0f}s", flush=True)
+            c.commit()
+            follow.clear()
+            await asyncio.sleep(fund_backoff)
+            fund_backoff = min(600.0, fund_backoff * 2)
         except Exception as exc:  # noqa: BLE001 - reconnect with backoff
             print(_now(), "pumpportal", type(exc).__name__, str(exc)[:120], flush=True)
             c.commit()

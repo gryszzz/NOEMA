@@ -127,8 +127,10 @@ def _pumpportal_note() -> str | None:
     except OSError:
         return None
     for ln in reversed(tail.splitlines()):
-        if "pumpportal msg" in ln:
-            if "funded with at least" in ln:
+        if "pumpportal keyed trades accepted" in ln or "pumpportal connected" in ln:
+            return None
+        if "pumpportal unfunded" in ln or "pumpportal msg" in ln:
+            if "funded with at least" in ln or "minimum balance" in ln.lower():
                 return "rejected: PumpPortal says API-key wallet is not funded (needs ≥0.02 SOL)"
             return None
     return None
@@ -445,7 +447,7 @@ def pm_history_section(dd: str) -> dict[str, Any]:
 def near_close_section(dd: str) -> dict[str, Any]:
     p = os.path.join(dd, "pm_train.db")
     if not os.path.isfile(p):
-        return {"as_of": None, "cadence_s": 300}
+        return {"as_of": None, "cadence_s": 900}
     c = _ro(p)
     try:
         ts = c.execute("SELECT MAX(snap_ts) FROM pm_near").fetchone()[0]
@@ -455,7 +457,7 @@ def near_close_section(dd: str) -> dict[str, Any]:
     finally:
         c.close()
     rj = _j(rep[1]) if rep else {}
-    return {"as_of": _iso(ts), "cadence_s": 300,
+    return {"as_of": _iso(ts), "cadence_s": 900,
             "rows": [dict(zip(("ticker", "lead_s", "bid", "ask", "mid", "vol10", "dmid10"), r, strict=True)) for r in rows],
             "report_at": rep[0] if rep else None,
             "report": {k: rj[k] for k in list(rj)[:6] if not isinstance(rj[k], (list, dict))}}
