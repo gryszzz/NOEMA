@@ -20,11 +20,14 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from .sqlite_util import connect as sqlite_connect
+
 PUMPPORTAL = "wss://pumpportal.fun/api/data"
 PROGRAMS = {"pump.fun": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
             "raydium_launchlab": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"}
 CREATE_MARKERS = ("Instruction: Create", "Instruction: InitializeV2", "Instruction: Initialize")
 TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "180"))
+COMMIT_S = float(os.getenv("NOEMA_STREAM_COMMIT_S", "0.5"))  # short write txns: noema.db has many writers
 MAX_FOLLOW = int(os.getenv("NOEMA_STREAM_MAX_FOLLOW", "150"))
 # PumpPortal only serves per-token trades to an API key funded with >= 0.02 SOL (paid) - off by default.
 FOLLOW_TRADES = os.getenv("NOEMA_STREAM_TRADES", "0") == "1"
@@ -227,7 +230,7 @@ def rpc_ws_url() -> str:
 
 
 def connect(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path, timeout=30)
+    c = sqlite_connect(path)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
     if "source" not in {r[1] for r in c.execute("PRAGMA table_info(launch_trades)")}:
@@ -297,7 +300,7 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                         await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": old}))
                         for m in old:
                             follow.pop(m, None)
-                    if time.time() - last_commit > 2:
+                    if time.time() - last_commit > COMMIT_S:
                         c.commit()
                         last_commit = time.time()
         except Exception as exc:  # noqa: BLE001 - reconnect with backoff
@@ -339,7 +342,7 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue
                                     llq.put_nowait(pool)
                         else:
                             handle_rpc_logs(c, v.get("signature"), logs)
-                    if time.time() - last_commit > 2:
+                    if time.time() - last_commit > COMMIT_S:
                         c.commit()
                         prune_follow(FOLLOW)
                         if time.time() - _WATCH_AT[0] > 300:

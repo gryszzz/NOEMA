@@ -5,7 +5,6 @@ import hashlib
 import json
 import math
 import os
-import sqlite3
 import weakref
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -23,6 +22,7 @@ from .solana_research import (
     jupiter_first_pool_at,
     jupiter_launch_tick,
 )
+from .sqlite_util import connect as sqlite_connect
 from .trench_features import extract_trench_features
 from .trench_models import LaunchTick, TokenControlState
 from .trench_risk import assess_trench_candidate
@@ -130,7 +130,7 @@ class TrenchCollectorStore:
     def __init__(self, path: str = "data/noema.db") -> None:
         db = Path(path)
         db.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db)
+        self.conn = sqlite_connect(db)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS trench_launches (
