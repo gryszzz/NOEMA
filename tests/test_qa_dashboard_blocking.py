@@ -41,3 +41,9 @@ def test_economic_measurement_does_not_select_result_payloads(tmp_path, monkeypa
     assert out
     run_sql = [s for s in seen if "FROM autonomous_research_runs" in s and "SELECT" in s]
     assert run_sql and all("CASE WHEN trim(coalesce(result_json" in s for s in run_sql)
+
+
+def test_near_close_cadence_matches_pm_crypto_loop(tmp_path) -> None:
+    from noema import heartbeats, live_feed
+    assert heartbeats.NEAR_CLOSE_CADENCE_S == 900
+    assert live_feed.near_close_section(str(tmp_path))["cadence_s"] == 900
