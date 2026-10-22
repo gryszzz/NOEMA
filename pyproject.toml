@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
   "httpx[socks]>=0.28,<1",
   "openai-agents>=0.22,<0.23",
-  "cryptography>=45,<46",
+  "cryptography>=50,<51",
   "websockets>=15,<16",
   "fastapi>=0.116,<1",
   "uvicorn>=0.35,<1",
