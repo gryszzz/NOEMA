@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import weakref
 from dataclasses import asdict, dataclass
@@ -464,9 +465,18 @@ class TrenchCollectorStore:
         ))
         due: list[DueObservation] = []
         selected_mints: set[str] = set()
+        # Long horizons (>= 15m) have minutes of lateness tolerance; short ones (30s-5m) only
+        # seconds. Capping the long-horizon share keeps each sampler pass short enough that the
+        # 30s/60s/120s windows (needed for the 5m assessment) are not starved into "missed".
+        long_limit = max(1, int(os.getenv("NOEMA_TRENCH_LONG_HORIZON_LIMIT", "25")))
+        long_taken = 0
         for item in candidates:
             if item.mint in selected_mints:
                 continue
+            if item.horizon_seconds > ASSESSMENT_HORIZON:
+                if long_taken >= long_limit:
+                    continue
+                long_taken += 1
             due.append(item)
             selected_mints.add(item.mint)
             if item.horizon_seconds == 3600:

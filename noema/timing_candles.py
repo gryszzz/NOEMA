@@ -7,6 +7,7 @@ stored paths and the live loop never refetches the same minute.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -32,7 +33,7 @@ class Bucket:
             time.sleep(wait)
 
 
-BUCKET = Bucket()
+BUCKET = Bucket(float(os.getenv("NOEMA_TIMING_GECKO_PER_MIN", "10")))  # crawler keeps the rest of the ~30/min
 
 
 def _get(url: str, tries: int = 3) -> Any:
