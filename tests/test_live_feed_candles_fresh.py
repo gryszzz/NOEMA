@@ -1,12 +1,12 @@
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from noema.live_feed import candles_section
 
 
 def _iso(t):
-    return datetime.fromtimestamp(t, timezone.utc).isoformat()
+    return datetime.fromtimestamp(t, UTC).isoformat()
 
 
 def test_candles_window_drops_aged_out_and_dupes(tmp_path):
