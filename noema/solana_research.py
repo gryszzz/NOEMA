@@ -281,6 +281,11 @@ def rpc_bucket(url: str) -> _TokenBucket:
     return _BUCKETS[host]
 
 
+def rpc_request_counts() -> dict[str, int]:
+    """Cumulative Solana RPC requests per host since process start (no keys: host only)."""
+    return {host: b.requests for host, b in _BUCKETS.items()}
+
+
 class SolanaRpcResearchClient:
     """Minimal read-only RPC client for token concentration research."""
 

@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import json
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -76,6 +77,28 @@ async def _wait_for_storage(config: AgentConfig) -> None:
         await asyncio.sleep(retry_seconds)
 
 
+def _recent_processes(window_s: float = 15.0) -> list[str]:
+    """Commands (redacted, truncated, no env) of processes started in the last window_s seconds."""
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+        uptime = float(Path("/proc/uptime").read_text().split()[0])
+        out = []
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                start = int((d / "stat").read_text().rsplit(")", 1)[1].split()[19]) / hz
+                if uptime - start <= window_s:
+                    cmd = (d / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+                    cmd = re.sub(r"(?i)(key|token|secret|password|bearer)([=: ]+)\S+", r"\1\2***", cmd)
+                    out.append(f"{d.name}: {cmd[:80]} … {cmd[-160:]}" if len(cmd) > 240 else f"{d.name}: {cmd}")
+            except (OSError, IndexError, ValueError):
+                continue
+        return out[:20]
+    except (OSError, ValueError):
+        return []
+
+
 def main() -> None:
     os.chdir(Path(__file__).resolve().parents[1])
     load_local_env()
@@ -88,7 +111,14 @@ def main() -> None:
     async def run_with_shutdown_signal() -> None:
         task = asyncio.current_task()
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGTERM, task.cancel)
+        def _on_sigterm() -> None:
+            # Who is stopping us? Log recently-started processes (the sender is usually a
+            # short-lived kill/pkill or a supervisor) so unexplained restarts are attributable.
+            print(json.dumps({"event": "agent_sigterm_received", "ppid": os.getppid(),
+                              "recent_processes": _recent_processes()}, sort_keys=True), flush=True)
+            task.cancel()
+
+        loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
         try:
             await _wait_for_storage(config)
             await run_agent(config)

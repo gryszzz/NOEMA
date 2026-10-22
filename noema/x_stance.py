@@ -205,6 +205,7 @@ def classify_pending(conn: sqlite3.Connection, *, db_path: str | None = None, cl
             if not batches:
                 stats["status"] = "lexicon: daily stance budget used"
             else:
+                conn.commit()  # don't hold the noema.db write lock across the model call
                 try:
                     got = _run(_classify(batches, client=client, db_path=db_path))
                     for g in got:

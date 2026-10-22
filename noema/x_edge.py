@@ -886,6 +886,7 @@ def collect_contracts(conn: sqlite3.Connection, now: datetime) -> int:
                      "shill_score=excluded.shill_score, symbol=COALESCE(x_contracts.symbol, excluded.symbol)",
                      (chain, addr, a["sym"], a["first"], a["n"], len(a["authors"]), len(a["kol"]),
                       float(sw[0]) if sw else 0.0))
+    conn.commit()  # short txn: callers go back to the network afterwards
     return len(agg)
 
 
