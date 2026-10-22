@@ -30,8 +30,8 @@ function scaffold(){const app=document.querySelector(".app"),hdr=app&&app.queryS
 function tape(){const d=V.d||{},g=(d.equity||{}).guard,px=d.prices||{},tr=SS().tr||{};
  const openPos=(tr.seats||[]).reduce((a,s)=>a+(+s.open_positions||0),0);const it=[];
  const cls=v=>v>0?"up":v<0?"dn":"";
- it.push(["EQUITY",g?U(g.equity_usd):"—"]);
- it.push(["DAY P&L",g?`<span class="${cls(g.day_pnl_usd)}">${g.day_pnl_usd>=0?"+":""}${N(g.day_pnl_usd,4)}</span>`:"—"]);
+ it.push(["REAL EQUITY",g?U(g.equity_usd):"—"]);
+ it.push(["REAL DAY P&L",g?`<span class="${cls(g.day_pnl_usd)}">${g.day_pnl_usd>=0?"+":""}${N(g.day_pnl_usd,4)}</span>`:"—"]);
  for(const k of ["BTC","SOL","ETH"]){const p=px[k];it.push([k,p?`${U(p.usd)}${p.change_24h_pct!=null?` <span class="${cls(p.change_24h_pct)}">${p.change_24h_pct>0?"+":""}${N(p.change_24h_pct,2)}%</span>`:""}`:"—"])}
  it.push(["PAPER POSITIONS",tr.seats?String(openPos):"—"]);
  it.push(["PAPER DESK P&L",tr.total_pnl_after_costs_usd!=null?`<span class="${cls(tr.total_pnl_after_costs_usd)}">${N(tr.total_pnl_after_costs_usd)}</span>`:"—"]);

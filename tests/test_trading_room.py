@@ -95,3 +95,25 @@ def test_room_v4_offline(tmp_path):
     from noema.room_v4 import build_room_v4
     d = build_room_v4(str(tmp_path / "none.db"), fetch=False)
     assert d["charts"] == [] and d["social"]["status"] == "unavailable"
+
+
+def test_paper_equity_series_is_lineage_safe(tmp_path):
+    import json, sqlite3
+    from noema.command_center import paper_equity_series
+    db = tmp_path / "e.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE trench_desks (desk_id TEXT, starting_bankroll_usd REAL, parent_desk_id TEXT)")
+    c.execute("CREATE TABLE trench_desk_events (id INTEGER PRIMARY KEY, event TEXT, payload_json TEXT)")
+    c.executemany("INSERT INTO trench_desks VALUES (?,?,?)",
+                  [("a-g1", 80, None), ("b-g1", 80, None), ("a-g2", 75, "a-g1")])
+    # old double-counted snapshot: 80+80+75 style equity, true P&L -5
+    c.execute("INSERT INTO trench_desk_events (event, payload_json) VALUES ('equity_snapshot', ?)",
+              (json.dumps({"equity_usd": 230.0, "pnl_after_costs_usd": -5.0}),))
+    c.commit()
+    assert paper_equity_series(c) == [155.0]
+
+
+def test_stale_mark_reports_no_unrealized():
+    from noema.trading_room import _mark_age_seconds
+    assert _mark_age_seconds(None) is None
+    assert _mark_age_seconds("2020-01-01T00:00:00+00:00") > 300

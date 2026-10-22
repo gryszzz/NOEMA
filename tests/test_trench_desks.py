@@ -52,7 +52,8 @@ def test_take_profit_then_rebuy_on_dip(tmp_path):
     engine.try_enter("vet-g1", "M", "W", Mark(1.0, 1e9, "t"), "r")
     engine.manage_positions("vet-g1", {"M": Mark(1.2, 1e9, "t")})
     desk = store.conn.execute("SELECT * FROM trench_desks WHERE desk_id='vet-g1'").fetchone()
-    assert desk["wins"] == 1 and desk["realized_pnl_usd"] > 0
+    # partial bounce exit books P&L, but wins/losses are scored per closed position
+    assert desk["wins"] == 0 and desk["realized_pnl_usd"] > 0
     pos = store.open_positions("vet-g1")[0]
     assert pos["bounce_qty"] == 0 and pos["core_qty"] > 0
     engine.manage_positions("vet-g1", {"M": Mark(1.1, 1e9, "t")})
@@ -63,7 +64,7 @@ def test_two_losses_fire_and_hire_mutated_successor(tmp_path):
     store, engine = _engine(tmp_path)
     for mint in ("A", "B"):
         engine.try_enter("vet-g1", mint, mint, Mark(1.0, 1e9, "t"), "r")
-    engine.manage_positions("vet-g1", {"A": Mark(0.95, 1e9, "t"), "B": Mark(0.95, 1e9, "t")})
+    engine.manage_positions("vet-g1", {"A": Mark(0.5, 1e9, "t"), "B": Mark(0.5, 1e9, "t")})
     successor = engine.fire_if_needed("vet-g1", {})
     assert successor == "vet-g2"
     fired = store.conn.execute("SELECT * FROM trench_desks WHERE desk_id='vet-g1'").fetchone()
@@ -161,3 +162,13 @@ def test_full_cycle_records_paper_entries(tmp_path, monkeypatch):
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM trench_desk_trades WHERE paper=1").fetchone()[0] == 10
     assert os.environ.get("NOEMA_ALLOW_LIVE_ORDERS") is None
+
+
+def test_one_losing_two_leg_position_is_one_loss_and_does_not_fire(tmp_path):
+    store, engine = _engine(tmp_path)
+    engine.try_enter("vet-g1", "A", "A", Mark(1.0, 1e9, "t"), "r")
+    engine.manage_positions("vet-g1", {"A": Mark(0.5, 1e9, "t")})
+    assert not store.open_positions("vet-g1")
+    desk = store.conn.execute("SELECT * FROM trench_desks WHERE desk_id='vet-g1'").fetchone()
+    assert desk["losses"] == 1 and desk["consecutive_losses"] == 1
+    assert engine.fire_if_needed("vet-g1", {}) is None
