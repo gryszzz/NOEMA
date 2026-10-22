@@ -31,3 +31,19 @@ test('room v7 renders prices as candles only, slow readable cycle, no toggles', 
   assert.match(v6, /tev-candles\.js/);
   assert.match(v6, /setInterval\(flipNext,10000\)/);
 });
+
+test('scan lane puts pools with real candles first', () => {
+  const v7 = readFileSync(new URL('../noema/static/room-v7.js', import.meta.url), 'utf8');
+  assert.match(v7, /T\.chartFirst/);
+});
+
+test('candle grid never shows the same find twice at once', () => {
+  const src = readFileSync(new URL('../noema/static/room-v7.js', import.meta.url), 'utf8');
+  const m = src.match(/T\.nextPick=\(pool,cur,taken\)=>\{[^\n]*\n?/);
+  assert.ok(m);
+  const nextPick = eval('(' + m[0].slice('T.nextPick='.length).replace(/;\s*$/, '') + ')');
+  const pool = [{ key: 'a' }, { key: 'b' }, { key: 'c' }];
+  assert.equal(nextPick(pool, 0, ['b']), 2);
+  assert.equal(nextPick(pool, -1, []), 0);
+  assert.equal(nextPick([], 0, []), -1);
+});
