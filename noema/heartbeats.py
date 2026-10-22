@@ -32,6 +32,10 @@ AMBER_X, RED_X = 2.0, 6.0
 RUN_DIR = os.getenv("NOEMA_RUN_DIR", "/workspace/noema-run")
 
 
+# pm_crypto snapshots pm_near once per loop (start.sh: --interval 900, PR 185).
+NEAR_CLOSE_CADENCE_S = int(__import__("os").getenv("NOEMA_PM_CRYPTO_INTERVAL", "900"))
+
+
 def hb_dir() -> str:
     return os.getenv("NOEMA_HEARTBEAT_DIR", os.path.join(RUN_DIR, "heartbeats"))
 
@@ -323,8 +327,8 @@ def observe(main_db: str) -> list[dict[str, Any]]:
     P(_probe(lambda: _culture_sources(main_db), "feed:culture_sources", "feed", 600))
     P(_probe(lambda: _rec("feed:kalshi_crawl", "feed", 300, _max(main_db, "SELECT MAX(at) FROM fs_runs"),
                           detail="forward sampler (fs_runs)"), "feed:kalshi_crawl", "feed", 300))
-    P(_probe(lambda: _rec("feed:near_close", "feed", 300, _max(j("pm_train.db"), "SELECT MAX(snap_ts) FROM pm_near"),
-                          detail="near-close crypto"), "feed:near_close", "feed", 300))
+    P(_probe(lambda: _rec("feed:near_close", "feed", NEAR_CLOSE_CADENCE_S, _max(j("pm_train.db"), "SELECT MAX(snap_ts) FROM pm_near"),
+                          detail="near-close crypto"), "feed:near_close", "feed", NEAR_CLOSE_CADENCE_S))
     P(_probe(lambda: _rec("feed:kalshi_train", "feed", 3600, _max(j("pm_train.db"), "SELECT MAX(fetched_at) FROM pm_train"),
                           detail="Kalshi history"), "feed:kalshi_train", "feed", 3600))
     P(_probe(lambda: _rec("feed:cross_venue", "feed", 900, _max(main_db, "SELECT MAX(at) FROM xv_gap_history"),
