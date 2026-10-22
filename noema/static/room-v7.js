@@ -170,7 +170,7 @@ window.wireSources=function(){const ev=(SS().v6||{}).lanes?.find(l=>l.lane==="ev
 /* ---------- equity vs floor ---------- */
 function equity(){const cls=v=>v>0?"ok":v<0?"bad":"",T=V.tr,cv=byId("v7-eq");if(!cv)return;const head=byId("v7-tr-head"),kv=byId("v7-eq-kv"),pp=byId("v7-tr-paper");
  if(!T||!T.real){head.innerHTML='<div class="dim">waiting for the first real equity reading…</div>';return}
- const r=T.real,g=T.guard||{},S=(T.series||[]).filter(p=>p.usd!=null),sg=v=>v>=0?"+":"",pc=v=>v==null?"—":sg(v)+N(v,2)+"%",ago=Math.max(0,Math.round((Date.now()-Date.parse(r.last_reading_at))/1000)),agoS=ago<90?ago+"s":Math.round(ago/60)+"m",stale=ago>900;
+ const r=T.real,g=T.guard||{},S=(T.series||[]).filter(p=>p.usd!=null),sg=v=>v>=0?"+":"−",pc=v=>v==null?"—":sg(v)+N(Math.abs(v),2)+"%",ago=Math.max(0,Math.round((Date.now()-Date.parse(r.last_reading_at))/1000)),agoS=ago<90?ago+"s":Math.round(ago/60)+"m",stale=ago>900;
  head.innerHTML=`<div class="tr-big">$${N(r.total_usd,4)}<span class="tr-sub">total real balance · last reading <b class="${stale?"bad":"ok"}">${agoS} ago</b>${stale?" (stale)":""}</span></div>
  <div class="tr-pnl"><span>today <b class="${cls(g.pnl_today_usd)}">${sg(g.pnl_today_usd)}$${N(Math.abs(g.pnl_today_usd||0),4)} (${pc(g.pnl_today_pct)})</b></span><span>all-time <b class="${cls(r.pnl_all_usd)}">${sg(r.pnl_all_usd)}$${N(Math.abs(r.pnl_all_usd),4)} (${pc(r.pnl_all_pct)})</b></span><span class="dim">deposits $${N(r.deposits_usd,2)} (not profit)</span></div>
  <div class="tr-ven">${r.venues.map(v=>`<span class="tr-v ${v.status}"><i>${v.label}</i><b>$${N(v.usd,4)}</b></span>`).join("")}<span class="tr-v ro"><i>Stripe</i><b>read-only · not counted</b></span></div>`;
