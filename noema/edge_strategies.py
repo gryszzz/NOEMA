@@ -101,9 +101,26 @@ def kalshi_fee(p: float) -> float:
     return 0.07 * p * (1 - p)
 
 
+PMUS_TAKER_THETA = 0.0695  # https://docs.polymarket.us/fees (standard taker, effective 2026-09-17 per CFTC filing)
+
+
+def pmus_fee(p: float) -> float:
+    """Polymarket US standard taker fee per contract: theta x p x (1-p), theta 0.0695
+    (0.10 on table tennis, ignored here). Source: https://docs.polymarket.us/fees and the
+    2026-09-21 CFTC weekly notification (rules09212628660.pdf). NOEMA_PMUS_FEE_PER_CONTRACT,
+    if set, overrides with a flat per-contract fee for what-if checks."""
+    flat = os.getenv("NOEMA_PMUS_FEE_PER_CONTRACT")
+    if flat:
+        try:
+            return float(flat)
+        except ValueError:
+            pass
+    return _env("NOEMA_PMUS_TAKER_THETA", PMUS_TAKER_THETA) * p * (1 - p)
+
+
 def leg_cost(venue: str, price: float) -> float:
     slip = _env("NOEMA_STRATEGY_SLIPPAGE", 0.005)
-    fee = kalshi_fee(price) if venue.startswith("kalshi") else _env("NOEMA_PMUS_FEE_PER_CONTRACT", 0.01)
+    fee = kalshi_fee(price) if venue.startswith("kalshi") else pmus_fee(price)
     return price + fee + slip
 
 
@@ -837,6 +854,11 @@ def run_cycle(conn: sqlite3.Connection, *, client: Any = None, now: datetime | N
     bt = json.loads(bt_row[0]) if bt_row else {}
     allocate(conn, now)
     sigs = ladder_arbs(quotes) + cross_venue_gaps(quotes)
+    try:
+        from . import xv_match
+        sigs += xv_match.arb_signals(xv_match.stored_pairs(conn))
+    except sqlite3.Error:
+        pass
     sigs += news_latency_signals(conn, quotes, now)
     sigs += fav_longshot_signals(quotes, bt, rows, now)
     prices: dict[str, float] = {}

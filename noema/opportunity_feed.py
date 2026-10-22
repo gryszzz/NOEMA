@@ -114,9 +114,30 @@ def collect(conn: sqlite3.Connection, now: datetime) -> tuple[list[dict[str, Any
                    + (" · resolution wording must be checked" if a.get("needs_resolution_review") else ""),
             price_kind="cost", price=cost,
             legs=a.get("legs"))
-    st["pm_arb"] = {"n": len(arbs), "note": f"{len(quotes)} two-sided quotes ({n_k} Kalshi, "
+    # 1b) structurally matched Kalshi <-> Polymarket US pairs (noema.xv_match), closest to profit first
+    from . import xv_match
+    pairs = xv_match.stored_pairs(conn, max_age_min=45)
+    ranked = sorted((p for p in pairs if p.get("best")), key=lambda p: -p["best"]["edge"])
+    n_pos = sum(1 for p in ranked if p["best"]["edge"] > 0 and p["verdict"] != "mismatch")
+    for p in ranked[:int(os.getenv("NOEMA_OPP_XV_SHOW", "12"))]:
+        b = p["best"]
+        yv = "Kalshi" if b["yes_venue"].startswith("kalshi") else "Polymarket"
+        nv = "Kalshi" if b["no_venue"].startswith("kalshi") else "Polymarket"
+        synced = p.get("skew_s") is not None and p["skew_s"] <= es.MAX_LEG_SKEW_S
+        add("pm_arb", id=f"xvm:{p['pm_market']}|{p['kalshi_market']}", tier=0 if b["edge"] > 0 else 2,
+            title=f"{p['name']} · YES {yv} {b['yes_ask']:.2f} + NO {nv} {b['no_ask']:.2f}",
+            venue="kalshi+polymarket", ref=p["kalshi_market"], edge=b["edge"], score=b["raw_gap"],
+            reason=f"matched pair ({p['verdict']}) · raw gap {b['raw_gap'] * 100:+.1f}¢ → {b['edge'] * 100:+.1f}¢ after "
+                   f"both fees+slippage" + ("" if synced else " · quotes not in sync")
+                   + (f" · {p['issues'][0]}" if p["issues"] else ""),
+            price_kind="cost", price=b["cost"], source_at=_iso(p["at"]), xv=p)
+    matched = {"pairs": len(pairs), "equivalent": sum(p["verdict"] == "equivalent" for p in pairs),
+                            "positive_after_fees": n_pos,
+                            "best_edge": ranked[0]["best"]["edge"] if ranked else None}
+    st["pm_arb"] = {"n": len(arbs) + n_pos, "matched": matched, "note": f"{len(quotes)} two-sided quotes ({n_k} Kalshi, "
                     f"{len(quotes) - n_k} Polymarket US) checked in the last hour"
-                    + ("" if arbs else " · no gap clears fees right now")}
+                    + f" · {len(pairs)} matched Kalshi↔Polymarket pairs, {n_pos} positive after fees"
+                    + ("" if arbs or n_pos else " · no gap clears fees right now")}
 
     # 2) news / X latency (directional, model-guessed fair value)
     try:
