@@ -108,3 +108,11 @@ To show the script is the study's code and not a re-implementation, it was run o
 study's per-epoch and per-day n, n vetoed and lift exactly (0 mismatches), and the (g) arms reproduced the
 study's counts and per-epoch means exactly (treatment 898/801/736, matched control 589/574/467). No gap
 records exist in 1062–1064.
+
+## Amendment 1 (registered 2026-10-23 ~03:30 ET / 07:30 UTC, before any Set A data was read)
+Side check (does not change the pass bar): Set A results will also be reported with epoch 1061 excluded, i.e.
+epochs 1058–1060 only, because 1061 files were on disk before registration.
+Implementation: `run --set A` also stores `excl_epoch1061` (the f cell and the g treatment/matched-control
+tests recomputed on trades whose entry slot is outside epoch 1061); `verdict` reports it under
+`side_checks.A_excl_1061` with raw Welch p-values only. It is not in the Holm family and cannot pass or fail
+an idea.

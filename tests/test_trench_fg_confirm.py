@@ -79,3 +79,17 @@ def test_check_set_ready(tmp_path):
     (pf / "epoch-1059.summary.json").write_text(json.dumps(
         {"parse_complete": False, "first_slot": 1059 * 432000, "last_slot": 1060 * 432000 - 1}))
     assert fg.check_set_ready("A", str(pf)) == ["epoch 1059: parse_complete is not true"]
+
+
+def test_verdict_reports_set_a_excl_1061_side_check_without_changing_pass_bar():
+    a = _res(0.001, 0.02, 0.001, 0.03, kept=-0.01)
+    b = _res(0.002, 0.01, 0.003, 0.02, kept=-0.02)
+    base = fg.verdict({"A": a, "B": b})
+    assert base["side_checks"]["A_excl_1061"]["status"] == "MISSING"
+    a2 = dict(a, excl_epoch1061={"f": {"p_all": 0.9, "lift_all": -0.05, "kept_mean_all": -0.1},
+                                 "g": {"p_all": 0.8, "lift_all": -0.02, "kept_mean_all": -0.2}})
+    v = fg.verdict({"A": a2, "B": b})
+    sc = v["side_checks"]["A_excl_1061"]
+    assert sc["epochs"] == [1058, 1059, 1060] and sc["affects_pass_bar"] is False
+    assert sc["f"]["p_all"] == 0.9 and sc["g"]["lift_all"] == -0.02
+    assert v["ideas"] == base["ideas"] and v["tests"] == base["tests"]
