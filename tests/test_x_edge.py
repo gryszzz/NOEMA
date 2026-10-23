@@ -301,7 +301,7 @@ def test_counts_drop_is_ingested_not_rejected(tmp_path):
 def test_untrusted_text_is_sanitised_before_model(tmp_path, text):
     c, _ = _db(tmp_path)
     _post(c, 990, "evil", text, age_h=0.2)
-    items = xst.pending_links(c)
+    items = xst.pending_links(c, now=NOW)
     assert "[redacted]" in items[0]["post"]
 
 

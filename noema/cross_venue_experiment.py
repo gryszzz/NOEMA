@@ -15,6 +15,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from .cold_store import loads_payload
 from .ledger import ForecastLedger
 from .research_trials import ResearchTrialStore
 
@@ -527,17 +528,9 @@ def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, A
     ledger = ForecastLedger(path)
     try:
         inserted = ledger.append_canonical_pair_observation(observation)
-        row = ledger.conn.execute(
-            "SELECT observation_hash FROM canonical_pair_observations WHERE observation_json=?",
-            (json.dumps(observation, sort_keys=True, separators=(",", ":"), default=str),),
-        ).fetchone()
-        if row is None:
-            # Default=repr and sorted keys can differ only for non-JSON-native
-            # provider data; derive the same canonicalized bytes as the ledger.
-            encoded = json.dumps(observation, sort_keys=True, separators=(",", ":"), default=str)
-            evidence_hash = hashlib.sha256(encoded.encode()).hexdigest()
-        else:
-            evidence_hash = str(row[0])
+        # observation_hash is sha256 of the ledger's canonical JSON (payloads may be stored compressed).
+        encoded = json.dumps(observation, sort_keys=True, separators=(",", ":"), default=str)
+        evidence_hash = hashlib.sha256(encoded.encode()).hexdigest()
     finally:
         ledger.conn.close()
 
@@ -680,7 +673,7 @@ def recent_evaluations(path: str, *, limit: int = 20) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for evidence_hash, payload in rows:
         try:
-            item = json.loads(payload)
+            item = loads_payload(payload)
         except (ValueError, TypeError):
             continue
         if isinstance(item, dict) and isinstance(item.get("experiment_evaluation"), dict):
@@ -781,7 +774,7 @@ def mature_paper_pairs(
             if str(digest) in existing:
                 continue
             try:
-                observation = json.loads(payload)
+                observation = loads_payload(payload)
                 evaluation = observation.get("experiment_evaluation", {})
                 if evaluation.get("paper_simulation", {}).get("status") != "paper_fill_simulated":
                     continue

@@ -56,7 +56,10 @@ SOL_QUOTES = {WSOL, "11111111111111111111111111111111"}
 
 FOLLOW_S = int(os.getenv("NOEMA_POOL_FOLLOW_S", "3600"))            # follow window per graduated pool
 MAX_POOLS = int(os.getenv("NOEMA_POOL_MAX", "80"))                  # concurrent pool subscriptions (newest first)
-KEEP_D = float(os.getenv("NOEMA_POOL_KEEP_D", "14"))                # pool_trades retention (migrations kept)
+KEEP_D = float(os.getenv("NOEMA_POOL_KEEP_D", "14"))                # pool_coverage retention / no-pyarrow fallback
+HOT_H = float(os.getenv("NOEMA_POOL_HOT_H", "24"))                  # pool_trades kept hot in SQLite; older -> parquet
+COMPACT_ROWS = int(os.getenv("NOEMA_POOL_COMPACT_ROWS", "200000"))  # per housekeeping pass (bounds writer stall)
+COMPACT_EVERY_S = float(os.getenv("NOEMA_POOL_COMPACT_EVERY_S", "600"))
 FREE_MSGS_DAY = int(os.getenv("NOEMA_POOL_FREE_MSGS_DAY", "20000000"))
 FREE_MB_DAY = float(os.getenv("NOEMA_POOL_FREE_MB_DAY", "40000"))   # public RPC politeness cap (~0.46 MB/s avg)
 FREE_HTTP_DAY = int(os.getenv("NOEMA_POOL_FREE_HTTP_DAY", "30000"))  # backfill getSignatures/getTransaction calls
@@ -866,6 +869,81 @@ def prune_sync(c: sqlite3.Connection, keep_d: float | None = None, batch: int = 
         time.sleep(0.05)
 
 
+def cold_root(db: str) -> str:
+    """Archived pool_trades live in ``data/cold/pool_trades/pool_trades/date=YYYY-MM-DD/*.parquet`` (zstd)."""
+    from .cold_store import default_root
+    return default_root(db)
+
+
+def compact_sync(c: sqlite3.Connection, hot_h: float | None = None, max_rows: int | None = None,
+                 root: str | None = None, batch: int = 50000) -> dict[str, Any]:
+    """Move pool_trades older than ``hot_h`` (received_at) into verified parquet, then prune coverage.
+
+    Nothing is deleted unless its parquet copy was read back and verified. Without pyarrow it falls back to the
+    old KEEP_D delete so the DB cannot grow unbounded. Read old + new rows with ``read_trades``.
+    """
+    try:
+        from .cold_store import compact_table
+    except ImportError:  # pragma: no cover - cold_store itself has no hard deps
+        return {"pruned": prune_sync(c)}
+    cut = datetime.fromtimestamp(time.time() - (HOT_H if hot_h is None else hot_h) * 3600, UTC).isoformat()
+    try:
+        res = compact_table(c, "pool_trades", ts_col="received_at", cutoff=cut,
+                            root=root or cold_root(_db_path(c)), batch=batch,
+                            max_rows=COMPACT_ROWS if max_rows is None else max_rows)
+    except ImportError:
+        return {"pruned": prune_sync(c), "error": "pyarrow missing - fell back to KEEP_D delete"}
+    c.execute("DELETE FROM pool_coverage WHERE end_ts < ?", (time.time() - KEEP_D * 86400,))
+    c.commit()
+    return res
+
+
+def _db_path(c: sqlite3.Connection) -> str:
+    return next(r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main")
+
+
+def read_trades(db: str, *, mints: list[str] | None = None, pools: list[str] | None = None,
+                since_ts: int | None = None, until_ts: int | None = None,
+                root: str | None = None) -> list[dict[str, Any]]:
+    """pool_trades rows from SQLite (hot) + parquet (cold), deduped on (signature, pool, n); block_ts order."""
+    from .cold_store import read_archive
+    where, params, flt = [], [], None
+    try:
+        import pyarrow.dataset as ds
+    except ImportError:
+        ds = None
+    for col, vals in (("mint", mints), ("pool", pools)):
+        if vals:
+            where.append(f"{col} IN ({','.join('?' * len(vals))})")
+            params += list(vals)
+            if ds is not None:
+                e = ds.field(col).isin(list(vals))
+                flt = e if flt is None else flt & e
+    for op, v in ((">=", since_ts), ("<", until_ts)):
+        if v is not None:
+            where.append(f"block_ts {op} ?")
+            params.append(int(v))
+            if ds is not None:
+                e = ds.field("block_ts") >= int(v) if op == ">=" else ds.field("block_ts") < int(v)
+                flt = e if flt is None else flt & e
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    try:
+        cur = c.execute("SELECT * FROM pool_trades" + (" WHERE " + " AND ".join(where) if where else ""), params)
+        names = [d[0] for d in cur.description]
+        out = [dict(zip(names, r, strict=True)) for r in cur]
+    finally:
+        c.close()
+    seen = {(r["signature"], r["pool"], r["n"]) for r in out}
+    if ds is not None:
+        for r in read_archive(root or cold_root(db), "pool_trades", filter_expr=flt):
+            k = (r["signature"], r["pool"], r["n"])
+            if k not in seen:
+                seen.add(k)
+                out.append(r)
+    out.sort(key=lambda r: (r.get("block_ts") or 0, r.get("slot") or 0, r["signature"], r["n"]))
+    return out
+
+
 def load_state(db: str, st: State, now: float | None = None) -> None:
     """Resume pools still inside their follow window and today's usage (so a restart cannot reset the budget)."""
     now = now or time.time()
@@ -901,7 +979,7 @@ async def _main(db: str) -> None:
     sp = status_path(db)
 
     async def housekeeping() -> None:
-        last_prune = 0.0
+        last_compact = 0.0
         while not stop.is_set():
             await asyncio.sleep(STATUS_S)
             try:
@@ -913,9 +991,10 @@ async def _main(db: str) -> None:
                       f"tail={s['tail']['pools']}/{s['tail']['active']}act http={s['tail']['http_calls']}",
                       json.dumps(s["session"]),
                       f"free_mb={s['free']['mb']} helius_credits={s['helius']['credits']}", w.stats(), flush=True)
-                if time.time() - last_prune > 3600:
-                    last_prune = time.time()
-                    print(_now(), "pruned", await asyncio.wrap_future(w.submit(prune_sync)), flush=True)
+                if time.time() - last_compact > COMPACT_EVERY_S:
+                    last_compact = time.time()
+                    res = await asyncio.wrap_future(w.submit(compact_sync))
+                    print(_now(), "compacted", json.dumps(res, default=str)[:300], flush=True)
             except Exception as exc:  # noqa: BLE001 - housekeeping never takes the stream down
                 print(_now(), "housekeeping", type(exc).__name__, str(exc)[:120], flush=True)
     await asyncio.gather(run_stream(w, st, stop), run_backfill(w, st, stop), run_tail(w, st, stop), housekeeping())
@@ -951,7 +1030,16 @@ def main() -> None:  # pragma: no cover
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=default_db())
     ap.add_argument("--import-archive", metavar="DIR", help="read-only import of GOMD migrate lines")
+    ap.add_argument("--compact", action="store_true", help="one-shot: move rows older than HOT_H to parquet")
+    ap.add_argument("--max-rows", type=int, default=0, help="--compact row cap (0 = all)")
     a = ap.parse_args()
+    if a.compact:
+        c = connect(a.db)
+        try:
+            print(json.dumps(compact_sync(c, max_rows=a.max_rows or 10**12, batch=100000), default=str))
+        finally:
+            c.close()
+        return
     if a.import_archive:
         print("imported", import_archive(a.db, a.import_archive))
         return

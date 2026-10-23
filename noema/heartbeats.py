@@ -290,6 +290,12 @@ def _pool_trades(main: str) -> dict[str, Any]:
     last = _max(os.path.join(dd, "pool_trades.db"), "SELECT MAX(received_at) FROM pool_trades")
     f, h = st.get("free") or {}, st.get("helius") or {}
     age = f"{int(time.time() - last)}s ago" if last else "none yet"
+    try:   # rows older than NOEMA_POOL_HOT_H live in verified zstd parquet (noema.pool_stream.compact_sync)
+        with open(os.path.join(dd, "cold", "pool_trades", "pool_trades", "_manifest.json")) as fh:
+            cold = json.load(fh)
+        age += f" (+{int(cold.get('rows') or 0):,} archived)"
+    except (OSError, ValueError):
+        pass
     detail = (f"{st.get('mode')} following {st.get('followed')}/{st.get('max_pools')} pools "
               f"({int(st.get('follow_s') or 0) // 60}m) | free {f.get('mb')}/{f.get('mb_budget')} MB, "
               f"http {f.get('http_calls')}/{f.get('http_budget')} | helius {h.get('credits')}/"

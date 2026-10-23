@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from pathlib import Path
 
 import httpx
 
+from .cold_store import loads_payload
 from .outcomes import OutcomeStore
 from .sqlite_util import retry_write
 from .venues.kalshi_history import KalshiHistory, resolved_outcome
@@ -156,7 +156,7 @@ def cross_venue_outcome_targets(path: str, *, limit: int = 5) -> tuple[dict[str,
     seen: set[str] = set()
     for (payload,) in rows:
         try:
-            observation = json.loads(payload)
+            observation = loads_payload(payload)
             evaluation = observation.get("experiment_evaluation", {})
             if evaluation.get("paper_simulation", {}).get("status") != "paper_fill_simulated":
                 continue
