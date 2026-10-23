@@ -265,12 +265,33 @@ def _x_inbox(main: str) -> dict[str, Any]:
                 detail="X signal routine -> x-inbox")
 
 
+def _pool_trades(main: str) -> dict[str, Any]:
+    """Post-graduation PumpSwap tape (noema.pool_stream): its status file says alive / budget; the DB says rows."""
+    dd = os.path.dirname(os.path.abspath(main))
+    with open(os.path.join(dd, "pool_stream_status.json")) as fh:
+        st = json.load(fh)
+    last = _max(os.path.join(dd, "pool_trades.db"), "SELECT MAX(received_at) FROM pool_trades")
+    f, h = st.get("free") or {}, st.get("helius") or {}
+    age = f"{int(time.time() - last)}s ago" if last else "none yet"
+    detail = (f"{st.get('mode')} following {st.get('followed')}/{st.get('max_pools')} pools "
+              f"({int(st.get('follow_s') or 0) // 60}m) | free {f.get('mb')}/{f.get('mb_budget')} MB, "
+              f"http {f.get('http_calls')}/{f.get('http_budget')} | helius {h.get('credits')}/"
+              f"{h.get('credits_budget')} cr | last trade {age}")
+    stopped = st.get("stopped") or ""
+    if stopped and "free" not in stopped:
+        detail += f" | {stopped} (fallback only)"
+    err = f"auto-stopped: {stopped}" if "free" in stopped else None
+    return _rec("feed:pool_trades", "feed", 120, None if err else to_epoch(st.get("updated_at")),
+                attempt=to_epoch(st.get("updated_at")), error=err, detail=detail)
+
+
 LOOPS = {  # connection -> (process cmdline marker, cadence_s, log file in RUN_DIR)
     "agent:noema-agent": ("bin/noema-agent", 120, "agent.log"),
     "agent:dashboard": ("bin/noema-dashboard", 60, "dashboard.log"),
     "agent:proxy": ("room_proxy:app", 3600, "proxy.log"),
     "agent:treasury_updater": ("noema.equity_feed", 60, "equity_feed.log"),
     "agent:launch_stream": ("noema.launch_stream", 60, "launch_stream.log"),
+    "agent:pool_stream": ("noema.pool_stream", 60, "pool_stream.log"),
     "agent:timing": ("noema.timing_agent", 120, "timing.log"),
     "agent:smart_wallets": ("noema.smart_wallets", 600, "smart_wallets.log"),
     "agent:strategies": ("noema.edge_strategies", 600, "strategies.log"),
@@ -341,6 +362,7 @@ def observe(main_db: str) -> list[dict[str, Any]]:
     P(_probe(lambda: _rec("feed:launch_stream", "feed", 60, _max(main_db, "SELECT MAX(received_at) FROM launch_stream"),
                           detail="new pump.fun / LaunchLab creates"), "feed:launch_stream", "feed", 60))
     P(_probe(lambda: _provider_health(main_db), "feed:trench_providers", "feed", 120))
+    P(_probe(lambda: _pool_trades(main_db), "feed:pool_trades", "feed", 120))
     P(_probe(lambda: _rec("feed:geckoterminal", "feed", 300, _max(j("timing.db"), "SELECT MAX(fetched_at) FROM pools"),
                           detail="GeckoTerminal pools (timing)"), "feed:geckoterminal", "feed", 300))
     P(_probe(lambda: _rec("feed:candles", "feed", 120, _max(j("timing.db"), "SELECT MAX(ts) FROM candles"),
