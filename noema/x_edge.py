@@ -960,6 +960,7 @@ def check_contracts(conn: sqlite3.Connection, now: datetime, *, fetch: bool = Tr
                          (pool, _f(price), _f(liq), json.dumps(res), res.get("verdict"), now.isoformat(), chain, addr))
             if res.get("verdict") == "early_buyers_dumped_into_hype":
                 _bump_warning(conn, f"{chain}:{addr}", "early_buyers_dumped", 0.5, now)
+            conn.commit()  # never hold the noema.db write lock across the next contract's HTTP calls + sleeps
             out.append({"chain": chain, "address": addr, **res})
     finally:
         if own:
