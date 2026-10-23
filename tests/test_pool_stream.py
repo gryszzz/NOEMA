@@ -97,7 +97,7 @@ def test_quality_rules():
 
 def test_trade_row_prices():
     r = ps.trade_row(ps.decode_swap(swap_ev(base=2_000_000, quote=1_000_000)), "sig", 0, "mint", 7, "free_ws")
-    assert len(r) == 20 and r[8] == "buy" and r[9] == 0.001 and r[10] == 2.0
+    assert len(r) == 23 and r[8] == "buy" and r[9] == 0.001 and r[10] == 2.0
     assert abs(r[12] - 0.0005) < 1e-12 and abs(r[13] - 0.0005 * 1e9) < 1e-3   # mcap = price x 1B
 
 
@@ -291,3 +291,89 @@ def test_load_state_resumes_tail_cursor(tmp_path):
     v = st.pools["P"]
     assert v["last_sig"] == "lastsig" and v["last_slot"] == 77 and abs(v["tail_from"] - (now - 4 * 3600)) < 1
     assert st.tail_pools() == ["P"]
+
+
+def swap_ev_v(side="buy", base=1_000_000_000, pool_base=180_000_000_000_000, pool_quote=85_000_000_000,
+              virtual=17_600_000_000, fee=1.0, ix="buy"):
+    """Current-layout event with virtual_quote_reserves; quote priced on vault+virtual (x fee)."""
+    den = pool_base - base if side == "buy" else pool_base + base
+    quote = int((pool_quote + virtual) * base / den * fee)
+    d = bytearray(swap_ev(side, base, quote, pool_base, pool_quote).ljust(360, b"\0"))
+    if side == "buy":
+        d += bytes(1 + 5 * 8) + struct.pack("<I", len(ix)) + ix.encode()
+    d += bytes(4 * 8) + virtual.to_bytes(16, "little", signed=True) + bytes(1 + 4 * 8 + 8)
+    return bytes(d)
+
+
+def test_virtual_quote_reserves_decoded_and_priced():
+    for side, ix in (("buy", "buy"), ("buy", "buy_exact_quote_in"), ("sell", "")):
+        ev = ps.decode_swap(swap_ev_v(side, ix=ix))
+        assert ev["virtual_quote"] == 17_600_000_000
+        assert ps.quality(ev) is None                    # exact vs vault+virtual
+        r = ps.trade_row(ev, "s", 0, "m", 1, "free_ws")
+        assert r[20] == 17.6 and r[22] == "vault+virtual"
+        assert abs(r[21] - (85 + 17.6) / 180_000_000) < 1e-15   # (vault quote + virtual) / vault base
+    assert ps.quality(ps.decode_swap(swap_ev_v(base=50_000_000_000, fee=1.0125))) is None   # buy-exact-quote-in: fill = curve x fee
+    # a 30% premium over vault-only was "normal" before; vs vault+virtual it is garbage
+    assert "off_reserves" in ps.quality(ps.decode_swap(swap_ev_v(base=50_000_000_000, fee=1.3)))
+    assert ps.decode_swap(swap_ev())["virtual_quote"] is None   # legacy layout
+    r = ps.trade_row(ps.decode_swap(swap_ev()), "s", 0, "m", 1, "free_ws")
+    assert r[20] is None and r[21] is None and r[22] == "vault_only_event"
+    neg = ps.decode_swap(swap_ev_v(virtual=-2_000_000_000))
+    assert neg["virtual_quote"] == -2_000_000_000 and ps.quality(neg) is None
+
+
+def test_connect_migrates_legacy_table(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "old.db")
+    c = sqlite3.connect(db)
+    c.execute("""CREATE TABLE pool_trades (signature TEXT NOT NULL, pool TEXT NOT NULL, n INTEGER NOT NULL,
+      mint TEXT NOT NULL, program TEXT NOT NULL, slot INTEGER, block_ts INTEGER, received_at TEXT NOT NULL,
+      side TEXT NOT NULL, sol REAL, tokens REAL, trader TEXT, price REAL, mcap_sol REAL, pool_base REAL,
+      pool_quote_sol REAL, lp_fee_sol REAL, protocol_fee_sol REAL, source TEXT, quality TEXT,
+      PRIMARY KEY (signature, pool, n))""")
+    c.execute("INSERT INTO pool_trades VALUES (" + ",".join("?" * 20) + ")",
+              ("old", "P", 0, "M", "pump_amm", 1, 1, "t", "buy", 1, 1, "u", 1, 1, 1, 1, 0, 0, "free_ws", None))
+    c.commit()
+    c.close()
+    c = ps.connect(db)
+    c.execute(ps.INSERT_TRADE, ps.trade_row(ps.decode_swap(swap_ev_v()), "new", 0, "M", 2, "free_ws"))
+    got = dict(c.execute("SELECT signature, reserve_basis FROM pool_trades").fetchall())
+    assert got == {"old": "legacy_vault_only", "new": "vault+virtual"}
+    c.close()
+    ps.connect(db).close()                               # idempotent
+
+
+def test_hot_threshold_shrinks_with_hot_pools():
+    assert ps.hot_threshold(0) == ps.HOT_MB_MIN and ps.hot_threshold(1) == ps.HOT_MB_MIN
+    assert ps.hot_threshold(5) == ps.HOT_TOTAL_MB_MIN / 5
+    assert ps.hot_threshold(1000) == ps.HOT_MIN_MB_MIN
+
+
+def test_http_429_cools_endpoint_and_rotates(monkeypatch):
+    import asyncio
+    import urllib.error
+    ps._COOL.clear()
+    a, b = ps.FREE_HTTP[0], ps.FREE_HTTP[1]
+    calls = []
+
+    def fake_rpc(url, method, params, meter=None):
+        calls.append(url)
+        if url == a:
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {"Retry-After": "40"}, None)
+        meter[0] += 100
+        return {"ok": url}
+
+    monkeypatch.setattr(ps, "_rpc", fake_rpc)
+    st = ps.State()
+    h = ps.Http(st, "tail", helius_fallback=True, gap_s=0)
+    assert asyncio.run(h.call("getSlot", [])) == {"ok": b}
+    assert ps.free_endpoints() == [b] and ps._COOL[a][1] == 40
+    calls.clear()
+    for _ in range(3):
+        asyncio.run(h.call("getSlot", []))
+    assert calls == [b, b, b]                      # cooled endpoint skipped
+    assert st.budget._get("tail")["bytes"] == 400 and st.n["http_429"] == 1
+    monkeypatch.setattr(ps.time, "time", lambda: 1e12)
+    assert set(ps.free_endpoints()) == set(ps.FREE_HTTP)   # cooldown expires
+    ps._COOL.clear()

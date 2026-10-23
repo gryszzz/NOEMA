@@ -68,13 +68,18 @@ TAIL_S = int(os.getenv("NOEMA_POOL_TAIL_S", "86400"))                # tail-foll
 TAIL_ACTIVE_S = float(os.getenv("NOEMA_POOL_TAIL_ACTIVE_S", "300"))
 TAIL_DEAD_S = float(os.getenv("NOEMA_POOL_TAIL_DEAD_S", "1800"))
 TAIL_DEAD_AFTER_S = 7200.0   # no successful tx for 2 h -> dead cadence
-TAIL_HTTP_DAY = int(os.getenv("NOEMA_POOL_TAIL_HTTP_DAY", "80000"))   # hard daily cap, tail polling only
-TAIL_GAP_S = 1.0             # >= 1 s between tail calls (public RPC per-IP limits; also bounds the day at 86.4k)
+TAIL_HTTP_DAY = int(os.getenv("NOEMA_POOL_TAIL_HTTP_DAY", "50000"))   # hard daily cap, tail polling only
+TAIL_MB_DAY = float(os.getenv("NOEMA_POOL_TAIL_MB_DAY", "3000"))       # hard daily cap on tail response bytes
+TAIL_GAP_S = 1.5             # >= 1.5 s between tail calls (IP shared with launch_stream; bounds the day at 57.6k)
 TAIL_TX_PER_POLL = int(os.getenv("NOEMA_POOL_TAIL_TX_PER_POLL", "8"))
 HELIUS_CREDITS_PER_CALL = 10  # conservative (archival calls); counted against HELIUS_CREDITS_DAY
 HOT_MB_MIN = float(os.getenv("NOEMA_POOL_HOT_MB_MIN", "3"))         # live pool above this MB/min -> duty-cycled
 HOT_ON_S = 20.0
-HOT_MAX_OFF_S = float(os.getenv("NOEMA_POOL_HOT_MAX_OFF_S", "180"))
+HOT_MAX_OFF_S = float(os.getenv("NOEMA_POOL_HOT_MAX_OFF_S", "600"))
+# all hot pools together aim for ~this MB/min: the per-pool trigger shrinks as more pools run hot (shared IP with
+# launch_stream's firehose, ~38 MB/min, so pool_stream keeps its own WS well under the 80 GB/day cap)
+HOT_TOTAL_MB_MIN = float(os.getenv("NOEMA_POOL_HOT_TOTAL_MB_MIN", "10"))
+HOT_MIN_MB_MIN = 0.5
 HELIUS_SESSION_S = 300.0     # on Helius, retry the free endpoints every 5 min
 BACKFILL_S = float(os.getenv("NOEMA_POOL_BACKFILL_S", "120"))
 STATUS_S = 30.0
@@ -92,7 +97,8 @@ CREATE_POOL, BUY, SELL = _D("CreatePoolEvent"), _D("BuyEvent"), _D("SellEvent")
 # Verified on-chain 2026-10-22 (txs 4KVi49Gw.., 3oCes3a7.., KykDmPLX..): decoded fills match
 # vault token/SOL deltas exactly; PumpSwap fills sit 7-50% above raw-vault x*y=k because
 # pricing uses extra virtual quote reserve, so decoded price is right, raw reserve price is low.
-OFF_RESERVES_BAND = (0.5, 4.0)
+OFF_RESERVES_BAND = (0.5, 4.0)        # legacy events without virtual_quote_reserves
+OFF_RESERVES_BAND_V = (0.95, 1.05)    # vs vault+virtual: fills match exactly (quote is ex-fee)
 MIG_QUOTE_SOL = (50.0, 200.0)  # a standard pump.fun graduation seeds ~85 SOL; outside this -> "nonstandard"
 CHECK_MIN_SOL = 0.001        # tiny trades: integer rounding dominates, skip the reserve check
 LOW_LIQ_SOL = 1.0            # pool quote reserve below this -> prices are not meaningful
@@ -118,17 +124,35 @@ def decode_create_pool(d: bytes) -> dict[str, Any] | None:
             "pool_quote": u[3], "pool": b58(d[173:205]), "lp_mint": b58(d[205:237])}
 
 
+def _swap_tail(d: bytes, side: str) -> int | None:
+    """virtual_quote_reserves (i128) from the event tail (pump_amm IDL, 2026): after coin_creator_fee (ends @360)
+    buys carry track_volume bool, 4 x u64 volume/claim fields, min_base_amount_out u64, ix_name string; then both
+    sides carry cashback_bps, cashback, buyback_bps, buyback_fee (4 x u64) before virtual_quote_reserves.
+    None on older/shorter layouts. The pool prices against vault quote + virtual_quote_reserves."""
+    o = 360
+    if side == "buy":
+        o += 1 + 5 * 8
+        if len(d) < o + 4:
+            return None
+        o += 4 + int.from_bytes(d[o:o + 4], "little")
+    o += 4 * 8
+    if len(d) < o + 16:
+        return None
+    return int.from_bytes(d[o:o + 16], "little", signed=True)
+
+
 def decode_swap(d: bytes) -> dict[str, Any] | None:
     """PumpSwap BuyEvent / SellEvent: ts i64 then 13 u64 (base, limit, user_base, user_quote, pool_base, pool_quote,
     quote [ex-fee], lp_fee_bps, lp_fee, protocol_fee_bps, protocol_fee, quote_w_lp_fee, user_quote [w/ all fees]),
-    pool, user. Pool reserves are the PRE-trade reserves."""
+    pool, user, ..., virtual_quote_reserves (see _swap_tail). Pool reserves are the PRE-trade VAULT reserves; the
+    curve's effective quote reserve is pool_quote + virtual_quote."""
     side = "buy" if d[:8] == BUY else "sell" if d[:8] == SELL else None
     if side is None or len(d) < 184:
         return None
     u = [_u64(d, 16 + 8 * i) for i in range(13)]
     return {"kind": "swap", "side": side, "ts": _u64(d, 8), "base": u[0], "pool_base": u[4], "pool_quote": u[5],
             "quote": u[6], "lp_fee": u[8], "protocol_fee": u[10], "user_quote": u[12],
-            "pool": b58(d[120:152]), "trader": b58(d[152:184])}
+            "pool": b58(d[120:152]), "trader": b58(d[152:184]), "virtual_quote": _swap_tail(d, side)}
 
 
 def program_data(logs: list[str]) -> list[bytes]:
@@ -151,7 +175,8 @@ def migration_from_logs(logs: list[str]) -> list[dict[str, Any]]:
 
 def quality(ev: dict[str, Any], quote_mint: str | None = WSOL) -> str | None:
     """Ingest sanity flags (kept, flagged - loaders exclude), in the spirit of tape_quality.row_reason:
-    zero_sol, non_sol_quote, off_reserves (execution vs the event's own constant-product reserves outside [1/2, 4]),
+    zero_sol, non_sol_quote, off_reserves (execution vs the event's own constant-product reserves - vault quote +
+    virtual_quote_reserves - outside [0.95, 1.05]; vault-only [1/2, 4] for legacy events without the field),
     low_liq (pool quote reserve < 1 SOL)."""
     r = []
     if quote_mint not in SOL_QUOTES:
@@ -160,9 +185,12 @@ def quality(ev: dict[str, Any], quote_mint: str | None = WSOL) -> str | None:
     if b <= 0 or q <= 0:
         r.append("zero_sol")
     elif q / 1e9 >= CHECK_MIN_SOL and B > 0 and Q > 0:
+        V = ev.get("virtual_quote")
+        band = OFF_RESERVES_BAND if V is None else OFF_RESERVES_BAND_V
+        Qe = Q + (V or 0)
         denom = B - b if ev["side"] == "buy" else B + b
-        exp = Q * b / denom if denom > 0 else float("inf")
-        if exp <= 0 or not OFF_RESERVES_BAND[0] <= q / exp <= OFF_RESERVES_BAND[1]:
+        exp = Qe * b / denom if denom > 0 else float("inf")
+        if exp <= 0 or not band[0] <= q / exp <= band[1]:
             r.append("off_reserves")
     if Q / 1e9 < LOW_LIQ_SOL:
         r.append("low_liq")
@@ -175,9 +203,14 @@ def trade_row(ev: dict[str, Any], sig: str, n: int, mint: str, slot: int | None,
     B, Q = ev["pool_base"], ev["pool_quote"]          # pre-trade reserves (as emitted by the event)
     price = (sol / tok) if tok > 0 else None
     mcap = round(price * 1e9, 4) if price else None   # execution price x 1B supply, same basis as the curve tape
+    V = ev.get("virtual_quote")
+    vq = V / 1e9 if V is not None else None
+    # pre-trade reserve (spot) price: (vault quote + virtual quote) / vault base. Vault-only Q/B understates it.
+    rp = (Q / 1e9 + vq) / (B / 1e6) if vq is not None and B > 0 else None
     return (sig, ev["pool"], n, mint, "pump_amm", slot, ev["ts"], received_at or _now(), ev["side"], sol, tok,
             ev["trader"], price, mcap, B / 1e6, Q / 1e9, ev["lp_fee"] / 1e9,
-            ev["protocol_fee"] / 1e9, source, quality(ev, quote_mint))
+            ev["protocol_fee"] / 1e9, source, quality(ev, quote_mint),
+            vq, rp, "vault+virtual" if vq is not None else "vault_only_event")
 
 
 # ---- storage -------------------------------------------------------------------------------------
@@ -191,6 +224,7 @@ CREATE TABLE IF NOT EXISTS pool_trades (signature TEXT NOT NULL, pool TEXT NOT N
   mint TEXT NOT NULL, program TEXT NOT NULL, slot INTEGER, block_ts INTEGER, received_at TEXT NOT NULL,
   side TEXT NOT NULL, sol REAL, tokens REAL, trader TEXT, price REAL, mcap_sol REAL, pool_base REAL,
   pool_quote_sol REAL, lp_fee_sol REAL, protocol_fee_sol REAL, source TEXT, quality TEXT,
+  virtual_quote_sol REAL, reserve_price REAL, reserve_basis TEXT DEFAULT 'legacy_vault_only',
   PRIMARY KEY (signature, pool, n));
 CREATE INDEX IF NOT EXISTS pool_trades_pool ON pool_trades(pool, slot);
 CREATE INDEX IF NOT EXISTS pool_trades_at ON pool_trades(received_at);
@@ -200,7 +234,12 @@ CREATE INDEX IF NOT EXISTS pool_coverage_end ON pool_coverage(end_ts);
 CREATE TABLE IF NOT EXISTS pool_stream_usage (day TEXT NOT NULL, source TEXT NOT NULL, msgs INTEGER, bytes INTEGER,
   http_calls INTEGER, credits REAL, updated_at TEXT, PRIMARY KEY (day, source));
 """
-INSERT_TRADE = "INSERT OR IGNORE INTO pool_trades VALUES (" + ",".join("?" * 20) + ")"
+INSERT_TRADE = "INSERT OR IGNORE INTO pool_trades VALUES (" + ",".join("?" * 23) + ")"
+# Rows written before virtual_quote_reserves was decoded keep NULL virtual_quote_sol / reserve_price and read back
+# reserve_basis='legacy_vault_only' (ALTER ... DEFAULT, no rewrite): their pool_base / pool_quote_sol are vault-only,
+# the virtual reserve differs per pool (~15-19 SOL) and isn't recoverable from stored fields - don't price off them.
+TRADE_COLS_V = (("virtual_quote_sol", "REAL"), ("reserve_price", "REAL"),
+                ("reserve_basis", "TEXT DEFAULT 'legacy_vault_only'"))
 INSERT_COV = "INSERT OR REPLACE INTO pool_coverage VALUES (?,?,?,?,?,?,?)"
 INSERT_MIG = ("INSERT OR IGNORE INTO pool_migrations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 
@@ -219,6 +258,10 @@ def connect(path: str) -> sqlite3.Connection:
     c = sqlite_connect(path)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
+    have = {r[1] for r in c.execute("PRAGMA table_info(pool_trades)")}
+    for col, typ in TRADE_COLS_V:
+        if col not in have:
+            c.execute(f"ALTER TABLE pool_trades ADD COLUMN {col} {typ}")
     c.commit()
     return c
 
@@ -280,7 +323,8 @@ class Budget:
         return self._get("free")["http"] < FREE_HTTP_DAY
 
     def tail_ok(self) -> bool:
-        return self._get("tail")["http"] < TAIL_HTTP_DAY
+        g = self._get("tail")
+        return g["http"] < TAIL_HTTP_DAY and g["bytes"] < TAIL_MB_DAY * 1e6
 
     def tail_paced(self, t: float | None = None) -> bool:
         """True when tail polling is ahead of an even spread of TAIL_HTTP_DAY over the UTC day (+30 min slack)."""
@@ -370,21 +414,26 @@ def handle_pool_logs(w: Any, st: State, sig: str | None, logs: list[str], slot: 
             continue
         w.execute(INSERT_TRADE, row)
         st.n["trades"] += 1
-        st.n["flagged"] += row[-1] is not None
+        st.n["flagged"] += row[19] is not None
         k += 1
     if not k and any("truncated" in ln for ln in logs):
         st.n["truncated_no_event"] += 1
     return k
 
 
-def hot_off_s(v: dict[str, Any], now: float) -> float:
-    """Rolling 60 s byte meter of a subscribed pool. Over HOT_MB_MIN MB/min (measured over >= HOT_ON_S) -> pause
-    for HOT_ON_S * (rate / HOT_MB_MIN - 1) s (<= HOT_MAX_OFF_S), so a hot pool averages ~HOT_MB_MIN MB/min."""
+def hot_threshold(n_hot: int) -> float:
+    """Per-pool MB/min trigger: HOT_MB_MIN, shrinking so n_hot pools together stay near HOT_TOTAL_MB_MIN."""
+    return max(HOT_MIN_MB_MIN, min(HOT_MB_MIN, HOT_TOTAL_MB_MIN / max(1, n_hot)))
+
+
+def hot_off_s(v: dict[str, Any], now: float, thr: float = HOT_MB_MIN) -> float:
+    """Rolling 60 s byte meter of a subscribed pool. Over thr MB/min (measured over >= HOT_ON_S) -> pause
+    for HOT_ON_S * (rate / thr - 1) s (<= HOT_MAX_OFF_S), so a hot pool averages ~thr MB/min."""
     age = now - v.get("w0", now)
     rate = v.get("wb", 0) / max(age, 1e-9) * 60 / 1e6
-    if age >= HOT_ON_S and rate > HOT_MB_MIN:
+    if age >= HOT_ON_S and rate > thr:
         v["hot"], v["wb"], v["w0"] = True, 0, now
-        return max(1.0, min(HOT_MAX_OFF_S, HOT_ON_S * (rate / HOT_MB_MIN - 1)))
+        return max(1.0, min(HOT_MAX_OFF_S, HOT_ON_S * (rate / thr - 1)))
     if age >= 60:                      # quiet minute: reset the window
         v["hot"], v["wb"], v["w0"] = False, 0, now
     return 0.0
@@ -401,10 +450,45 @@ def helius_http() -> str | None:
     return f"https://mainnet.helius-rpc.com/?api-key={key}" if key else None   # never printed
 
 
-def _rpc(url: str, method: str, params: list) -> Any:
+def _rpc(url: str, method: str, params: list, meter: list | None = None) -> Any:
+    """One single (never batched - keeps requests tiny, no 413) JSON-RPC call. meter[0] += response bytes."""
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     with urllib.request.urlopen(urllib.request.Request(url, body, UA), timeout=20) as r:
-        return json.loads(r.read()).get("result")
+        raw = r.read()
+    if meter is not None:
+        meter[0] += len(raw)
+    return json.loads(raw).get("result")
+
+
+# Free endpoints are shared by every Http instance (backfill + tail) and, on this IP, by launch_stream's firehose:
+# a 429 / 413 / 5xx cools that endpoint down (exponential, honours Retry-After, <= HTTP_COOL_MAX_S) for everyone.
+HTTP_COOL_MAX_S = 600.0
+_COOL: dict[str, tuple[float, float]] = {}     # url -> (cool_until, last_backoff_s)
+
+
+def _cool(url: str, exc: Exception, now: float | None = None) -> float:
+    now = time.time() if now is None else now
+    code = getattr(exc, "code", None)
+    ra = None
+    try:
+        ra = float(exc.headers.get("Retry-After")) if code == 429 and getattr(exc, "headers", None) else None
+    except (TypeError, ValueError):
+        ra = None
+    prev = _COOL.get(url, (0.0, 0.0))[1]
+    base = 15.0 if code == 429 else 5.0
+    back = min(HTTP_COOL_MAX_S, max(base, ra or 0.0, prev * 2 if prev else base))
+    _COOL[url] = (now + back, back)
+    return back
+
+
+def _uncool(url: str) -> None:
+    if url in _COOL:
+        _COOL[url] = (0.0, _COOL[url][1] / 2 if _COOL[url][1] > 5 else 0.0)
+
+
+def free_endpoints(now: float | None = None) -> list[str]:
+    now = time.time() if now is None else now
+    return [u for u in FREE_HTTP if _COOL.get(u, (0.0, 0.0))[0] <= now]
 
 
 async def session(url: str, src: str, w: Any, st: State, stop: asyncio.Event, cap: int,
@@ -445,9 +529,10 @@ async def session(url: str, src: str, w: Any, st: State, stop: asyncio.Event, ca
                         if p not in pool_sub and p not in asked:
                             await send("logsSubscribe", [{"mentions": [p]}, {"commitment": "confirmed"}], ("pool", p))
                     now = time.time()
+                    thr = hot_threshold(sum(1 for v in st.pools.values() if v.get("hot")))
                     for p in list(pool_sub):          # duty-cycle bot-spam pools (bytes are mostly failed txs)
                         v = st.pools.get(p) or {}
-                        off = hot_off_s(v, now)
+                        off = hot_off_s(v, now, thr)
                         if off:
                             v["off_until"] = now + off
                             st.n["hot_pauses"] += 1
@@ -561,12 +646,25 @@ class Http:
             raise RuntimeError(f"{self.src} http daily budget reached")
         err: Exception | None = None
         for _ in range(len(FREE_HTTP) if self.helius_fallback else 1):
+            ok = free_endpoints()
+            if not ok:                         # every free endpoint cooling down after 429s: back off, don't hammer
+                self.st.n["http_cooling"] = self.st.n.get("http_cooling", 0) + 1
+                err = err or RuntimeError("free http endpoints cooling down (429 backoff)")
+                break
+            url = ok[self.j % len(ok)]
+            self.j += 1                        # round-robin: spread load over mainnet-beta and publicnode
             await asyncio.sleep(self.gap_s)
-            self.st.budget.add(self.src, http=1, msgs=0)
+            meter = [0]
             try:
-                return await asyncio.to_thread(_rpc, FREE_HTTP[self.j % len(FREE_HTTP)], method, params)
+                out = await asyncio.to_thread(_rpc, url, method, params, meter)
+                self.st.budget.add(self.src, nbytes=meter[0], http=1, msgs=0)
+                _uncool(url)
+                return out
             except Exception as exc:  # noqa: BLE001
-                self.j += 1
+                self.st.budget.add(self.src, nbytes=meter[0], http=1, msgs=0)
+                if getattr(exc, "code", None) in (413, 429) or (getattr(exc, "code", None) or 0) >= 500:
+                    _cool(url, exc)
+                    self.st.n["http_429"] = self.st.n.get("http_429", 0) + (getattr(exc, "code", None) == 429)
                 err = exc
         url = helius_http() if self.helius_fallback else None
         if url and HELIUS_ON and (self.st.budget.credits("helius") + HELIUS_CREDITS_PER_CALL
@@ -722,7 +820,11 @@ def write_status(path: str, st: State, followed: int) -> dict[str, Any]:
          "hot_pools": sum(1 for v in st.pools.values() if v.get("hot")),
          "tail": {"enabled": TAIL_ON, "tail_s": TAIL_S, "pools": len(tail),
                   "active": sum(1 for q in tail if st.tail_active(q)), "http_calls": t["http"],
-                  "http_budget": TAIL_HTTP_DAY, "tx_per_poll": TAIL_TX_PER_POLL},
+                  "http_budget": TAIL_HTTP_DAY, "tx_per_poll": TAIL_TX_PER_POLL,
+                  "mb": round(t["bytes"] / 1e6, 1), "mb_budget": TAIL_MB_DAY},
+         "hot_threshold_mb_min": round(hot_threshold(sum(1 for v in st.pools.values() if v.get("hot"))), 2),
+         "http_cooling": {u.split("//")[-1]: round(c[0] - time.time()) for u, c in _COOL.items()
+                          if c[0] > time.time()},
          "free": {"msgs": f["msgs"], "mb": round(f["bytes"] / 1e6, 1), "http_calls": f["http"],
                   "msgs_budget": FREE_MSGS_DAY, "mb_budget": FREE_MB_DAY, "http_budget": FREE_HTTP_DAY},
          "helius": {"enabled": HELIUS_ON and bool(os.getenv("HELIUS_API_KEY")), "mb": round(h["bytes"] / 1e6, 2),
