@@ -137,3 +137,10 @@ def test_api_and_room_assets(tmp_path, monkeypatch):
     assert "/static/prediction-panel.js" in html
     js = (dashboard_app._STATIC_DIR / "prediction-panel.js").read_text()
     assert "innerHTML" not in js.replace("no innerHTML", "") and "purple" not in js
+
+
+def test_panel_hides_post_text_and_dedupes():
+    js = (dashboard_app._STATIC_DIR / "prediction-panel.js").read_text()
+    for gone in ("p.title", "p.summary", "p.note,", "pb-post", "report_path"):
+        assert gone not in js
+    assert "latestPicks" in js and r"stake \$([0-9,.]+)" in js
