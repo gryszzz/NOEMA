@@ -79,6 +79,20 @@ CHAINS: dict[str, Chain] = {c.ds: c for c in (
     Chain("polygon", "polygon_pos", 137, "POL", "polygon", "evm_polygon", True),
 )}
 
+# Chains this scanner runs on (Tony 2026-10-22: only chains usable with what we hold). Others are skipped entirely.
+DEFAULT_ACTIVE_CHAINS = "base,ethereum,robinhood"
+
+
+def active_chains(spec: str | None = None) -> dict[str, Chain]:
+    """Allowlist from ``spec`` or NOEMA_OTHERCHAIN_CHAINS (comma list of DexScreener chain ids)."""
+    raw = spec if spec is not None else os.getenv("NOEMA_OTHERCHAIN_CHAINS", DEFAULT_ACTIVE_CHAINS)
+    names = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    unknown = sorted(names - set(CHAINS))
+    if unknown:
+        raise ValueError(f"unknown other-chain(s): {', '.join(unknown)}")
+    return {k: v for k, v in CHAINS.items() if k in names}
+
+
 # ---- pre-registered parameters (frozen; changing any of these is a new study with a new registration) ----
 PAPER_SIZE_USD = float(os.getenv("NOEMA_OTHERCHAIN_PAPER_SIZE_USD", "25"))
 FUNDED_MIN_USD = 1.0               # a chain counts as funded when the treasury reads >= $1 there
@@ -255,8 +269,9 @@ class Limiter:
 
 
 class Scanner:
-    def __init__(self, db: str, main_db: str, client: Any = None) -> None:
+    def __init__(self, db: str, main_db: str, client: Any = None, chains: dict[str, Chain] | None = None) -> None:
         import httpx
+        self.chains = chains if chains is not None else active_chains()
         self.c = connect(db)
         self.main_db = main_db
         self.http = client or httpx.AsyncClient(timeout=15, headers=UA)
@@ -271,7 +286,11 @@ class Scanner:
         self.errors: dict[str, str] = {}
         self.last_ok: dict[str, float] = {}
         self.passes = 0
-        self.sha = preregister(self.c)
+        self.sha = self.register()
+
+    def register(self) -> str:
+        """Pre-register this arm's rule in its DB (v1 = PREREG; a later arm overrides with its own)."""
+        return preregister(self.c)
 
     async def get(self, lim: str, url: str, **kw: Any) -> Any:
         await self.lim[lim].wait()
@@ -369,7 +388,7 @@ class Scanner:
     # -- discovery --
     def add_pair(self, chain: str, pair: str, created: float | None, source: str, token: str | None = None,
                  symbol: str | None = None, dex: str | None = None, quote: str | None = None) -> bool:
-        if not pair or created is None:
+        if not pair or created is None or chain not in self.chains:
             return False
         pair = pair.lower()
         now = _now()
@@ -393,10 +412,10 @@ class Scanner:
                        "WHERE chain=? AND pair=?", (reason, _now(), *extra.values(), chain, pair))
 
     async def gt_loop(self) -> None:
-        order = list(CHAINS)
+        order = list(self.chains)
         i = 0
         while True:
-            ch = CHAINS[order[i % len(order)]]
+            ch = self.chains[order[i % len(order)]]
             i += 1
             try:
                 d = await self.get("gt", f"{GT}/networks/{ch.gt}/new_pools", params={"page": 1})
@@ -421,7 +440,7 @@ class Scanner:
                 try:
                     rows = await self.get("ds_prof", f"{DS}/{path}")
                     toks = {(r.get("chainId"), str(r.get("tokenAddress") or "").lower()) for r in rows or []
-                            if r.get("chainId") in CHAINS and r.get("tokenAddress")}
+                            if r.get("chainId") in self.chains and r.get("tokenAddress")}
                     n_new = 0
                     for chain, tok in toks:
                         if self.c.execute("SELECT 1 FROM oc_pairs WHERE chain=? AND token=? LIMIT 1", (chain, tok)).fetchone():
@@ -656,8 +675,20 @@ class Scanner:
             self.c.commit()
             await asyncio.sleep(30)
 
+    def retire_dropped(self) -> int:
+        """Close open rows on chains no longer in the allowlist (no result booked; they never count as trades)."""
+        dropped = [c for c in CHAINS if c not in self.chains]
+        if not dropped:
+            return 0
+        q = ",".join("?" * len(dropped))
+        n = self.c.execute(f"UPDATE oc_pairs SET stage='closed', exit_reason='chain_dropped', updated_at=? "
+                           f"WHERE stage IN ('seen','followed') AND chain IN ({q})", (_now(), *dropped)).rowcount
+        self.c.commit()
+        return n
+
     async def run(self) -> None:
         self.refresh_funded()
+        self.retire_dropped()
         # resume: anything 'seen' at restart goes back into the queue (old ones time out there)
         for r in self.c.execute("SELECT chain, pair FROM oc_pairs WHERE stage='seen'"):
             self.vet_q.append((r[0], r[1]))
@@ -715,8 +746,9 @@ def verdict_for(trades: list[tuple[str, float]], k_chains: int) -> dict[str, Any
     return out
 
 
-def board(db: str) -> dict[str, Any]:
+def board(db: str, chains: dict[str, Chain] | None = None) -> dict[str, Any]:
     """Read-only dashboard payload: per-chain funnel, discovery lag, paper results and pre-registered verdict."""
+    active = chains if chains is not None else active_chains()
     if not os.path.isfile(db):
         return {"status": "not started", "paper_only": True}
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
@@ -724,7 +756,7 @@ def board(db: str) -> dict[str, Any]:
     try:
         pre = c.execute("SELECT created_at, sha256 FROM oc_preregistration ORDER BY id LIMIT 1").fetchone()
         chains = []
-        for name, ch in CHAINS.items():
+        for name, ch in active.items():
             f = c.execute("SELECT count(*) seen, sum(stage='skipped') skipped, sum(stage IN ('followed','closed')) followed,"
                           " sum(signal_at IS NOT NULL) signals, sum(entry_at IS NOT NULL) entries,"
                           " sum(exit_reason='dead_before_signal') dead, max(funded) funded, min(seen_at) first"
@@ -740,7 +772,7 @@ def board(db: str) -> dict[str, Any]:
             gross = [r[0] for r in c.execute("SELECT gross_ret FROM oc_pairs WHERE chain=? AND gross_ret IS NOT NULL", (name,))]
             br = c.execute("SELECT time_s, cost_usd, origin FROM oc_bridge WHERE chain=? AND ok=1 ORDER BY at DESC LIMIT 1",
                            (name,)).fetchone()
-            v = verdict_for(trades, len(CHAINS))
+            v = verdict_for(trades, len(active))   # k = chains tested (pre-registered wording)
             chains.append({
                 "chain": name, "funded": bool(f["funded"]), "signer_chain": ch.signer,
                 "seen": f["seen"] or 0, "skipped": f["skipped"] or 0, "buyable_followed": f["followed"] or 0,
@@ -762,15 +794,18 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Paper-only other-chain launch scanner (never trades).")
     ap.add_argument("--db", default=os.getenv("NOEMA_OTHERCHAIN_DB", "data/other_chains.db"))
     ap.add_argument("--main-db", default=os.getenv("NOEMA_DB_PATH", "data/noema.db"))
+    ap.add_argument("--chains", default=os.getenv("NOEMA_OTHERCHAIN_CHAINS", DEFAULT_ACTIVE_CHAINS),
+                    help="comma allowlist of chains to scan (others are skipped entirely)")
     ap.add_argument("--board", action="store_true", help="print the board JSON and exit")
     a = ap.parse_args(argv)
+    chains = active_chains(a.chains)
     if a.board:
-        print(json.dumps(board(a.db), indent=1, default=str))
+        print(json.dumps(board(a.db, chains), indent=1, default=str))
         return
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    log.info("other_chains paper scanner starting: chains=%s size=$%s", ",".join(CHAINS), PAPER_SIZE_USD)
-    asyncio.run(Scanner(a.db, a.main_db).run())
+    log.info("other_chains paper scanner starting: chains=%s size=$%s", ",".join(chains), PAPER_SIZE_USD)
+    asyncio.run(Scanner(a.db, a.main_db, chains=chains).run())
 
 
 if __name__ == "__main__":

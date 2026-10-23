@@ -6,6 +6,10 @@
 
 - Added `noema/other_chains.py`, a paper-only scanner for new pairs on Base, Robinhood, Ethereum, Polygon, BSC and Arbitrum. It only follows pairs NOEMA could buy (Kyber route via the pinned router, GoPlus honeypot and tax checks, enough liquidity) and counts skips by reason. Entries pay measured discovery lag, gas, slippage, DEX fees, taxes and, for unfunded chains, a real Relay bridge quote. Results go to `data/other_chains.db`, an "Other chains" header chip and `/api/other-chains`. The go/no-go rule is pre-registered in docs/research/other-chains-go-no-go.md.
 
+- Added a separate, newly pre-registered v2 paper arm, `noema/otherchain_v2.py`, for Base and Robinhood. It keeps v1's pass bar and costs, and v1 stays frozen. If DexScreener has no listing, v2 prices and follows the pair through GeckoTerminal. If the GoPlus tax is unknown, it checks the honeypot.is simulation (Base only) and re-checks GoPlus at 30/60/120 s. It enters only once the tax is known and both a buy and a sell route exist. The wait counts as entry lag.
+- Other-chain scanner: added a chain allowlist, `NOEMA_OTHERCHAIN_CHAINS` (default `base,ethereum,robinhood`). Dropped chains are skipped entirely, and their open paper rows are closed as `chain_dropped` without a result.
+- `feed:geckoterminal` now tracks the newest successful GeckoTerminal response from any reader. Before, it tracked only timing's new-mint pool lookups, which go quiet when no new candidates arrive.
+
 ### Trench edge research (paper)
 
 - Added `noema/trench_edges.py`, a walk-forward, no-lookahead test of 5 trench ideas: copy-wallet, exits, graduation, X velocity and avoid filters. It uses curve-math costs, a held-out fold and Bonferroni correction. None passed. Results and the 180 s coverage caveat are in docs/research/trench-edges-2026-10-22.md.

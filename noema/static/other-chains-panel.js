@@ -39,6 +39,19 @@
     });
     pop.appendChild(t);
     if (!cs.length) pop.appendChild(el('div', 'm', 'Scanner not started.'));
+    var v2 = d.v2 || {}, c2 = v2.chains || [];
+    if (!c2.length) return;
+    pop.appendChild(el('div', 'm', 'v2 arm (GeckoTerminal fallback + tax re-check) · pre-registered ' + (v2.preregistered_at || '—').slice(0, 16) + 'Z'));
+    var t2 = el('table'), h2 = el('tr');
+    ['chain', 'seen', 'skipped (top)', 'followed', 'entries', 'entry lag p50', 'verdict'].forEach(function (x) { h2.appendChild(el('th', null, x)); });
+    t2.appendChild(h2);
+    c2.forEach(function (c) {
+      var r = el('tr'), sk = Object.keys(c.skips || {}).slice(0, 2).map(function (k) { return k + ' ' + c.skips[k]; }).join(', ');
+      [c.chain, c.seen, (c.skipped || 0) + (sk ? ' (' + sk + ')' : ''), c.buyable_followed, c.entries,
+        lag(c.entry_lag_median_s), (c.verdict || {}).verdict || '—'].forEach(function (x, i) { r.appendChild(el('td', i === 2 ? 'l' : null, x)); });
+      t2.appendChild(r);
+    });
+    pop.appendChild(t2);
   }
   function tick() {
     fetch('/api/other-chains', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); })

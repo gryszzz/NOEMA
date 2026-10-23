@@ -158,7 +158,7 @@ def test_preregister_idempotent_and_board(tmp_path):
     c.close()
     out = oc.board(db)
     assert out["paper_only"] is True and out["prereg_sha256"] == a
-    assert [x["chain"] for x in out["chains"]] == list(oc.CHAINS)
+    assert [x["chain"] for x in out["chains"]] == list(oc.active_chains())
     assert all(x["verdict"]["verdict"] == "collecting" for x in out["chains"])
     with pytest.raises(sqlite3.OperationalError):  # board is read-only
         sqlite3.connect(f"file:{db}?mode=ro", uri=True).execute("CREATE TABLE x(a)")
@@ -192,3 +192,19 @@ def test_kyber_route_not_found_is_unroutable_not_error(tmp_path):
     sc.http = C(R(500, "boom"))
     with pytest.raises(RuntimeError):
         asyncio.run(sc.kyber(oc.CHAINS["base"], oc.NATIVE, "0xt", 1))
+
+
+def test_chain_allowlist(tmp_path, monkeypatch):
+    monkeypatch.delenv("NOEMA_OTHERCHAIN_CHAINS", raising=False)
+    assert list(oc.active_chains()) == ["base", "robinhood", "ethereum"]
+    assert list(oc.active_chains("bsc, Base")) == ["base", "bsc"]
+    with pytest.raises(ValueError):
+        oc.active_chains("base,solana")
+    sc = oc.Scanner(str(tmp_path / "oc.db"), str(tmp_path / "m.db"), client=object())
+    assert not sc.add_pair("bsc", "0xp", oc._now(), "geckoterminal")          # dropped chain: skipped entirely
+    assert sc.add_pair("base", "0xq", oc._now(), "geckoterminal")
+    sc.c.execute("INSERT INTO oc_pairs(chain, pair, stage) VALUES('polygon', '0xr', 'followed')")
+    assert sc.retire_dropped() == 1
+    r = sc.c.execute("SELECT stage, exit_reason, net_ret FROM oc_pairs WHERE pair='0xr'").fetchone()
+    assert tuple(r) == ("closed", "chain_dropped", None)
+    assert [c["chain"] for c in oc.board(str(tmp_path / "oc.db"))["chains"]] == ["base", "robinhood", "ethereum"]

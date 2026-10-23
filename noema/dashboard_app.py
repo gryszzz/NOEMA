@@ -1192,9 +1192,12 @@ async def other_chains_api() -> dict[str, Any]:
     """Read-only OTHER CHAINS board (paper only): per-chain funnel, skips by reason, discovery lag,
     paper results and the pre-registered go/no-go verdict."""
     from .other_chains import board
-    db = os.getenv("NOEMA_OTHERCHAIN_DB",
-                   os.path.join(os.path.dirname(_db_path()) or ".", "other_chains.db"))
-    return await asyncio.to_thread(board, db)
+    from .otherchain_v2 import board as board_v2
+    dd = os.path.dirname(_db_path()) or "."
+    db = os.getenv("NOEMA_OTHERCHAIN_DB", os.path.join(dd, "other_chains.db"))
+    out = await asyncio.to_thread(board, db)
+    out["v2"] = await asyncio.to_thread(board_v2, os.getenv("NOEMA_OTHERCHAIN_V2_DB", os.path.join(dd, "other_chains_v2.db")))
+    return out
 
 
 @app.get("/api/metas")

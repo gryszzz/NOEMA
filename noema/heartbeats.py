@@ -308,6 +308,7 @@ LOOPS = {  # connection -> (process cmdline marker, cadence_s, log file in RUN_D
     "agent:news": ("noema.news_crawler", 300, "news.log"),
     "agent:culture": ("noema.culture_crawler", 600, "culture.log"),
     "agent:other_chains": ("noema.other_chains", 120, "other_chains.log"),
+    "agent:otherchain_v2": ("noema.otherchain_v2", 120, "otherchain_v2.log"),
 }
 
 
@@ -352,6 +353,32 @@ def _live_checkout_branch(main_db: str) -> dict[str, Any]:
                 error=f"live checkout on '{br or '?'}', not main - use git worktrees", detail="live checkout branch")
 
 
+def _gecko_activity(j: Any) -> dict[str, Any]:
+    """Newest successful GeckoTerminal response across every reader (timing pools + candles, other-chain polls).
+
+    ``timing.db pools`` alone only moves when a *new* mint needs a pool lookup (cache miss), so it went stale
+    whenever no new candidate arrived even though GeckoTerminal was answering every candle refresh."""
+    readers = {
+        "timing pools": ("timing.db", "SELECT MAX(fetched_at) FROM pools"),
+        "timing candles": ("timing.db", "SELECT MAX(ts) FROM candles"),
+        "other-chain polls": ("other_chains.db", "SELECT MAX(at) FROM oc_polls WHERE ok=1 AND source='geckoterminal'"),
+        "other-chain v2": ("other_chains_v2.db",
+                           "SELECT MAX(at) FROM oc_polls WHERE ok=1 AND source IN ('gt_vet','gt_follow')"),
+    }
+    parts: dict[str, float | None] = {}
+    errs = []
+    for k, (f, sql) in readers.items():
+        try:
+            parts[k] = _max(j(f), sql)
+        except (OSError, sqlite3.Error) as exc:   # one missing reader never hides the others
+            errs.append(f"{k}: {exc}")
+    seen = {k: v for k, v in parts.items() if v}
+    best = max(seen.values()) if seen else None
+    src = max(seen, key=lambda k: seen[k]) if seen else "none"
+    return _rec("feed:geckoterminal", "feed", 300, best, detail=f"GeckoTerminal API (newest: {src})",
+                error=None if seen else ("; ".join(errs) or "no GeckoTerminal reader has succeeded"))
+
+
 def observe(main_db: str) -> list[dict[str, Any]]:
     dd = os.path.dirname(os.path.abspath(main_db))
     j = lambda f: os.path.join(dd, f)
@@ -363,8 +390,7 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                           detail="new pump.fun / LaunchLab creates"), "feed:launch_stream", "feed", 60))
     P(_probe(lambda: _provider_health(main_db), "feed:trench_providers", "feed", 120))
     P(_probe(lambda: _pool_trades(main_db), "feed:pool_trades", "feed", 120))
-    P(_probe(lambda: _rec("feed:geckoterminal", "feed", 300, _max(j("timing.db"), "SELECT MAX(fetched_at) FROM pools"),
-                          detail="GeckoTerminal pools (timing)"), "feed:geckoterminal", "feed", 300))
+    P(_probe(lambda: _gecko_activity(j), "feed:geckoterminal", "feed", 300))
     P(_probe(lambda: _rec("feed:candles", "feed", 120, _max(j("timing.db"), "SELECT MAX(ts) FROM candles"),
                           detail="launch candles"), "feed:candles", "feed", 120))
     P(_probe(lambda: _culture_sources(main_db), "feed:culture_sources", "feed", 600))
@@ -388,6 +414,9 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                           _max(j("other_chains.db"),
                                "SELECT MAX(at) FROM oc_polls WHERE ok=1 AND source='geckoterminal'"),
                           detail="other-chain launches (paper)"), "feed:other_chains", "feed", 60))
+    P(_probe(lambda: _rec("feed:other_chains_v2", "feed", 120,
+                          _max(j("other_chains_v2.db"), "SELECT MAX(at) FROM oc_polls WHERE ok=1 AND source='v1_feed'"),
+                          detail="other-chain v2 arm (paper, Base + Robinhood)"), "feed:other_chains_v2", "feed", 120))
     P(_probe(lambda: _x_inbox(main_db), "social:x_inbox", "social", 600))
     P(_probe(lambda: _rec("feed:prediction_bot", "feed", 300,
                           _max(j("prediction_bot.db"), "SELECT MAX(at) FROM prediction_ingest_runs"),

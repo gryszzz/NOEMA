@@ -61,3 +61,44 @@ twice (in and out) and its time added to the entry delay.
 ## When we can decide
 Not before 7 days of collection. Each chain needs ~15 entries/day to reach 100 trades in 7 days; chains
 with fewer signals take proportionally longer (the board shows entries so far).
+
+## v2 arm (separate registration, Base + Robinhood)
+
+v1 above stays frozen. Its rule, sha256 and verdict are unchanged, and v2 never writes to `other_chains.db`.
+v2 (`noema/otherchain_v2.py`, `data/other_chains_v2.db`) is a separate study. It has its own registration row
+(timestamp and sha256, stored when the process first starts) and uses the same pass bar, costs and paper rule.
+It runs on the funded chains Base and Robinhood only, and Bonferroni k = 2. It changes only these things:
+
+1. **GeckoTerminal fallback.** If DexScreener has no listing for a pair, vetting and every follow-up snapshot use
+   GeckoTerminal `pools/multi` (price, reserve, m5 buys/sells/volume) instead of skipping the pair as
+   `not_indexed`. GT snapshots run at most once a minute per chain, and v2 makes at most 4 GT calls a minute.
+   Together with timing's 10/min and v1's 4/min, that stays inside the free ~30/min.
+2. **Tax unknown.** v2 first asks honeypot.is, a free buy+sell simulation that covers Base but not Robinhood. If the
+   tax is still unknown, it re-checks GoPlus 30, 60 and 120 s after the first unknown. A pair is followed only
+   once both taxes are known, it isn't a honeypot and both a buy and a sell route exist. A signal can only fire
+   after the pair is followed, so the whole wait is charged as entry lag (`vet_wait_s`, `entry_lag_median_s`).
+   A Kyber round-trip quote can't stand in for a tax check, because it prices the pool and doesn't simulate the
+   token's transfer.
+
+Discovery reuses v1's feed read-only, so it adds no API calls. v2 picks up each new Base/Robinhood pair within
+about 15 s, which adds that much discovery lag. You can read v2 with `python -m noema.otherchain_v2 --board` or
+under `v2` in `/api/other-chains`.
+
+## feed:geckoterminal heartbeat (2026-10-22 diagnosis)
+
+The heartbeat read only `timing.db pools.fetched_at`. That value moves only when the timing agent looks up a
+pool for a mint it hasn't seen before (a cache miss). After the last new candidate at 9:11 PM EDT, every
+GeckoTerminal call was a candle refresh, so the heartbeat went red even though GeckoTerminal kept answering.
+Candles were 148 s fresh. GeckoTerminal was never down. Upstream, no new trench `observe` candidates have been
+written since 8:55 PM EDT, and that's tracked separately. The probe now takes the newest successful
+GeckoTerminal response from any reader: timing pools, timing candles, v1 discovery polls and v2 GT calls.
+
+## Chain allowlist (2026-10-22)
+
+Tony narrowed the scope to chains NOEMA can use with what it holds: Base and Robinhood (funded) and Ethereum.
+Solana is the main desk and isn't part of this scanner. `NOEMA_OTHERCHAIN_CHAINS` (or `--chains`, default
+`base,ethereum,robinhood`) is now the allowlist. Chains outside it aren't discovered, vetted or shown. Rows
+still open on dropped chains (BSC, Arbitrum, Polygon) are closed as `chain_dropped` with no result booked,
+so they never count as trades. v1's registered rule and sha256 are unchanged. Its Bonferroni k follows the
+registered wording ("k = chains tested"), so it is now 3. Ethereum stays bridge-free only while the treasury
+reads at least $1 of ETH on mainnet. Otherwise the real Relay bridge quote is charged both ways, as before.
