@@ -1,0 +1,3409 @@
+{
+ "primary": {
+  "schema": "noema.kalshi_maker.v1",
+  "mode": "paper/research only",
+  "prereg": "docs/research/kalshi-maker-prereg-2026-10-22.md",
+  "dataset": "pm_train walk-forward OOS snapshots",
+  "cases": 176105,
+  "tests": 32,
+  "passes": [],
+  "promising": [
+   "pm-economic-market_cal-3fd698/improve",
+   "pm-markets-stack-396545/improve"
+  ],
+  "results": [
+   {
+    "agent": "pm-crypto-market_cal-1eb3c0",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 22456,
+    "orders": 21926,
+    "evaluable_orders": 828,
+    "fill_rate": 0.61232,
+    "stats": {
+     "n": 507,
+     "events": 271,
+     "mean": -0.11677,
+     "ci95": [
+      -0.16055,
+      -0.07588
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 450,
+      "mean": -0.09611
+     },
+     "2026-10-23": {
+      "n": 57,
+      "mean": -0.27991
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 507,
+      "mean": -0.11397
+     },
+     "at_price_fills": {
+      "n": 535,
+      "mean": -0.10791
+     },
+     "no_penalty": {
+      "n": 507,
+      "mean": -0.11177
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 152,
+     "mean": -0.00647
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-1eb3c0",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 22456,
+    "orders": 4737,
+    "evaluable_orders": 365,
+    "fill_rate": 0.64932,
+    "stats": {
+     "n": 237,
+     "events": 111,
+     "mean": -0.11703,
+     "ci95": [
+      -0.17955,
+      -0.05703
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 216,
+      "mean": -0.09541
+     },
+     "2026-10-23": {
+      "n": 21,
+      "mean": -0.33937
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 237,
+      "mean": -0.11432
+     },
+     "at_price_fills": {
+      "n": 253,
+      "mean": -0.10481
+     },
+     "no_penalty": {
+      "n": 237,
+      "mean": -0.11203
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-25afbc",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 22456,
+    "orders": 21928,
+    "evaluable_orders": 828,
+    "fill_rate": 0.61232,
+    "stats": {
+     "n": 507,
+     "events": 271,
+     "mean": -0.11677,
+     "ci95": [
+      -0.16055,
+      -0.07588
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 450,
+      "mean": -0.09611
+     },
+     "2026-10-23": {
+      "n": 57,
+      "mean": -0.27991
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 507,
+      "mean": -0.11397
+     },
+     "at_price_fills": {
+      "n": 535,
+      "mean": -0.10791
+     },
+     "no_penalty": {
+      "n": 507,
+      "mean": -0.11177
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 152,
+     "mean": -0.00647
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-25afbc",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 22456,
+    "orders": 4737,
+    "evaluable_orders": 365,
+    "fill_rate": 0.64932,
+    "stats": {
+     "n": 237,
+     "events": 111,
+     "mean": -0.11703,
+     "ci95": [
+      -0.17955,
+      -0.05703
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 216,
+      "mean": -0.09541
+     },
+     "2026-10-23": {
+      "n": 21,
+      "mean": -0.33937
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 237,
+      "mean": -0.11432
+     },
+     "at_price_fills": {
+      "n": 253,
+      "mean": -0.10481
+     },
+     "no_penalty": {
+      "n": 237,
+      "mean": -0.11203
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-40c622",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 22456,
+    "orders": 21926,
+    "evaluable_orders": 828,
+    "fill_rate": 0.61232,
+    "stats": {
+     "n": 507,
+     "events": 271,
+     "mean": -0.11677,
+     "ci95": [
+      -0.16055,
+      -0.07588
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 450,
+      "mean": -0.09611
+     },
+     "2026-10-23": {
+      "n": 57,
+      "mean": -0.27991
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 507,
+      "mean": -0.11397
+     },
+     "at_price_fills": {
+      "n": 535,
+      "mean": -0.10791
+     },
+     "no_penalty": {
+      "n": 507,
+      "mean": -0.11177
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 152,
+     "mean": -0.00647
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-40c622",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 22456,
+    "orders": 4738,
+    "evaluable_orders": 365,
+    "fill_rate": 0.64932,
+    "stats": {
+     "n": 237,
+     "events": 111,
+     "mean": -0.11703,
+     "ci95": [
+      -0.17955,
+      -0.05703
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 216,
+      "mean": -0.09541
+     },
+     "2026-10-23": {
+      "n": 21,
+      "mean": -0.33937
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 237,
+      "mean": -0.11432
+     },
+     "at_price_fills": {
+      "n": 253,
+      "mean": -0.10481
+     },
+     "no_penalty": {
+      "n": 237,
+      "mean": -0.11203
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-4c72c6",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 22456,
+    "orders": 21928,
+    "evaluable_orders": 828,
+    "fill_rate": 0.61473,
+    "stats": {
+     "n": 509,
+     "events": 273,
+     "mean": -0.11777,
+     "ci95": [
+      -0.16002,
+      -0.07581
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 452,
+      "mean": -0.09732
+     },
+     "2026-10-23": {
+      "n": 57,
+      "mean": -0.27991
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 509,
+      "mean": -0.11496
+     },
+     "at_price_fills": {
+      "n": 537,
+      "mean": -0.10889
+     },
+     "no_penalty": {
+      "n": 509,
+      "mean": -0.11277
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 166,
+     "mean": -0.00833
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-4c72c6",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 22456,
+    "orders": 4747,
+    "evaluable_orders": 370,
+    "fill_rate": 0.65135,
+    "stats": {
+     "n": 241,
+     "events": 112,
+     "mean": -0.11151,
+     "ci95": [
+      -0.17768,
+      -0.05182
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 220,
+      "mean": -0.08976
+     },
+     "2026-10-23": {
+      "n": 21,
+      "mean": -0.33937
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 241,
+      "mean": -0.10878
+     },
+     "at_price_fills": {
+      "n": 257,
+      "mean": -0.09983
+     },
+     "no_penalty": {
+      "n": 241,
+      "mean": -0.10651
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-economic-market_cal-3fd698",
+    "category": "economics",
+    "variant": "join",
+    "decisions": 388,
+    "orders": 326,
+    "evaluable_orders": 7,
+    "fill_rate": 0.57143,
+    "stats": {
+     "n": 4,
+     "events": 2,
+     "mean": -0.37412,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 4,
+      "mean": -0.37412
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 4,
+      "mean": -0.3725
+     },
+     "at_price_fills": {
+      "n": 4,
+      "mean": -0.37412
+     },
+     "no_penalty": {
+      "n": 4,
+      "mean": -0.36912
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 6,
+     "mean": -0.02552
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-economic-market_cal-3fd698",
+    "category": "economics",
+    "variant": "improve",
+    "decisions": 388,
+    "orders": 138,
+    "evaluable_orders": 2,
+    "fill_rate": 0.5,
+    "stats": {
+     "n": 1,
+     "events": 1,
+     "mean": 0.054,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 1,
+      "mean": 0.054
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 1,
+      "mean": 0.055
+     },
+     "at_price_fills": {
+      "n": 1,
+      "mean": 0.054
+     },
+     "no_penalty": {
+      "n": 1,
+      "mean": 0.059
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 2,
+     "mean": 0.0326
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-markets-market_cal-359eb4",
+    "category": "markets",
+    "variant": "join",
+    "decisions": 21467,
+    "orders": 21410,
+    "evaluable_orders": 298,
+    "fill_rate": 0.76846,
+    "stats": {
+     "n": 229,
+     "events": 170,
+     "mean": -0.17568,
+     "ci95": [
+      -0.25212,
+      -0.09711
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 229,
+      "mean": -0.17568
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 229,
+      "mean": -0.17269
+     },
+     "at_price_fills": {
+      "n": 233,
+      "mean": -0.1622
+     },
+     "no_penalty": {
+      "n": 229,
+      "mean": -0.17068
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-market_cal-359eb4",
+    "category": "markets",
+    "variant": "improve",
+    "decisions": 21467,
+    "orders": 9107,
+    "evaluable_orders": 124,
+    "fill_rate": 0.77419,
+    "stats": {
+     "n": 96,
+     "events": 39,
+     "mean": -0.2372,
+     "ci95": [
+      -0.38583,
+      -0.0805
+     ],
+     "p_one_sided": 0.9985
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 96,
+      "mean": -0.2372
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 96,
+      "mean": -0.23406
+     },
+     "at_price_fills": {
+      "n": 101,
+      "mean": -0.21742
+     },
+     "no_penalty": {
+      "n": 96,
+      "mean": -0.2322
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-396545",
+    "category": "markets",
+    "variant": "join",
+    "decisions": 20005,
+    "orders": 19962,
+    "evaluable_orders": 300,
+    "fill_rate": 0.77333,
+    "stats": {
+     "n": 232,
+     "events": 185,
+     "mean": -0.0421,
+     "ci95": [
+      -0.10359,
+      0.02458
+     ],
+     "p_one_sided": 0.902
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 232,
+      "mean": -0.0421
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 232,
+      "mean": -0.03936
+     },
+     "at_price_fills": {
+      "n": 244,
+      "mean": -0.00822
+     },
+     "no_penalty": {
+      "n": 232,
+      "mean": -0.0371
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-396545",
+    "category": "markets",
+    "variant": "improve",
+    "decisions": 20005,
+    "orders": 8250,
+    "evaluable_orders": 149,
+    "fill_rate": 0.75839,
+    "stats": {
+     "n": 113,
+     "events": 61,
+     "mean": 0.09408,
+     "ci95": [
+      -0.03882,
+      0.22667
+     ],
+     "p_one_sided": 0.0865
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 113,
+      "mean": 0.09408
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 113,
+      "mean": 0.09686
+     },
+     "at_price_fills": {
+      "n": 123,
+      "mean": 0.10547
+     },
+     "no_penalty": {
+      "n": 113,
+      "mean": 0.09908
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-markets-stack-4fb13f",
+    "category": "markets",
+    "variant": "join",
+    "decisions": 20005,
+    "orders": 19967,
+    "evaluable_orders": 300,
+    "fill_rate": 0.60667,
+    "stats": {
+     "n": 182,
+     "events": 125,
+     "mean": -0.15348,
+     "ci95": [
+      -0.25112,
+      -0.05577
+     ],
+     "p_one_sided": 0.9985
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 182,
+      "mean": -0.15348
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 182,
+      "mean": -0.15031
+     },
+     "at_price_fills": {
+      "n": 186,
+      "mean": -0.14594
+     },
+     "no_penalty": {
+      "n": 182,
+      "mean": -0.14848
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-4fb13f",
+    "category": "markets",
+    "variant": "improve",
+    "decisions": 20005,
+    "orders": 8347,
+    "evaluable_orders": 139,
+    "fill_rate": 0.72662,
+    "stats": {
+     "n": 101,
+     "events": 44,
+     "mean": -0.20771,
+     "ci95": [
+      -0.35152,
+      -0.06313
+     ],
+     "p_one_sided": 0.999
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 101,
+      "mean": -0.20771
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 101,
+      "mean": -0.2047
+     },
+     "at_price_fills": {
+      "n": 104,
+      "mean": -0.209
+     },
+     "no_penalty": {
+      "n": 101,
+      "mean": -0.20271
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-market_cal-a30995",
+    "category": "other",
+    "variant": "join",
+    "decisions": 3651,
+    "orders": 3650,
+    "evaluable_orders": 80,
+    "fill_rate": 0.675,
+    "stats": {
+     "n": 54,
+     "events": 54,
+     "mean": -0.08719,
+     "ci95": [
+      -0.19727,
+      0.02492
+     ],
+     "p_one_sided": 0.9465
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 54,
+      "mean": -0.08719
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 54,
+      "mean": -0.08407
+     },
+     "at_price_fills": {
+      "n": 58,
+      "mean": -0.05224
+     },
+     "no_penalty": {
+      "n": 54,
+      "mean": -0.08219
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 4,
+     "mean": 0.03177
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-market_cal-a30995",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 3651,
+    "orders": 2939,
+    "evaluable_orders": 59,
+    "fill_rate": 0.71186,
+    "stats": {
+     "n": 42,
+     "events": 42,
+     "mean": -0.09935,
+     "ci95": [
+      -0.23964,
+      0.04903
+     ],
+     "p_one_sided": 0.9135
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 42,
+      "mean": -0.09935
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 42,
+      "mean": -0.09571
+     },
+     "at_price_fills": {
+      "n": 44,
+      "mean": -0.0791
+     },
+     "no_penalty": {
+      "n": 42,
+      "mean": -0.09435
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-248d77",
+    "category": "other",
+    "variant": "join",
+    "decisions": 3444,
+    "orders": 3443,
+    "evaluable_orders": 80,
+    "fill_rate": 0.625,
+    "stats": {
+     "n": 50,
+     "events": 50,
+     "mean": -0.11726,
+     "ci95": [
+      -0.2397,
+      0.00241
+     ],
+     "p_one_sided": 0.9735
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 50,
+      "mean": -0.11726
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 50,
+      "mean": -0.114
+     },
+     "at_price_fills": {
+      "n": 55,
+      "mean": -0.07475
+     },
+     "no_penalty": {
+      "n": 50,
+      "mean": -0.11226
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 32,
+     "mean": 0.00882
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-248d77",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 3444,
+    "orders": 2741,
+    "evaluable_orders": 54,
+    "fill_rate": 0.68519,
+    "stats": {
+     "n": 37,
+     "events": 37,
+     "mean": -0.15672,
+     "ci95": [
+      -0.30496,
+      -0.00885
+     ],
+     "p_one_sided": 0.981
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 37,
+      "mean": -0.15672
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 37,
+      "mean": -0.15311
+     },
+     "at_price_fills": {
+      "n": 39,
+      "mean": -0.13093
+     },
+     "no_penalty": {
+      "n": 37,
+      "mean": -0.15172
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 25,
+     "mean": 0.02181
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-51783d",
+    "category": "other",
+    "variant": "join",
+    "decisions": 3444,
+    "orders": 3443,
+    "evaluable_orders": 80,
+    "fill_rate": 0.7,
+    "stats": {
+     "n": 56,
+     "events": 56,
+     "mean": -0.1707,
+     "ci95": [
+      -0.26039,
+      -0.0721
+     ],
+     "p_one_sided": 0.9985
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 56,
+      "mean": -0.1707
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 56,
+      "mean": -0.16768
+     },
+     "at_price_fills": {
+      "n": 60,
+      "mean": -0.13134
+     },
+     "no_penalty": {
+      "n": 56,
+      "mean": -0.1657
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 33,
+     "mean": 0.07047
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-51783d",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 3444,
+    "orders": 2720,
+    "evaluable_orders": 48,
+    "fill_rate": 0.6875,
+    "stats": {
+     "n": 33,
+     "events": 33,
+     "mean": -0.13638,
+     "ci95": [
+      -0.27844,
+      0.00814
+     ],
+     "p_one_sided": 0.966
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 33,
+      "mean": -0.13638
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 33,
+      "mean": -0.13288
+     },
+     "at_price_fills": {
+      "n": 35,
+      "mean": -0.10881
+     },
+     "no_penalty": {
+      "n": 33,
+      "mean": -0.13138
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 23,
+     "mean": 0.08936
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-f65274",
+    "category": "other",
+    "variant": "join",
+    "decisions": 3444,
+    "orders": 3443,
+    "evaluable_orders": 80,
+    "fill_rate": 0.7,
+    "stats": {
+     "n": 56,
+     "events": 56,
+     "mean": -0.13963,
+     "ci95": [
+      -0.23594,
+      -0.03298
+     ],
+     "p_one_sided": 0.9945
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 56,
+      "mean": -0.13963
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 56,
+      "mean": -0.13661
+     },
+     "at_price_fills": {
+      "n": 60,
+      "mean": -0.10235
+     },
+     "no_penalty": {
+      "n": 56,
+      "mean": -0.13463
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 30,
+     "mean": 0.06861
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-f65274",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 3444,
+    "orders": 2714,
+    "evaluable_orders": 48,
+    "fill_rate": 0.70833,
+    "stats": {
+     "n": 34,
+     "events": 34,
+     "mean": -0.15943,
+     "ci95": [
+      -0.30213,
+      -0.01571
+     ],
+     "p_one_sided": 0.9845
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 34,
+      "mean": -0.15943
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 34,
+      "mean": -0.15588
+     },
+     "at_price_fills": {
+      "n": 36,
+      "mean": -0.13134
+     },
+     "no_penalty": {
+      "n": 34,
+      "mean": -0.15443
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 21,
+     "mean": 0.08413
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-3e1a7c",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 2713,
+    "orders": 670,
+    "evaluable_orders": 18,
+    "fill_rate": 0.44444,
+    "stats": {
+     "n": 8,
+     "events": 3,
+     "mean": -0.16904,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 8,
+      "mean": -0.16904
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 8,
+      "mean": -0.16625
+     },
+     "at_price_fills": {
+      "n": 10,
+      "mean": -0.12049
+     },
+     "no_penalty": {
+      "n": 8,
+      "mean": -0.16404
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 12,
+     "mean": -0.00116
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-3e1a7c",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 2713,
+    "orders": 462,
+    "evaluable_orders": 12,
+    "fill_rate": 0.58333,
+    "stats": {
+     "n": 7,
+     "events": 3,
+     "mean": -0.23761,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 7,
+      "mean": -0.23761
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 7,
+      "mean": -0.235
+     },
+     "at_price_fills": {
+      "n": 7,
+      "mean": -0.23761
+     },
+     "no_penalty": {
+      "n": 7,
+      "mean": -0.23261
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 7,
+     "mean": -0.05847
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-52ac9d",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 2713,
+    "orders": 670,
+    "evaluable_orders": 18,
+    "fill_rate": 0.44444,
+    "stats": {
+     "n": 8,
+     "events": 3,
+     "mean": -0.16904,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 8,
+      "mean": -0.16904
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 8,
+      "mean": -0.16625
+     },
+     "at_price_fills": {
+      "n": 10,
+      "mean": -0.12049
+     },
+     "no_penalty": {
+      "n": 8,
+      "mean": -0.16404
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 8,
+     "mean": 0.07993
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-52ac9d",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 2713,
+    "orders": 462,
+    "evaluable_orders": 12,
+    "fill_rate": 0.58333,
+    "stats": {
+     "n": 7,
+     "events": 3,
+     "mean": -0.23761,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 7,
+      "mean": -0.23761
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 7,
+      "mean": -0.235
+     },
+     "at_price_fills": {
+      "n": 7,
+      "mean": -0.23761
+     },
+     "no_penalty": {
+      "n": 7,
+      "mean": -0.23261
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 3,
+     "mean": 0.08133
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-b2469c",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 2713,
+    "orders": 670,
+    "evaluable_orders": 18,
+    "fill_rate": 0.44444,
+    "stats": {
+     "n": 8,
+     "events": 3,
+     "mean": -0.16904,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 8,
+      "mean": -0.16904
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 8,
+      "mean": -0.16625
+     },
+     "at_price_fills": {
+      "n": 10,
+      "mean": -0.12049
+     },
+     "no_penalty": {
+      "n": 8,
+      "mean": -0.16404
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 12,
+     "mean": -0.00116
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-b2469c",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 2713,
+    "orders": 463,
+    "evaluable_orders": 12,
+    "fill_rate": 0.58333,
+    "stats": {
+     "n": 7,
+     "events": 3,
+     "mean": -0.23761,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 7,
+      "mean": -0.23761
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 7,
+      "mean": -0.235
+     },
+     "at_price_fills": {
+      "n": 7,
+      "mean": -0.23761
+     },
+     "no_penalty": {
+      "n": 7,
+      "mean": -0.23261
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 7,
+     "mean": -0.05847
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-stack-80285d",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 2294,
+    "orders": 466,
+    "evaluable_orders": 11,
+    "fill_rate": 0.36364,
+    "stats": {
+     "n": 4,
+     "events": 2,
+     "mean": -0.41837,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 4,
+      "mean": -0.41837
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 4,
+      "mean": -0.415
+     },
+     "at_price_fills": {
+      "n": 4,
+      "mean": -0.41837
+     },
+     "no_penalty": {
+      "n": 4,
+      "mean": -0.41337
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 7,
+     "mean": -0.08269
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-stack-80285d",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 2294,
+    "orders": 352,
+    "evaluable_orders": 9,
+    "fill_rate": 0.44444,
+    "stats": {
+     "n": 4,
+     "events": 2,
+     "mean": -0.42832,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 4,
+      "mean": -0.42832
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 4,
+      "mean": -0.425
+     },
+     "at_price_fills": {
+      "n": 5,
+      "mean": -0.20642
+     },
+     "no_penalty": {
+      "n": 4,
+      "mean": -0.42332
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 5,
+     "mean": -0.1232
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   }
+  ]
+ },
+ "secondary_live_forecasts": {
+  "schema": "noema.kalshi_maker.v1",
+  "mode": "paper/research only",
+  "prereg": "docs/research/kalshi-maker-prereg-2026-10-22.md",
+  "dataset": "recorded live forecasts (accuracy_forecasts)",
+  "cases": 8535,
+  "tests": 32,
+  "passes": [],
+  "promising": [
+   "pm-economic-market_cal-3fd698/join",
+   "pm-economic-market_cal-3fd698/improve",
+   "pm-weather-market_cal-3e1a7c/join",
+   "pm-weather-market_cal-52ac9d/join",
+   "pm-weather-market_cal-52ac9d/improve",
+   "pm-weather-market_cal-b2469c/join",
+   "pm-weather-market_cal-b2469c/improve"
+  ],
+  "results": [
+   {
+    "agent": "pm-crypto-market_cal-1eb3c0",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 1287,
+    "orders": 1287,
+    "evaluable_orders": 1286,
+    "fill_rate": 0.62053,
+    "stats": {
+     "n": 798,
+     "events": 397,
+     "mean": -0.09476,
+     "ci95": [
+      -0.12587,
+      -0.06724
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 609,
+      "mean": -0.09302
+     },
+     "2026-10-23": {
+      "n": 189,
+      "mean": -0.10035
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 798,
+      "mean": -0.09184
+     },
+     "at_price_fills": {
+      "n": 847,
+      "mean": -0.08307
+     },
+     "no_penalty": {
+      "n": 798,
+      "mean": -0.08976
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 34,
+     "mean": -0.06116
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-1eb3c0",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 1287,
+    "orders": 769,
+    "evaluable_orders": 768,
+    "fill_rate": 0.61068,
+    "stats": {
+     "n": 469,
+     "events": 198,
+     "mean": -0.06568,
+     "ci95": [
+      -0.10237,
+      -0.03256
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 368,
+      "mean": -0.06716
+     },
+     "2026-10-23": {
+      "n": 101,
+      "mean": -0.06027
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 469,
+      "mean": -0.06289
+     },
+     "at_price_fills": {
+      "n": 494,
+      "mean": -0.05739
+     },
+     "no_penalty": {
+      "n": 469,
+      "mean": -0.06068
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-25afbc",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 817,
+    "orders": 817,
+    "evaluable_orders": 817,
+    "fill_rate": 0.64994,
+    "stats": {
+     "n": 531,
+     "events": 252,
+     "mean": -0.09789,
+     "ci95": [
+      -0.13349,
+      -0.06503
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 342,
+      "mean": -0.09653
+     },
+     "2026-10-23": {
+      "n": 189,
+      "mean": -0.10035
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 531,
+      "mean": -0.09507
+     },
+     "at_price_fills": {
+      "n": 564,
+      "mean": -0.08748
+     },
+     "no_penalty": {
+      "n": 531,
+      "mean": -0.09289
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 24,
+     "mean": -0.11489
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-25afbc",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 817,
+    "orders": 475,
+    "evaluable_orders": 475,
+    "fill_rate": 0.64,
+    "stats": {
+     "n": 304,
+     "events": 125,
+     "mean": -0.08803,
+     "ci95": [
+      -0.12702,
+      -0.04546
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 203,
+      "mean": -0.10184
+     },
+     "2026-10-23": {
+      "n": 101,
+      "mean": -0.06027
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 304,
+      "mean": -0.0853
+     },
+     "at_price_fills": {
+      "n": 323,
+      "mean": -0.07772
+     },
+     "no_penalty": {
+      "n": 304,
+      "mean": -0.08303
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-40c622",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 817,
+    "orders": 817,
+    "evaluable_orders": 817,
+    "fill_rate": 0.64994,
+    "stats": {
+     "n": 531,
+     "events": 252,
+     "mean": -0.09789,
+     "ci95": [
+      -0.13349,
+      -0.06503
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 342,
+      "mean": -0.09653
+     },
+     "2026-10-23": {
+      "n": 189,
+      "mean": -0.10035
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 531,
+      "mean": -0.09507
+     },
+     "at_price_fills": {
+      "n": 564,
+      "mean": -0.08748
+     },
+     "no_penalty": {
+      "n": 531,
+      "mean": -0.09289
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 24,
+     "mean": -0.11489
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-40c622",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 817,
+    "orders": 475,
+    "evaluable_orders": 475,
+    "fill_rate": 0.64,
+    "stats": {
+     "n": 304,
+     "events": 125,
+     "mean": -0.08803,
+     "ci95": [
+      -0.12702,
+      -0.04546
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 203,
+      "mean": -0.10184
+     },
+     "2026-10-23": {
+      "n": 101,
+      "mean": -0.06027
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 304,
+      "mean": -0.0853
+     },
+     "at_price_fills": {
+      "n": 323,
+      "mean": -0.07772
+     },
+     "no_penalty": {
+      "n": 304,
+      "mean": -0.08303
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-4c72c6",
+    "category": "crypto",
+    "variant": "join",
+    "decisions": 817,
+    "orders": 817,
+    "evaluable_orders": 817,
+    "fill_rate": 0.64871,
+    "stats": {
+     "n": 530,
+     "events": 252,
+     "mean": -0.08275,
+     "ci95": [
+      -0.11807,
+      -0.04798
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 341,
+      "mean": -0.08136
+     },
+     "2026-10-23": {
+      "n": 189,
+      "mean": -0.08527
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 530,
+      "mean": -0.07994
+     },
+     "at_price_fills": {
+      "n": 563,
+      "mean": -0.07321
+     },
+     "no_penalty": {
+      "n": 530,
+      "mean": -0.07775
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 24,
+     "mean": -0.11489
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-crypto-market_cal-4c72c6",
+    "category": "crypto",
+    "variant": "improve",
+    "decisions": 817,
+    "orders": 471,
+    "evaluable_orders": 471,
+    "fill_rate": 0.63694,
+    "stats": {
+     "n": 300,
+     "events": 121,
+     "mean": -0.07248,
+     "ci95": [
+      -0.11663,
+      -0.03096
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 201,
+      "mean": -0.09266
+     },
+     "2026-10-23": {
+      "n": 99,
+      "mean": -0.0315
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 300,
+      "mean": -0.06977
+     },
+     "at_price_fills": {
+      "n": 319,
+      "mean": -0.06297
+     },
+     "no_penalty": {
+      "n": 300,
+      "mean": -0.06748
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-economic-market_cal-3fd698",
+    "category": "economics",
+    "variant": "join",
+    "decisions": 124,
+    "orders": 124,
+    "evaluable_orders": 124,
+    "fill_rate": 0.04839,
+    "stats": {
+     "n": 6,
+     "events": 6,
+     "mean": 0.22813,
+     "ci95": [
+      -0.20318,
+      0.53917
+     ],
+     "p_one_sided": 0.1305
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 6,
+      "mean": 0.22813
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 6,
+      "mean": 0.23167
+     },
+     "at_price_fills": {
+      "n": 7,
+      "mean": 0.21734
+     },
+     "no_penalty": {
+      "n": 6,
+      "mean": 0.23313
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 110,
+     "mean": -0.00286
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-economic-market_cal-3fd698",
+    "category": "economics",
+    "variant": "improve",
+    "decisions": 124,
+    "orders": 110,
+    "evaluable_orders": 110,
+    "fill_rate": 0.04545,
+    "stats": {
+     "n": 5,
+     "events": 5,
+     "mean": 0.41546,
+     "ci95": [
+      0.21892,
+      0.57276
+     ],
+     "p_one_sided": 0.0005
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 5,
+      "mean": 0.41546
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 5,
+      "mean": 0.419
+     },
+     "at_price_fills": {
+      "n": 5,
+      "mean": 0.41546
+     },
+     "no_penalty": {
+      "n": 5,
+      "mean": 0.42046
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 96,
+     "mean": -0.00778
+    },
+    "p_holm": 0.016,
+    "criteria": {
+     "mean_pos_ci_excludes_0": true,
+     "holm_p_lt_0.05": true,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-markets-market_cal-359eb4",
+    "category": "markets",
+    "variant": "join",
+    "decisions": 1092,
+    "orders": 1089,
+    "evaluable_orders": 1072,
+    "fill_rate": 0.81623,
+    "stats": {
+     "n": 875,
+     "events": 305,
+     "mean": -0.09154,
+     "ci95": [
+      -0.12558,
+      -0.05344
+     ],
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 768,
+      "mean": -0.09073
+     },
+     "2026-10-23": {
+      "n": 107,
+      "mean": -0.09737
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 875,
+      "mean": -0.08892
+     },
+     "at_price_fills": {
+      "n": 922,
+      "mean": -0.07248
+     },
+     "no_penalty": {
+      "n": 875,
+      "mean": -0.08654
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-market_cal-359eb4",
+    "category": "markets",
+    "variant": "improve",
+    "decisions": 1092,
+    "orders": 678,
+    "evaluable_orders": 669,
+    "fill_rate": 0.85501,
+    "stats": {
+     "n": 572,
+     "events": 105,
+     "mean": -0.08699,
+     "ci95": [
+      -0.13504,
+      -0.02858
+     ],
+     "p_one_sided": 0.9965
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 511,
+      "mean": -0.085
+     },
+     "2026-10-23": {
+      "n": 61,
+      "mean": -0.1037
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 572,
+      "mean": -0.0843
+     },
+     "at_price_fills": {
+      "n": 591,
+      "mean": -0.0801
+     },
+     "no_penalty": {
+      "n": 572,
+      "mean": -0.08199
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-396545",
+    "category": "markets",
+    "variant": "join",
+    "decisions": 1027,
+    "orders": 1027,
+    "evaluable_orders": 1019,
+    "fill_rate": 0.82139,
+    "stats": {
+     "n": 837,
+     "events": 296,
+     "mean": -0.05329,
+     "ci95": [
+      -0.08804,
+      -0.01946
+     ],
+     "p_one_sided": 0.9995
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 729,
+      "mean": -0.04441
+     },
+     "2026-10-23": {
+      "n": 108,
+      "mean": -0.1132
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 837,
+      "mean": -0.05073
+     },
+     "at_price_fills": {
+      "n": 881,
+      "mean": -0.03501
+     },
+     "no_penalty": {
+      "n": 837,
+      "mean": -0.04829
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 2,
+     "mean": -0.07085
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-396545",
+    "category": "markets",
+    "variant": "improve",
+    "decisions": 1027,
+    "orders": 777,
+    "evaluable_orders": 771,
+    "fill_rate": 0.8677,
+    "stats": {
+     "n": 669,
+     "events": 148,
+     "mean": -0.029,
+     "ci95": [
+      -0.0769,
+      0.01659
+     ],
+     "p_one_sided": 0.8955
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 595,
+      "mean": -0.01196
+     },
+     "2026-10-23": {
+      "n": 74,
+      "mean": -0.16601
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 669,
+      "mean": -0.02642
+     },
+     "at_price_fills": {
+      "n": 695,
+      "mean": -0.02025
+     },
+     "no_penalty": {
+      "n": 669,
+      "mean": -0.024
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-4fb13f",
+    "category": "markets",
+    "variant": "join",
+    "decisions": 1079,
+    "orders": 1077,
+    "evaluable_orders": 1069,
+    "fill_rate": 0.58279,
+    "stats": {
+     "n": 623,
+     "events": 265,
+     "mean": -0.08124,
+     "ci95": [
+      -0.15298,
+      -0.01004
+     ],
+     "p_one_sided": 0.988
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 519,
+      "mean": -0.0712
+     },
+     "2026-10-23": {
+      "n": 104,
+      "mean": -0.13134
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 623,
+      "mean": -0.07806
+     },
+     "at_price_fills": {
+      "n": 675,
+      "mean": -0.05799
+     },
+     "no_penalty": {
+      "n": 623,
+      "mean": -0.07624
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 13,
+     "mean": 0.02122
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-markets-stack-4fb13f",
+    "category": "markets",
+    "variant": "improve",
+    "decisions": 1079,
+    "orders": 743,
+    "evaluable_orders": 737,
+    "fill_rate": 0.60109,
+    "stats": {
+     "n": 443,
+     "events": 108,
+     "mean": -0.0695,
+     "ci95": [
+      -0.15745,
+      0.02255
+     ],
+     "p_one_sided": 0.9295
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 376,
+      "mean": -0.05574
+     },
+     "2026-10-23": {
+      "n": 67,
+      "mean": -0.14673
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 443,
+      "mean": -0.06638
+     },
+     "at_price_fills": {
+      "n": 471,
+      "mean": -0.05403
+     },
+     "no_penalty": {
+      "n": 443,
+      "mean": -0.0645
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 2,
+     "mean": 0.0709
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-market_cal-a30995",
+    "category": "other",
+    "variant": "join",
+    "decisions": 513,
+    "orders": 513,
+    "evaluable_orders": 485,
+    "fill_rate": 0.72165,
+    "stats": {
+     "n": 350,
+     "events": 282,
+     "mean": -0.03325,
+     "ci95": [
+      -0.09215,
+      0.01432
+     ],
+     "p_one_sided": 0.9005
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 302,
+      "mean": -0.02537
+     },
+     "2026-10-23": {
+      "n": 48,
+      "mean": -0.08282
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 350,
+      "mean": -0.03012
+     },
+     "at_price_fills": {
+      "n": 355,
+      "mean": -0.02962
+     },
+     "no_penalty": {
+      "n": 350,
+      "mean": -0.02825
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 7,
+     "mean": 0.07814
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-market_cal-a30995",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 513,
+    "orders": 380,
+    "evaluable_orders": 352,
+    "fill_rate": 0.7017,
+    "stats": {
+     "n": 247,
+     "events": 184,
+     "mean": -0.01871,
+     "ci95": [
+      -0.08574,
+      0.04198
+     ],
+     "p_one_sided": 0.7295
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 218,
+      "mean": -0.0145
+     },
+     "2026-10-23": {
+      "n": 29,
+      "mean": -0.0504
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 247,
+      "mean": -0.01549
+     },
+     "at_price_fills": {
+      "n": 256,
+      "mean": -0.00865
+     },
+     "no_penalty": {
+      "n": 247,
+      "mean": -0.01371
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 0,
+     "mean": null
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-248d77",
+    "category": "other",
+    "variant": "join",
+    "decisions": 123,
+    "orders": 123,
+    "evaluable_orders": 123,
+    "fill_rate": 0.76423,
+    "stats": {
+     "n": 94,
+     "events": 94,
+     "mean": -0.00944,
+     "ci95": [
+      -0.10431,
+      0.09084
+     ],
+     "p_one_sided": 0.5685
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 72,
+      "mean": 0.02547
+     },
+     "2026-10-23": {
+      "n": 22,
+      "mean": -0.12367
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 94,
+      "mean": -0.00585
+     },
+     "at_price_fills": {
+      "n": 95,
+      "mean": -0.00596
+     },
+     "no_penalty": {
+      "n": 94,
+      "mean": -0.00444
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 52,
+     "mean": 0.12204
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-248d77",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 123,
+    "orders": 91,
+    "evaluable_orders": 91,
+    "fill_rate": 0.76923,
+    "stats": {
+     "n": 70,
+     "events": 70,
+     "mean": -0.03925,
+     "ci95": [
+      -0.15384,
+      0.06674
+     ],
+     "p_one_sided": 0.7555
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 53,
+      "mean": -0.00458
+     },
+     "2026-10-23": {
+      "n": 17,
+      "mean": -0.14732
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 70,
+      "mean": -0.03543
+     },
+     "at_price_fills": {
+      "n": 76,
+      "mean": -0.01079
+     },
+     "no_penalty": {
+      "n": 70,
+      "mean": -0.03425
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 38,
+     "mean": 0.14403
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-51783d",
+    "category": "other",
+    "variant": "join",
+    "decisions": 132,
+    "orders": 132,
+    "evaluable_orders": 132,
+    "fill_rate": 0.79545,
+    "stats": {
+     "n": 105,
+     "events": 105,
+     "mean": -0.0176,
+     "ci95": [
+      -0.10406,
+      0.0683
+     ],
+     "p_one_sided": 0.6685
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 84,
+      "mean": 0.00178
+     },
+     "2026-10-23": {
+      "n": 21,
+      "mean": -0.09511
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 105,
+      "mean": -0.01405
+     },
+     "at_price_fills": {
+      "n": 106,
+      "mean": -0.01441
+     },
+     "no_penalty": {
+      "n": 105,
+      "mean": -0.0126
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 61,
+     "mean": 0.07352
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-51783d",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 132,
+    "orders": 91,
+    "evaluable_orders": 91,
+    "fill_rate": 0.82418,
+    "stats": {
+     "n": 75,
+     "events": 75,
+     "mean": -0.00534,
+     "ci95": [
+      -0.1124,
+      0.10086
+     ],
+     "p_one_sided": 0.553
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 61,
+      "mean": 0.00643
+     },
+     "2026-10-23": {
+      "n": 14,
+      "mean": -0.05662
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 75,
+      "mean": -0.00153
+     },
+     "at_price_fills": {
+      "n": 79,
+      "mean": 0.01309
+     },
+     "no_penalty": {
+      "n": 75,
+      "mean": -0.00034
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 42,
+     "mean": 0.07506
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-f65274",
+    "category": "other",
+    "variant": "join",
+    "decisions": 123,
+    "orders": 123,
+    "evaluable_orders": 123,
+    "fill_rate": 0.79675,
+    "stats": {
+     "n": 98,
+     "events": 98,
+     "mean": -0.00428,
+     "ci95": [
+      -0.09358,
+      0.09001
+     ],
+     "p_one_sided": 0.527
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 77,
+      "mean": 0.01672
+     },
+     "2026-10-23": {
+      "n": 21,
+      "mean": -0.08131
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 98,
+      "mean": -0.00071
+     },
+     "at_price_fills": {
+      "n": 99,
+      "mean": -0.001
+     },
+     "no_penalty": {
+      "n": 98,
+      "mean": 0.00072
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 54,
+     "mean": 0.07552
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-other-stack-f65274",
+    "category": "other",
+    "variant": "improve",
+    "decisions": 123,
+    "orders": 91,
+    "evaluable_orders": 91,
+    "fill_rate": 0.82418,
+    "stats": {
+     "n": 75,
+     "events": 75,
+     "mean": -0.00446,
+     "ci95": [
+      -0.11706,
+      0.10218
+     ],
+     "p_one_sided": 0.5515
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 60,
+      "mean": 0.00713
+     },
+     "2026-10-23": {
+      "n": 15,
+      "mean": -0.05081
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 75,
+      "mean": -0.0006
+     },
+     "at_price_fills": {
+      "n": 79,
+      "mean": 0.01393
+     },
+     "no_penalty": {
+      "n": 75,
+      "mean": 0.00054
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 41,
+     "mean": 0.0828
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-3e1a7c",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 198,
+    "orders": 198,
+    "evaluable_orders": 198,
+    "fill_rate": 0.43434,
+    "stats": {
+     "n": 86,
+     "events": 51,
+     "mean": 0.0189,
+     "ci95": [
+      -0.06614,
+      0.09879
+     ],
+     "p_one_sided": 0.3065
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 73,
+      "mean": 0.02554
+     },
+     "2026-10-23": {
+      "n": 13,
+      "mean": -0.01838
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 86,
+      "mean": 0.02151
+     },
+     "at_price_fills": {
+      "n": 92,
+      "mean": 0.0228
+     },
+     "no_penalty": {
+      "n": 86,
+      "mean": 0.0239
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 172,
+     "mean": 0.00965
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-weather-market_cal-3e1a7c",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 198,
+    "orders": 172,
+    "evaluable_orders": 172,
+    "fill_rate": 0.43605,
+    "stats": {
+     "n": 75,
+     "events": 50,
+     "mean": -0.00012,
+     "ci95": [
+      -0.09747,
+      0.08259
+     ],
+     "p_one_sided": 0.4695
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 60,
+      "mean": 0.00815
+     },
+     "2026-10-23": {
+      "n": 15,
+      "mean": -0.03321
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 75,
+      "mean": 0.00233
+     },
+     "at_price_fills": {
+      "n": 88,
+      "mean": 0.00539
+     },
+     "no_penalty": {
+      "n": 75,
+      "mean": 0.00488
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 149,
+     "mean": 0.00678
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-market_cal-52ac9d",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 187,
+    "orders": 187,
+    "evaluable_orders": 187,
+    "fill_rate": 0.47059,
+    "stats": {
+     "n": 88,
+     "events": 51,
+     "mean": 0.03556,
+     "ci95": [
+      -0.04888,
+      0.11064
+     ],
+     "p_one_sided": 0.1805
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 75,
+      "mean": 0.04491
+     },
+     "2026-10-23": {
+      "n": 13,
+      "mean": -0.01838
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 88,
+      "mean": 0.03818
+     },
+     "at_price_fills": {
+      "n": 94,
+      "mean": 0.03831
+     },
+     "no_penalty": {
+      "n": 88,
+      "mean": 0.04056
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 116,
+     "mean": 0.04634
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-weather-market_cal-52ac9d",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 187,
+    "orders": 161,
+    "evaluable_orders": 161,
+    "fill_rate": 0.47205,
+    "stats": {
+     "n": 76,
+     "events": 49,
+     "mean": 0.01337,
+     "ci95": [
+      -0.07628,
+      0.09651
+     ],
+     "p_one_sided": 0.365
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 61,
+      "mean": 0.02482
+     },
+     "2026-10-23": {
+      "n": 15,
+      "mean": -0.03321
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 76,
+      "mean": 0.01579
+     },
+     "at_price_fills": {
+      "n": 90,
+      "mean": 0.02627
+     },
+     "no_penalty": {
+      "n": 76,
+      "mean": 0.01837
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 95,
+     "mean": 0.04286
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-weather-market_cal-b2469c",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 187,
+    "orders": 187,
+    "evaluable_orders": 187,
+    "fill_rate": 0.47059,
+    "stats": {
+     "n": 88,
+     "events": 51,
+     "mean": 0.05022,
+     "ci95": [
+      -0.03345,
+      0.12398
+     ],
+     "p_one_sided": 0.107
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 75,
+      "mean": 0.04745
+     },
+     "2026-10-23": {
+      "n": 13,
+      "mean": 0.06624
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 88,
+      "mean": 0.05284
+     },
+     "at_price_fills": {
+      "n": 94,
+      "mean": 0.05204
+     },
+     "no_penalty": {
+      "n": 88,
+      "mean": 0.05522
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 158,
+     "mean": 0.02947
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-weather-market_cal-b2469c",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 187,
+    "orders": 161,
+    "evaluable_orders": 161,
+    "fill_rate": 0.47205,
+    "stats": {
+     "n": 76,
+     "events": 49,
+     "mean": 0.01627,
+     "ci95": [
+      -0.08007,
+      0.0951
+     ],
+     "p_one_sided": 0.3415
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 61,
+      "mean": 0.0104
+     },
+     "2026-10-23": {
+      "n": 15,
+      "mean": 0.04013
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 76,
+      "mean": 0.01868
+     },
+     "at_price_fills": {
+      "n": 90,
+      "mean": 0.02871
+     },
+     "no_penalty": {
+      "n": 76,
+      "mean": 0.02127
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 136,
+     "mean": 0.02118
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": true
+    },
+    "verdict": "promising, under-sampled"
+   },
+   {
+    "agent": "pm-weather-stack-80285d",
+    "category": "weather",
+    "variant": "join",
+    "decisions": 12,
+    "orders": 12,
+    "evaluable_orders": 12,
+    "fill_rate": 0.16667,
+    "stats": {
+     "n": 2,
+     "events": 1,
+     "mean": -0.85235,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 2,
+      "mean": -0.85235
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 2,
+      "mean": -0.85
+     },
+     "at_price_fills": {
+      "n": 2,
+      "mean": -0.85235
+     },
+     "no_penalty": {
+      "n": 2,
+      "mean": -0.84735
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 7,
+     "mean": -0.16717
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   },
+   {
+    "agent": "pm-weather-stack-80285d",
+    "category": "weather",
+    "variant": "improve",
+    "decisions": 12,
+    "orders": 12,
+    "evaluable_orders": 12,
+    "fill_rate": 0.16667,
+    "stats": {
+     "n": 2,
+     "events": 1,
+     "mean": -0.8622,
+     "ci95": null,
+     "p_one_sided": 1.0
+    },
+    "by_day": {
+     "2026-10-22": {
+      "n": 2,
+      "mean": -0.8622
+     }
+    },
+    "sensitivity": {
+     "fee_m0": {
+      "n": 2,
+      "mean": -0.86
+     },
+     "at_price_fills": {
+      "n": 2,
+      "mean": -0.8622
+     },
+     "no_penalty": {
+      "n": 2,
+      "mean": -0.8572
+     }
+    },
+    "taker_rule_same_markets": {
+     "n": 7,
+     "mean": -0.16717
+    },
+    "p_holm": 1.0,
+    "criteria": {
+     "mean_pos_ci_excludes_0": false,
+     "holm_p_lt_0.05": false,
+     "min_sample": false,
+     "every_day_positive": false
+    },
+    "verdict": "fail"
+   }
+  ]
+ }
+}

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Other-chain launch scanner (paper)
+
+- Added `noema/other_chains.py`, a paper-only scanner for new pairs on Base, Robinhood, Ethereum, Polygon, BSC and Arbitrum. It only follows pairs NOEMA could buy (Kyber route via the pinned router, GoPlus honeypot and tax checks, enough liquidity) and counts skips by reason. Entries pay measured discovery lag, gas, slippage, DEX fees, taxes and, for unfunded chains, a real Relay bridge quote. Results go to `data/other_chains.db`, an "Other chains" header chip and `/api/other-chains`. The go/no-go rule is pre-registered in docs/research/other-chains-go-no-go.md.
+
 ### Trench edge research (paper)
 
 - Added `noema/trench_edges.py`, a walk-forward, no-lookahead test of 5 trench ideas: copy-wallet, exits, graduation, X velocity and avoid filters. It uses curve-math costs, a held-out fold and Bonferroni correction. None passed. Results and the 180 s coverage caveat are in docs/research/trench-edges-2026-10-22.md.

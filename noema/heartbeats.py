@@ -285,6 +285,7 @@ LOOPS = {  # connection -> (process cmdline marker, cadence_s, log file in RUN_D
     "agent:pm_history": ("noema.pmus_history", 3600, "pmus_history.log"),
     "agent:news": ("noema.news_crawler", 300, "news.log"),
     "agent:culture": ("noema.culture_crawler", 600, "culture.log"),
+    "agent:other_chains": ("noema.other_chains", 120, "other_chains.log"),
 }
 
 
@@ -358,6 +359,10 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                           detail="Polymarket US history"), "feed:pm_history", "feed", 3600))
     P(_probe(lambda: _rec("feed:smart_wallets", "feed", 300, _max(j("smart_wallets.db"), "SELECT MAX(at) FROM wallet_trades"),
                           detail="vetted wallet moves"), "feed:smart_wallets", "feed", 300))
+    P(_probe(lambda: _rec("feed:other_chains", "feed", 60,
+                          _max(j("other_chains.db"),
+                               "SELECT MAX(at) FROM oc_polls WHERE ok=1 AND source='geckoterminal'"),
+                          detail="other-chain launches (paper)"), "feed:other_chains", "feed", 60))
     P(_probe(lambda: _x_inbox(main_db), "social:x_inbox", "social", 600))
     P(_probe(lambda: _news(main_db), "social:news", "social", 300))
     P(_probe(lambda: _rec("social:culture", "social", 600,
