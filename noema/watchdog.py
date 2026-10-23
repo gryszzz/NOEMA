@@ -173,9 +173,13 @@ def cycle(args: argparse.Namespace, state: dict[str, float]) -> dict[str, Any]:
                  " warnings", cadence_s=300)
     if time.time() - state.get("ret", 0) >= args.retention_every_s:
         state["ret"] = time.time()
-        from .retention import prune_console_state
-        out["retention"] = _step("system:retention", lambda: prune_console_state(
-            os.path.join(args.data_dir, "noema.console-state.db")), args.retention_every_s)
+        from .retention import compact_noema_db, prune_console_state
+
+        def _retention() -> dict:
+            res = prune_console_state(os.path.join(args.data_dir, "noema.console-state.db"))
+            res["noema_db"] = compact_noema_db(os.path.join(args.data_dir, "noema.db"))
+            return res
+        out["retention"] = _step("system:retention", _retention, args.retention_every_s)
     beat("system:watchdog", True, cadence_s=cad)
     return out
 

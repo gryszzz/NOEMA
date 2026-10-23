@@ -19,6 +19,7 @@ from noema.canonical_market_identity import (
     identify_structured_contract,
     registered_resolvers,
 )
+from noema.cold_store import decode_payload
 from noema.ledger import ForecastLedger
 
 
@@ -483,9 +484,10 @@ def test_canonical_graph_projections_reference_pair_payload_instead_of_copying(t
     ledger = ForecastLedger(str(tmp_path / "predictions.db"))
     assert ledger.append_canonical_pair_observation(observation) is True
     conn = ledger.conn
-    pair_hash, pair_json = conn.execute(
+    pair_hash, stored = conn.execute(
         "SELECT observation_hash, observation_json FROM canonical_pair_observations").fetchone()
-    assert len(pair_json) > 20_000
+    pair_json = decode_payload(stored)
+    assert len(pair_json) > 20_000 and len(stored) < len(pair_json) / 5   # stored zlib-compressed
     assert pair_hash == hashlib.sha256(pair_json.encode()).hexdigest()
     projections = (
         [r[0] for r in conn.execute("SELECT observation_json FROM contract_observations ORDER BY id")]
@@ -504,7 +506,7 @@ def test_canonical_graph_projections_reference_pair_payload_instead_of_copying(t
     # The reference resolves back to the single stored copy.
     resolved = conn.execute("SELECT observation_json FROM canonical_pair_observations WHERE observation_hash=?",
                             (json.loads(projections[0])["observation_hash"],)).fetchone()[0]
-    assert resolved == pair_json
+    assert decode_payload(resolved) == pair_json
     # Re-appending the identical observation stays idempotent across all tables.
     assert ledger.append_canonical_pair_observation(observation) is False
     assert conn.execute("SELECT count(*) FROM contract_observations").fetchone()[0] == 2

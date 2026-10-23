@@ -33,6 +33,7 @@ from .canonical_market_identity import (
     identify_mlb_world_series_champion,
     registered_resolvers,
 )
+from .cold_store import loads_payload
 from .config import KalshiConfig, kalshi_production_read_only_config
 from .console_state import console_state_db_path
 from .cross_venue_experiment import (
@@ -2150,7 +2151,7 @@ def _fixed_lifecycle_pairs(
             continue
         for (payload,) in rows:
             try:
-                observation = json.loads(payload)
+                observation = loads_payload(payload)
                 evaluation = observation.get("experiment_evaluation")
                 contracts = (observation.get("canonical_identity") or {}).get("contracts", [])
                 if not isinstance(evaluation, dict) or not isinstance(contracts, list):
@@ -2190,7 +2191,7 @@ def _load_registered_pair_rows(paths: tuple[str, ...]) -> list[dict[str, Any]]:
             for proposition_id, payload in rows:
                 if proposition_id in seen:
                     continue
-                value = json.loads(payload)
+                value = loads_payload(payload)
                 identities = value.get("canonical_identity", {}).get("contracts", [])
                 venues = {item.get("venue") for item in identities if isinstance(item, dict)}
                 if venues == {"kalshi", "polymarket-us"}:

@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from .cold_store import decode_payload
 from .openclaw_worker import runtime_status as openclaw_runtime_status
 from .paper_execution import parse_aware_time
 from .research_state import (
@@ -190,7 +191,7 @@ def _project_experiment_record(
                 "WHERE observation_hash=? LIMIT 1", (evidence_hash,),
             ).fetchone()
             if evidence:
-                observation = _object(evidence[0])
+                observation = _object(decode_payload(evidence[0]))
                 contracts = observation.get("native_contracts")
                 market_ids = list(dict.fromkeys(
                     item.get("market_id") for item in contracts

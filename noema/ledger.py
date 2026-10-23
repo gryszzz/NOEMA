@@ -8,8 +8,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .cold_store import encode_payload
 from .models import Action, Forecast, MarketSnapshot, Opportunity
 from .sqlite_util import connect as sqlite_connect
+
+PAPER_FILL_MARKER = "paper_fill_simulated"
+
+
+def stored_pair_payload(payload: str) -> str | bytes:
+    """canonical_pair_observations.observation_json as stored: NZ1 zlib blob (~12x smaller), except paper-fill
+    rows, which stay TEXT so the settlement scan can prefilter them with instr() inside SQLite.
+    Read back with ``noema.cold_store.decode_payload``; ``observation_hash`` is always over the plain JSON."""
+    return payload if PAPER_FILL_MARKER in payload else encode_payload(payload)
 
 
 class ForecastLedger:
@@ -183,7 +193,8 @@ class ForecastLedger:
              semantic_status, settlement_equivalence, observation_hash, observation_json)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (observed_at, event_id, proposition_id, semantic_status, settlement, digest, payload),
+            (observed_at, event_id, proposition_id, semantic_status, settlement, digest,
+             stored_pair_payload(payload)),
         )
         # Materialize the graph from the same immutable observation so Home
         # and later analysis can query either current links or historical proof.
