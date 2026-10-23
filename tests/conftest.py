@@ -45,3 +45,7 @@ def _isolated_risk_budget(tmp_path_factory: pytest.TempPathFactory, monkeypatch:
     d = tmp_path_factory.mktemp("rb")
     monkeypatch.setenv("NOEMA_RISK_BUDGET_PATH", str(d / "risk_budget.json"))
     monkeypatch.setenv("NOEMA_STRATEGY_CAPACITY_PATH", str(d / "strategy_capacity.json"))
+    monkeypatch.setenv("NOEMA_PM_FEE_DB", str(d / "pm_fees.db"))
+    from noema import pm_fees
+
+    pm_fees._memo.clear()
