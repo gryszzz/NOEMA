@@ -8,7 +8,7 @@
   const SEC={launch:"launch",candles:"candles",look:"looking",agents:"agents",smart:"smart",treas:"treasury",pmh:"pm_history",near:"near_close",xv:"xv"};
   function mount(){
     if($("#lv"))return;const w=document.createElement("section");w.id="lv";
-    w.innerHTML=P.map(([k,t])=>`<div class="lvp" id="lv-${k}"><h3>${t}<span class="lvfr" id="lv-${k}-f"><i class="lvdot"></i><span>—</span></span></h3><div id="lv-${k}-b">${k==="candles"?'<div class="lvhl" id="lv-cinfo"></div><canvas id="lv-cv"></canvas>':'<span class="lvm">waiting for push…</span>'}</div></div>`).join("")
+    w.innerHTML=P.map(([k,t])=>`<div class="lvp" id="lv-${k}"><h3>${t}<span class="lvfr" id="lv-${k}-f"><i class="lvdot"></i><span>—</span></span></h3><div id="lv-${k}-b">${k==="candles"?'<div class="lvcg" id="lv-cg"></div><div class="lvm lvcf" id="lv-cinfo"></div>':'<span class="lvm">waiting for push…</span>'}</div></div>`).join("")
       +`<div class="lvm" style="grid-column:1/-1" id="lv-tx"></div>`;
     (document.querySelector(".app")||document.body).insertAdjacentElement("afterend",w);
     document.documentElement.style.overflowY="auto";document.body.style.overflowY="auto";document.body.style.height="auto";
@@ -40,11 +40,19 @@
     $("#lv-xv-b").innerHTML=`<div class="lvsc" style="max-height:220px">${tbl(["PM ↔ Kalshi","gap","cost","edge","verdict","age"],(X.rows||[]).map(r=>`<tr><td title="${esc(r.pm+" ↔ "+r.kalshi)}">${esc(r.pm)} <span class="lvm">↔ ${esc(r.kalshi)}</span></td><td>${n(r.raw_gap,3)}</td><td>${n(r.cost,3)}</td><td class="${+r.edge>=0.01?"lvg":"lvm"}">${n(r.edge,3)}</td><td>${esc(r.verdict)} · <span class="${/clears/.test(r.gate)?"lvg":"lvm"}">${esc(r.gate||"")}</span></td><td>${ago(now-T(r.at))}</td></tr>`))}</div>`;
     drawCandle(); fresh();
   }
-  function drawCandle(){ const C=(D&&D.candles&&D.candles.charts)||[],cv=$("#lv-cv"),info=$("#lv-cinfo"); if(!cv)return;
-    if(!C.length){info.innerHTML='<span class="lvm">no fresh launch with ≥12 captured trades yet</span>';return}
-    const c=C[ci%C.length], r=cv.getBoundingClientRect(); cv.width=Math.max(300,r.width)*devicePixelRatio; cv.height=Math.max(200,r.height)*devicePixelRatio;
-    info.innerHTML=`<b class="lvy">${esc(c.sym||sh(c.mint))}</b><span class="lvm">${esc(c.name||"")}</span><span class="lvchip">found ${ago(Date.now()-T(c.found_at))} ago</span><span class="lvchip">${c.n_trades} trades · tf ${c.tf_s}s</span><span class="lvm">${ci%C.length+1}/${C.length}</span>`;
-    if(window.TEVCandles)TEVCandles.draw(cv,c.rows,{interval:c.tf_s,label:"mcap ◎ · our captured trades",markers:[{t:Math.floor(T(c.found_at)/1e3),kind:"find"}],volLabel:"◎ vol"});
+  /* Fresh launch candles: a row of tidy per-coin cards (1-3 by panel width), each with fixed-width candles
+     packed right-aligned (TEVCandles slot mode), so a coin with 6 candles is not stretched across the panel. */
+  function cardsN(){const p=$("#lv-candles");const w=p?p.clientWidth:0;return w>=900?3:w>=560?2:1}
+  function drawCandle(){ const C=(D&&D.candles&&D.candles.charts)||[],g=$("#lv-cg"),info=$("#lv-cinfo"); if(!g)return;
+    if(!C.length){g.innerHTML="";info.innerHTML='no fresh launch with ≥12 captured trades yet';return}
+    const k=Math.min(cardsN(),C.length);
+    if(g.childElementCount!==k){g.dataset.n=k;g.innerHTML=Array.from({length:k},()=>'<div class="lvcc"><div class="lvch"></div><div class="lvcw"><canvas></canvas></div></div>').join("")}
+    const start=(ci*k)%C.length;
+    [...g.children].forEach((card,j)=>{const idx=(start+j)%C.length,c=C[idx];
+      card.querySelector(".lvch").innerHTML=`<b class="lvy">${esc(c.sym||sh(c.mint))}</b><span class="lvm lvnm">${esc(c.name||"")}</span><span class="lvchip">${idx+1}/${C.length}</span>`
+        +`<span class="lvcs">found ${ago(Date.now()-T(c.found_at))} ago · ${c.n_trades} trades · tf ${c.tf_s}s</span>`;
+      if(window.TEVCandles)TEVCandles.draw(card.querySelector("canvas"),c.rows,{interval:c.tf_s,key:"lv:"+c.mint,label:"mcap ◎",markers:[{t:Math.floor(T(c.found_at)/1e3),kind:"find"}],volLabel:"◎ vol",slot:10});});
+    info.textContent=`${C.length} fresh launches · showing ${k} at a time · our captured trades only`;
   }
   /* Connections heartbeat: compact header chip -> popover (tev.heartbeats.v1). Ages tick live client-side. */
   function hbMount(){ if($("#hb-chip"))return; const h=document.querySelector(".app header")||document.querySelector("header");
