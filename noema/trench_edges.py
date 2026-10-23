@@ -128,7 +128,7 @@ def sim(coin: dict[str, Any], t_sig: float, lat: float, usd: float, sol_usd: flo
         rule: dict[str, Any]) -> float | None:
     """Generic exit engine on the pump.fun curve. rule keys:
     tmax (s), sl (fraction, None=off), ladder [(ret, fraction_of_initial)], trail (fraction from peak, None=off),
-    trail_after_tp (bool: trail only arms after the first ladder fill).
+    trail_after_tp (bool: trail only arms after the first ladder fill), exit_mc (sell all once mcap >= this).
     Returns net return on SOL in, or None if the exit window is not fully covered by recorded trades."""
     tr, T = coin["tr"], coin["T"]
     te = t_sig + lat
@@ -156,7 +156,8 @@ def sim(coin: dict[str, Any], t_sig: float, lat: float, usd: float, sol_usd: flo
                 break
             continue
         armed = trail is not None and (filled > 0 or not after)
-        if (sl is not None and r <= -sl) or (armed and x[4] <= peak * (1 - trail)):
+        hit_mc = rule.get("exit_mc") is not None and x[4] >= rule["exit_mc"]
+        if (sl is not None and r <= -sl) or (armed and x[4] <= peak * (1 - trail)) or hit_mc:
             out += hft.sell_sol(fill, hold); hold = 0; txs += 1
             break
     if hold > 1e-12:

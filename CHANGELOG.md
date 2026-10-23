@@ -6,6 +6,7 @@
 
 - Added `noema/trench_edges.py`, a walk-forward, no-lookahead test of 5 trench ideas: copy-wallet, exits, graduation, X velocity and avoid filters. It uses curve-math costs, a held-out fold and Bonferroni correction. None passed. Results and the 180 s coverage caveat are in docs/research/trench-edges-2026-10-22.md.
 - Trench edge study: added a creator track-record veto test (it failed out of sample) and a capture-outage guard. Tape-wide silences longer than 10 s now cut coverage, because they produced frozen marks. All numbers were rerun.
+- Added `noema/trench_specs.py`. It runs the three proven_edges specs (originality/creator pre-filter, manipulation veto, sniper-overhang re-entry) on 7.4 h of tape. The results are preliminary and underpowered, nothing passes, and the 10 min S3 rule cannot be priced. See docs/research/trench-specs-2026-10-22.md.
 
 ### Culture radar and alpha discovery (paper)
 
