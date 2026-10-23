@@ -273,6 +273,8 @@ class FreshLaunchRunner:
             self.ticks += 1
             if summary["entries"] or summary["exits"] or summary["prefilter_passed"] or self.ticks % 6 == 1:
                 store.event(desk_id, "fresh_cycle", **summary)
+            if self.ticks % 6 == 1:
+                engine.void_suspended()
             engine.commit()
         finally:
             store.close()
