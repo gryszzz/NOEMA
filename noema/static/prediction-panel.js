@@ -15,7 +15,7 @@ function mount(){if(document.getElementById("pb-panel"))return document.getEleme
 const STAKE_RE=/stake \$([0-9,.]+)/i;
 function stakeOf(p){if(typeof p.stake_usd==="number"&&isFinite(p.stake_usd))return p.stake_usd;
  const m=STAKE_RE.exec(String(p.note||""));if(!m)return null;const v=parseFloat(m[1].replace(/,/g,""));return isFinite(v)?v:null}
-function usd(v){return v==null?"—":"$"+(v>=100?Math.round(v):v.toFixed(2))}
+function usd(v){return v==null?"—":"$"+(v>=10?Math.round(v):v.toFixed(2))}
 function ts(s){const t=Date.parse(s||"");return isFinite(t)?t:0}
 /* Flatten every post's picks and keep only the latest version of each venue + market + side. */
 function latestPicks(posts){const best=new Map();
@@ -49,7 +49,7 @@ function render(d){mount();const body=document.getElementById("pb-body"),tag=doc
  body.append(sum);
  const showMarks=picks.some(marked);
  const tb=el("table");const cg=el("colgroup");
- const cols=showMarks?["24px","","30px","72px","44px","38px","40px","48px"]:["24px","","30px","72px","44px","38px"];
+ const cols=showMarks?["24px","","36px","74px","46px","46px","40px","48px"]:["24px","","36px","74px","46px","46px"];
  for(const w of cols){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
  const hr=el("tr");for(const x of (showMarks?["","market","side","px→fair","stake","settle","now","P&L"]:["","market","side","px→fair","stake","settle"]))hr.append(el("th",null,x));tb.append(hr);
  for(const pk of picks)tb.append(pickRow(pk,showMarks));body.append(tb)}
