@@ -150,7 +150,6 @@ body.v7-laptop .ag.aw .st{display:none}
 
 <div class="center-bot">
  <section class="pnl"><h2>DECISION STREAM<span class="tag">real CHIEF / desk / judge events</span></h2>
-  <div class="dial"><canvas id="dial" width="150" height="84"></canvas><div id="dial-t" style="flex:1"></div></div>
   <div class="body" id="stream"></div></section>
  <section class="pnl"><h2>PREDICTION MARKETS<span class="tag" id="pm-tag"></span></h2><div class="body" id="pm"></div></section>
 </div>
@@ -289,7 +288,7 @@ function stream(){const t=S.tr||{},out=[];
  if(!out.length){el.innerHTML='<div class="empty">No decisions recorded yet.</div>';return}
  const html=out.slice(0,40).map(o=>`<div class="ev ${o.k}" ${S.seen.has(o.id)?'style="animation:none"':""}><span class="ts">${hm(o.ts)}</span>${esc(o.txt)}</div>`).join("");out.forEach(o=>S.seen.add(o.id));el.innerHTML=html;
  const last=(t.events||[]).find(e=>e.event==="chief_decision");let p=null;try{p=last&&JSON.parse(last.payload_json)}catch(x){}dial(p);}
-function dial(p){const c=$("dial").getContext("2d");c.clearRect(0,0,150,84);const arc=(v,col,r)=>{c.beginPath();c.strokeStyle=col;c.lineWidth=9;c.arc(75,78,r,Math.PI,Math.PI+Math.PI*v);c.stroke()};
+function dial(p){const cv=$("dial");if(!cv)return;const c=cv.getContext("2d");c.clearRect(0,0,150,84);const arc=(v,col,r)=>{c.beginPath();c.strokeStyle=col;c.lineWidth=9;c.arc(75,78,r,Math.PI,Math.PI+Math.PI*v);c.stroke()};
  arc(1,"#0b2232",62);arc(1,"#0b2232",46);if(p){arc(p.probability||0,p.probability>=.6?"#39ff9c":"#ff3b6b",62);arc(p.confidence||0,p.confidence>=.55?"#39ff9c":"#ffd23f",46)}
  const tk=(v,r)=>{const a=Math.PI+Math.PI*v;c.strokeStyle="#fff";c.lineWidth=2;c.beginPath();c.moveTo(75+Math.cos(a)*(r-7),78+Math.sin(a)*(r-7));c.lineTo(75+Math.cos(a)*(r+7),78+Math.sin(a)*(r+7));c.stroke()};tk(.6,62);tk(.55,46);
  $("dial-t").innerHTML=p?`<b style="font-size:15px" class="${p.approved?"ok":"bad"}">CHIEF ${p.approved?"APPROVE":"VETO"} · ${esc(p.symbol)}</b><br>prob ${f2(p.probability)} (gate 0.60) · conf ${f2(p.confidence)} (gate 0.55)<br><span class="dim">${esc(p.reason)}</span>`:'<span class="dim">CHIEF dial idle — no decision yet</span>';}
