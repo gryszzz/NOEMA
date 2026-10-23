@@ -654,3 +654,31 @@ def test_stale_or_premature_forward_observation_is_rejected(tmp_path) -> None:
                 raw_token=token_at(start, price=tick.price_usd), holder_shares=(),
             )
     assert store.observations("mint-a") == []
+
+
+def test_dead_liquidity_quote_never_counts_as_a_gain(tmp_path) -> None:
+    """Regression: a $0.02-liquidity quote at 208,651x the reference skewed the stored 15m mean to +24.8."""
+    from noema.trench_collector import recompute_counterfactuals, tradeable_path_price
+    assert tradeable_path_price(50.0, 0.02, 1.0) == 1.0
+    assert tradeable_path_price(0.5, 0.02, 1.0) == 0.5
+    assert tradeable_path_price(50.0, 5_000, 1.0) == 50.0
+    db = str(tmp_path / "cf.db")
+    start = datetime(2026, 9, 26, 20, 0, tzinfo=UTC)
+    control = TokenControlState(token_program="Token", suspicious_flag=False)
+    collector = TrenchCollectorStore(db)
+    collector.register_recent([token_at(start)], now=start + timedelta(seconds=5))
+    for horizon, price, liquidity in ((120, 0.001, 8_000), (300, 0.002, 16_000), (900, 400.0, 0.02),
+                                      (3600, 0.001, 9_000)):
+        tick = LaunchTick(start + timedelta(seconds=horizon), price, liquidity, 300, 80)
+        due = DueObservation("mint-a", start, horizon, start + timedelta(seconds=horizon))
+        assert collector.record_observation(due, tick=tick, control=control,
+                                            raw_token=token_at(start, price=price), holder_shares=())
+    update_trench_research_from_observations(db, mint="mint-a")
+    rows = dict(TrenchResearchStore(db).conn.execute(
+        "SELECT horizon_seconds, final_return_fraction FROM trench_counterfactuals").fetchall())
+    assert rows[900] == pytest.approx(0.0)
+    assert rows[3600] == pytest.approx(-0.5)
+    mx = TrenchResearchStore(db).conn.execute(
+        "SELECT MAX(max_return_fraction) FROM trench_counterfactuals").fetchone()[0]
+    assert mx == pytest.approx(0.0)
+    assert recompute_counterfactuals(db) == {"mints": 1, "labels": 2}
