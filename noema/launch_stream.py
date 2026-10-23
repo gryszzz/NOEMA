@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .sqlite_util import connect as sqlite_connect
+from .sqlite_util import is_busy
 
 PUMPPORTAL = "wss://pumpportal.fun/api/data"
 PROGRAMS = {"pump.fun": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
@@ -76,6 +77,53 @@ WATCH: set[str] = set()          # smart-wallet watchlist (data/smart_wallets.db
 EXTEND: dict[str, float] = {}     # mint -> follow-until (epoch s) after a watched wallet buys
 WATCH_FOLLOW_S = 1800
 _WATCH_AT = [0.0]
+
+
+OPEN_FOLLOW_S = int(os.getenv("NOEMA_STREAM_OPEN_FOLLOW_S", "600"))
+_OPEN_AT = [0.0]
+
+
+def reload_open_positions(path: str | None = None, now: float | None = None) -> int:
+    """Keep following trades for mints the paper META desk holds, so its exits mark on live trade prices
+    instead of a stale observation tick. Read-only on the META db; missing db/table -> 0."""
+    path = path or os.getenv("NOEMA_META_DB", "data/meta_launch.db")
+    if not os.path.exists(path):
+        return 0
+    now = now or time.time()
+    try:
+        m = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        try:
+            mints = [r[0] for r in m.execute("SELECT DISTINCT mint FROM meta_positions WHERE status='open'")]
+        finally:
+            m.close()
+    except sqlite3.Error:
+        return 0
+    for mint in mints:
+        EXTEND[mint] = max(EXTEND.get(mint, 0), now + OPEN_FOLLOW_S)
+    return len(mints)
+
+
+def safe_commit(c: sqlite3.Connection) -> bool:
+    """Commit, but never let a busy/locked noema.db kill the stream: the txn stays open and the next commit retries."""
+    try:
+        c.commit()
+        return True
+    except sqlite3.OperationalError as exc:
+        if not is_busy(exc):
+            raise
+        print(_now(), "commit deferred: database busy", flush=True)
+        return False
+
+
+async def committer(c: sqlite3.Connection, stop: asyncio.Event, every: float | None = None) -> None:
+    """Commit on a clock, not only when a message arrives: a quiet/stalled websocket used to leave the shared
+    connection's write txn open for the full 60 s recv timeout (and longer across reconnect backoff),
+    holding the noema.db write lock against every other writer."""
+    every = COMMIT_S if every is None else every
+    while not stop.is_set():
+        await asyncio.sleep(every)
+        if c.in_transaction:
+            safe_commit(c)
 
 
 def reload_watch(path: str = "data/smart_wallets.db") -> int:
@@ -334,19 +382,19 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
                         for m in old:
                             follow.pop(m, None)
                     if time.time() - last_commit > COMMIT_S:
-                        c.commit()
+                        safe_commit(c)
                         last_commit = time.time()
         except PumpPortalUnfunded as exc:
             # a fresh connection re-checks the key's funding; back off 30 s -> 10 min so we don't hammer it
             print(_now(), "pumpportal unfunded", str(exc)[:120], f"retry in {fund_backoff:.0f}s", flush=True)
             _pp_beat(False, "PumpPortal key wallet below 0.02 SOL - keyed trades refused; top it up")
-            c.commit()
+            safe_commit(c)
             follow.clear()
             await asyncio.sleep(fund_backoff)
             fund_backoff = min(600.0, fund_backoff * 2)
         except Exception as exc:  # noqa: BLE001 - reconnect with backoff
             print(_now(), "pumpportal", type(exc).__name__, str(exc)[:120], flush=True)
-            c.commit()
+            safe_commit(c)
             follow.clear()
             await asyncio.sleep(backoff)
             backoff = min(60.0, backoff * 2)
@@ -384,8 +432,14 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue
                         else:
                             handle_rpc_logs(c, v.get("signature"), logs)
                     if time.time() - last_commit > COMMIT_S:
-                        c.commit()
+                        safe_commit(c)
                         prune_follow(FOLLOW)
+                        if time.time() - _OPEN_AT[0] > 60:
+                            _OPEN_AT[0] = time.time()
+                            try:
+                                reload_open_positions()
+                            except Exception as exc:  # noqa: BLE001 - optional
+                                print("open-position reload failed", type(exc).__name__, flush=True)
                         if time.time() - _WATCH_AT[0] > 300:
                             _WATCH_AT[0] = time.time()
                             try:
@@ -397,7 +451,7 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue
                         last_commit = time.time()
         except Exception as exc:  # noqa: BLE001
             print(_now(), "rpc", type(exc).__name__, flush=True)  # never print the URL (may hold a key)
-            c.commit()
+            safe_commit(c)
             await asyncio.sleep(backoff)
             backoff = min(120.0, backoff * 2)
 
@@ -433,33 +487,71 @@ def _has(c: sqlite3.Connection, t: str) -> bool:
     return c.execute("SELECT 1 FROM sqlite_master WHERE name=?", (t,)).fetchone() is not None
 
 
-def prune(db: str, keep_h: float = 72) -> None:
-    c = connect(db)
+PRUNE_TABLES = ("launch_trades", "launch_rpc_events", "launch_trade_seen")
+
+
+def prune_batch(c: sqlite3.Connection, table: str, cut: str, batch: int = 5000) -> int:
+    assert table in PRUNE_TABLES
+    n = c.execute(f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE received_at < ? LIMIT ?)",
+                  (cut, batch)).rowcount
+    safe_commit(c)
+    return n
+
+
+async def prune(c: sqlite3.Connection, keep_h: float = 72, batch: int = 5000) -> int:
+    """Delete old rows on the stream's OWN connection in short batches. The old version opened a second
+    connection while the shared one held a write txn -> it waited on itself for busy_timeout, raised
+    'database is locked' and took the whole stream down (crash loop every ~hour)."""
+    safe_commit(c)
     cut = datetime.fromtimestamp(time.time() - keep_h * 3600, UTC).isoformat()
-    for t in ("launch_trades", "launch_rpc_events", "launch_trade_seen"):
-        c.execute(f"DELETE FROM {t} WHERE received_at < ?", (cut,))
+    total = 0
+    for t in PRUNE_TABLES:
+        while True:
+            n = prune_batch(c, t, cut, batch)
+            total += n
+            if n < batch:
+                break
+            await asyncio.sleep(0.05)  # let the stream tasks run between batches
+    return total
+
+
+def backfill_legacy_source(c: sqlite3.Connection) -> int:
+    """Rows written before #177 added launch_trades.source have NULL source. The only trade writer that
+    produced 4-dp market_cap_sol with a trader was the Helius pump.fun TradeEvent decoder (PumpPortal
+    caps are unrounded floats; LaunchLab rows carry no trader), so those rows are 'helius'."""
+    n = c.execute("UPDATE launch_trades SET source='helius' WHERE source IS NULL AND trader IS NOT NULL"
+                  " AND market_cap_sol IS NOT NULL AND market_cap_sol = round(market_cap_sol, 4)").rowcount
     c.commit()
-    c.close()
+    return n
 
 
 async def _main(db: str) -> None:
     stop = asyncio.Event()
 
+    c = connect(db)  # one connection shared by all tasks (single thread); never open a second writer here
+
     async def housekeeping() -> None:
         while True:
             await asyncio.sleep(3600)
-            prune(db)
-            print(_now(), json.dumps(latency_report(db, 1)), flush=True)
-    c = connect(db)  # one connection shared by both tasks (single thread) - no self-locking
+            try:  # housekeeping must never take the stream down
+                print(_now(), "pruned", await prune(c), flush=True)
+                print(_now(), json.dumps(await asyncio.to_thread(latency_report, db, 1)), flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(_now(), "housekeeping", type(exc).__name__, str(exc)[:120], flush=True)
     llq: asyncio.Queue = asyncio.Queue()
-    await asyncio.gather(run_pumpportal(c, stop), run_rpc(c, stop, llq), resolve_ll_pools(c, llq, stop), housekeeping())
+    await asyncio.gather(run_pumpportal(c, stop), run_rpc(c, stop, llq), resolve_ll_pools(c, llq, stop),
+                         committer(c, stop), housekeeping())
 
 
 def main() -> None:  # pragma: no cover
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=os.getenv("NOEMA_DB_PATH", "data/noema.db"))
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--backfill-source", action="store_true")
     a = ap.parse_args()
+    if a.backfill_source:
+        print("backfilled", backfill_legacy_source(connect(a.db)))
+        return
     if a.report:
         print(json.dumps(latency_report(a.db), indent=1))
         return

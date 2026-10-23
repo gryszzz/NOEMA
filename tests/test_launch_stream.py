@@ -95,3 +95,78 @@ def test_pumpportal_url(monkeypatch):
     assert ls.pumpportal_url() == ls.PUMPPORTAL
     monkeypatch.setenv("PUMPPORTAL_API_KEY", "k")
     assert ls.pumpportal_url().startswith(ls.PUMPPORTAL + "?api-key=")
+
+
+def test_prune_uses_shared_connection_while_txn_open(tmp_path):
+    """Regression: prune used to open a 2nd connection while the stream's shared one held a write txn ->
+    'database is locked' crash loop. It must run on the same connection, in batches."""
+    import asyncio
+    db = str(tmp_path / "s.db")
+    c = ls.connect(db)
+    c.execute("PRAGMA busy_timeout=200")
+    for i in range(12):
+        ls.insert_trade(c, f"OLD{i}", "M", "buy", 1.0, 1.0, "T", 1.0, "helius")
+    c.execute("UPDATE launch_trades SET received_at='2000-01-01T00:00:00+00:00'")
+    c.execute("UPDATE launch_trade_seen SET received_at='2000-01-01T00:00:00+00:00'")
+    ls.insert_trade(c, "NEW", "M", "buy", 1.0, 1.0, "T", 1.0, "helius")  # txn still open
+    assert c.in_transaction
+    n = asyncio.run(ls.prune(c, keep_h=1, batch=5))
+    assert n == 24
+    assert c.execute("SELECT signature FROM launch_trades").fetchall() == [("NEW",)]
+    assert not c.in_transaction
+
+
+def test_committer_closes_idle_txn(tmp_path):
+    import asyncio
+    c = ls.connect(str(tmp_path / "s.db"))
+    ls.insert_trade(c, "S1", "M", "buy", 1.0, 1.0, "T", 1.0, "helius")
+    assert c.in_transaction
+
+    async def go():
+        stop = asyncio.Event()
+        task = asyncio.create_task(ls.committer(c, stop, every=0.01))
+        await asyncio.sleep(0.05)
+        stop.set()
+        await task
+    asyncio.run(go())
+    assert not c.in_transaction
+
+
+def test_safe_commit_survives_busy(tmp_path):
+    db = str(tmp_path / "s.db")
+    a, b = ls.connect(db), ls.connect(db)
+    b.execute("PRAGMA busy_timeout=50")
+    a.execute("BEGIN IMMEDIATE")
+    a.execute("INSERT INTO launch_rpc_events VALUES ('x','p','2000',1)")
+
+    class Busy:
+        def commit(self):
+            raise sqlite3.OperationalError("database is locked")
+    assert ls.safe_commit(Busy()) is False
+    a.commit()
+    assert ls.safe_commit(b) is True
+
+
+def test_open_meta_positions_extend_trade_follow(tmp_path):
+    meta = tmp_path / "meta.db"
+    m = sqlite3.connect(meta)
+    m.execute("CREATE TABLE meta_positions (mint TEXT, status TEXT)")
+    m.executemany("INSERT INTO meta_positions VALUES (?,?)", [("OPEN1", "open"), ("SHUT", "closed")])
+    m.commit()
+    m.close()
+    ls.EXTEND.clear()
+    assert ls.reload_open_positions(str(meta), now=1000.0) == 1
+    assert ls.EXTEND == {"OPEN1": 1000.0 + ls.OPEN_FOLLOW_S}
+    assert ls.reload_open_positions(str(tmp_path / "missing.db")) == 0
+    ls.EXTEND.clear()
+
+
+def test_backfill_legacy_null_source(tmp_path):
+    c = ls.connect(str(tmp_path / "s.db"))
+    c.executemany("INSERT INTO launch_trades (signature, mint, received_at, side, sol, tokens, trader, market_cap_sol)"
+                  " VALUES (?,?,?,?,?,?,?,?)", [("A", "M", "t", "buy", 1, 1, "T", 31.1234),
+                                                ("B", "M", "t", "buy", 1, 1, "T", 31.123456789),
+                                                ("C", "M", "t", "buy", 1, 1, None, 31.1)])
+    assert ls.backfill_legacy_source(c) == 1
+    got = dict(c.execute("SELECT signature, source FROM launch_trades"))
+    assert got == {"A": "helius", "B": None, "C": None}
