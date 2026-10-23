@@ -348,6 +348,8 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                           detail="forward sampler (fs_runs)"), "feed:kalshi_crawl", "feed", 300))
     P(_probe(lambda: _rec("feed:near_close", "feed", NEAR_CLOSE_CADENCE_S, _max(j("pm_train.db"), "SELECT MAX(snap_ts) FROM pm_near"),
                           detail="near-close crypto"), "feed:near_close", "feed", NEAR_CLOSE_CADENCE_S))
+    P(_probe(lambda: _rec("agent:fx_spotvol", "agent", 60, _max(j("fx_spotvol.db"), "SELECT MAX(at) FROM fx_runs"),
+                          detail="FX spot-vol pre-registered paper test"), "agent:fx_spotvol", "agent", 60))
     P(_probe(lambda: _rec("feed:kalshi_train", "feed", 3600, _max(j("pm_train.db"), "SELECT MAX(fetched_at) FROM pm_train"),
                           detail="Kalshi history"), "feed:kalshi_train", "feed", 3600))
     P(_probe(lambda: _rec("feed:cross_venue", "feed", 900, _max(main_db, "SELECT MAX(at) FROM xv_gap_history"),
