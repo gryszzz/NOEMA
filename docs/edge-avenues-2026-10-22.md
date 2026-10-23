@@ -17,3 +17,13 @@ kalshi_mm, news_lag), scored prospectively after hire. The roster file lists res
 5. Meta-launch shield pass & liq>=5k (all captured, in-sample): n=130, +22.8%/trade [+8.9%, +38.2%],
    win 55%; dropping top 5 winners +12.8% [+0.3%, +25.9%]; second half alone +12.0% [-8.4%, +33.5%].
    Prospective (after hire) n=5. One day of data, probe-size slippage model: promising, unproven.
+
+**Correction (2026-10-22, late):** treat item 5 as **unproven, likely overstated**. (a) The live paper P&L was
+invalid: positions were marked with the newest observation tick regardless of its age, so 151 of 177 closed
+META positions sat on a frozen price and exited at the time stop at exactly -2.00% (the fee). The remaining 26
+averaged -17.7%. META now refuses to mark on a price older than 10 min (observation tick or live
+`launch_trades` trade, whichever is fresher) and closes still-unpriced positions at max hold with no return.
+(b) The in-sample +22.8% counts only matches that had a price path (145 of 305 shield-pass, liq>=5k matches).
+The other 160 had no price at all and dropped out, and coins that die tend to stop being priced, so the
+average is survivorship-biased upward. The median priced match is +7.1%. No P&L claim stands until the
+prospective, fresh-marked sample is large enough.

@@ -459,8 +459,87 @@ def _proven(life_db: str | None) -> bool:
 
 
 def latest_marks(c: sqlite3.Connection, mints: list[str]) -> dict[str, dict[str, float]]:
+    """Last observation tick per mint, NO age check -> research/backtest only. Never mark live positions with it:
+    the newest tick can be hours old, and a frozen price walks every position to its time stop at exactly -FEE."""
     paths = outcome_paths(c, mints)
     return {m: p[-1] for m, p in paths.items() if p}
+
+
+MARK_MAX_AGE_S = float(os.getenv("NOEMA_META_MARK_MAX_AGE_S", "600"))
+PUMP_SUPPLY_TOKENS = 1e9  # pump.fun fixed supply: price_sol = market_cap_sol / 1e9
+
+
+def _age_s(now: datetime, at: str | None) -> float | None:
+    t = _ts(at)
+    return None if t is None else (now - t).total_seconds()
+
+
+def obs_marks(c: sqlite3.Connection, mints: list[str], now: datetime) -> dict[str, dict[str, Any]]:
+    """Newest observation tick per mint WITH its age (observed_at)."""
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(mints), 500):
+        chunk = mints[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for r in c.execute(f"SELECT mint, observed_at, tick_json FROM trench_observations WHERE mint IN ({q})", chunk):
+            try:
+                t = json.loads(r["tick_json"])
+                p = float(t.get("price_usd") or 0)
+            except (TypeError, ValueError):
+                continue
+            age = _age_s(now, r["observed_at"])
+            if p <= 0 or age is None or age < -60:
+                continue
+            if r["mint"] not in out or age < out[r["mint"]]["age_s"]:
+                out[r["mint"]] = {"price": p, "liq": t.get("liquidity_usd") or 0,
+                                  "vol": (t.get("buy_volume_usd") or 0) + (t.get("sell_volume_usd") or 0),
+                                  "age_s": max(age, 0.0), "src": "obs"}
+    return out
+
+
+def trade_mcap(c: sqlite3.Connection, mint: str, *, before: str | None = None, after: str | None = None
+               ) -> tuple[float, str] | None:
+    """A live pump.fun bonding-curve trade's market_cap_sol (launch_trades, Helius/PumpPortal) and its time."""
+    try:
+        if before is not None:
+            r = c.execute("SELECT market_cap_sol, received_at FROM launch_trades WHERE mint=? AND received_at<=? "
+                          "AND market_cap_sol>0 ORDER BY received_at DESC LIMIT 1", (mint, before)).fetchone()
+        else:
+            r = c.execute("SELECT market_cap_sol, received_at FROM launch_trades WHERE mint=? AND received_at>=? "
+                          "AND market_cap_sol>0 ORDER BY received_at ASC LIMIT 1", (mint, after or "")).fetchone()
+    except sqlite3.Error:  # no launch_trades table (tests / research copies)
+        return None
+    return (float(r[0]), r[1]) if r else None
+
+
+def fresh_mark(c: sqlite3.Connection, mint: str, entry: float | None, anchor: dict[str, Any] | None,
+               obs: dict[str, Any] | None, now: datetime, max_age_s: float = MARK_MAX_AGE_S) -> dict[str, Any] | None:
+    """Freshest of (observation tick, live trade) no older than max_age_s, else None (refuse to mark).
+    Trade marks are relative to an anchor trade mapped onto the USD entry, so SOL/USD never enters the ratio."""
+    best = obs if obs and obs["age_s"] <= max_age_s else None
+    if entry and anchor and anchor.get("mcap"):
+        tm = trade_mcap(c, mint, before=now.isoformat())
+        if tm:
+            age = _age_s(now, tm[1])
+            if age is not None and age <= max_age_s and (best is None or age < best["age_s"]):
+                best = {"price": entry * tm[0] / anchor["mcap"], "liq": None, "vol": None,
+                        "age_s": max(age, 0.0), "src": "launch_trades"}
+    return best
+
+
+def trade_anchor(c: sqlite3.Connection, mint: str, opened_at: str, max_gap_s: float = MARK_MAX_AGE_S
+                 ) -> dict[str, Any] | None:
+    """The live trade closest to the entry (at/before, else first after) within max_gap_s."""
+    opened = _ts(opened_at)
+    if opened is None:
+        return None
+    best = None
+    for tm in (trade_mcap(c, mint, before=opened_at), trade_mcap(c, mint, after=opened_at)):
+        if tm:
+            t = _ts(tm[1])
+            gap = abs((t - opened).total_seconds()) if t else 1e18
+            if gap <= max_gap_s and (best is None or gap < best[1]):
+                best = (tm[0], gap)
+    return {"mcap": best[0]} if best else None
 
 
 def cycle(db: str, meta_db: str, life_db: str | None = None, now: datetime | None = None,
@@ -490,20 +569,33 @@ def cycle(db: str, meta_db: str, life_db: str | None = None, now: datetime | Non
         for m in matches:
             if (m["shield_ok"] and m["rank"] == "first" and m["stage"] != "fading"
                     and m["matched_at"] >= now - timedelta(minutes=10)):
-                mk = latest_marks(src, [m["mint"]]).get(m["mint"])
-                if mk:
+                mk = obs_marks(src, [m["mint"]], now).get(m["mint"])
+                if mk and mk["age_s"] <= MARK_MAX_AGE_S:  # never open on a stale price
                     out.execute("INSERT OR IGNORE INTO meta_positions (mint, meta, opened_at, entry, size_usd, tier,"
                                 " state_json, status) VALUES (?,?,?,?,?,?,?, 'open')",
                                 (m["mint"], m["meta"], iso, mk["price"], size, tier, "{}"))
         # manage open paper positions with adaptive exits; time stop extends only while the meta isn't fading
         live_stage = {m["meta"]: m["stage"] for m in cur}
         opens = out.execute("SELECT * FROM meta_positions WHERE status='open'").fetchall()
-        marks = latest_marks(src, [p["mint"] for p in opens])
+        obs = obs_marks(src, [p["mint"] for p in opens], now)
         for p in opens:
-            mk = marks.get(p["mint"])
-            if not mk:
-                continue
             raw = json.loads(p["state_json"] or "{}")
+            age_h = (now - datetime.fromisoformat(p["opened_at"])).total_seconds() / 3600
+            if not raw.get("anchor"):
+                anchor = trade_anchor(src, p["mint"], p["opened_at"])
+                if anchor:
+                    raw["anchor"] = anchor
+            mk = fresh_mark(src, p["mint"], p["entry"], raw.get("anchor"), obs.get(p["mint"]), now)
+            if not mk:
+                # refuse to mark on a stale price; if nothing fresh arrives by max hold, close UNPRICED
+                raw["stale_cycles"] = raw.get("stale_cycles", 0) + 1
+                if age_h >= META_EXIT["max_hold_h"]:
+                    out.execute("UPDATE meta_positions SET status='closed', closed_at=?, reason=?, realized_ret=NULL,"
+                                " state_json=? WHERE id=?", (iso, "no fresh price (unpriced, excluded from P&L)",
+                                                             json.dumps(raw), p["id"]))
+                else:
+                    out.execute("UPDATE meta_positions SET state_json=? WHERE id=?", (json.dumps(raw), p["id"]))
+                continue
             st = ax.PosState(entry=p["entry"], **{k: v for k, v in raw.items() if k in
                                                   ("remaining", "tp_hit", "peak", "liq_high", "vol_high", "rets",
                                                    "last_price", "extended_h")})
@@ -511,14 +603,15 @@ def cycle(db: str, meta_db: str, life_db: str | None = None, now: datetime | Non
             params = ax.AdaptiveExit.from_genome(META_EXIT)
             if live_stage.get(p["meta"], "fading") == "fading":
                 params.extend_h = 0.0
-            age_h = (now - datetime.fromisoformat(p["opened_at"])).total_seconds() / 3600
             realized = raw.get("realized", 0.0)
             frac, why = ax.decide(st, params, price=mk["price"], age_h=age_h, liquidity=mk.get("liq"),
                                   volume=mk.get("vol"))
             realized += frac * mk["price"] / p["entry"]
             state = {"remaining": st.remaining, "tp_hit": st.tp_hit, "peak": st.peak, "liq_high": st.liq_high,
                      "vol_high": st.vol_high, "rets": st.rets[-20:], "last_price": st.last_price,
-                     "extended_h": st.extended_h, "realized": realized}
+                     "extended_h": st.extended_h, "realized": realized, "anchor": raw.get("anchor"),
+                     "stale_cycles": raw.get("stale_cycles", 0), "mark_src": mk["src"],
+                     "mark_age_s": round(mk["age_s"], 1)}
             if st.remaining <= 1e-9:
                 out.execute("UPDATE meta_positions SET status='closed', closed_at=?, reason=?, realized_ret=?, "
                             "state_json=? WHERE id=?", (iso, why, round(realized - 1 - FEE, 4), json.dumps(state), p["id"]))

@@ -108,3 +108,47 @@ def test_meta_genomes_join_roster(tmp_path):
     kinds = [a["kind"] for a in r["agents"]]
     assert kinds.count("meta_launch") == len(al.META_SEEDS)
     assert all(a["status"] == "shadow" and a["weight"] == 0 for a in r["agents"])
+
+
+def _open_pos(meta, mint, opened):
+    m = ml.connect(meta)
+    m.execute("INSERT INTO meta_positions (mint, meta, opened_at, entry, size_usd, tier, state_json, status)"
+              " VALUES (?, 'kimchi', ?, 1.0, 2.5, 'probe', '{}', 'open')", (mint, opened.isoformat()))
+    m.commit()
+    m.close()
+
+
+def test_stale_tick_never_walks_a_position_to_minus_fee(tmp_path):
+    """Regression: the newest observation tick was hours old, so every position exited flat at -FEE (-2%)."""
+    db, meta = str(tmp_path / "n.db"), str(tmp_path / "meta.db")
+    _db(db)  # all ticks observed at ~T0
+    opened = T0 + timedelta(minutes=50)
+    _open_pos(meta, "m0", opened)
+    ml.cycle(db, meta, now=opened + timedelta(hours=1), backtest_hours=1)  # past the 0.5h time stop
+    m = sqlite3.connect(meta)
+    st, ret = m.execute("SELECT status, realized_ret FROM meta_positions WHERE mint='m0'").fetchone()
+    assert (st, ret) == ("open", None)
+    ml.cycle(db, meta, now=opened + timedelta(hours=6.1), backtest_hours=1)
+    st, ret, why = m.execute("SELECT status, realized_ret, reason FROM meta_positions WHERE mint='m0'").fetchone()
+    assert st == "closed" and ret is None and "no fresh price" in why
+
+
+def test_live_trades_mark_exits(tmp_path):
+    db, meta = str(tmp_path / "n.db"), str(tmp_path / "meta.db")
+    _db(db)
+    opened = T0 + timedelta(minutes=50)
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE launch_trades (signature TEXT PRIMARY KEY, mint TEXT, received_at TEXT, side TEXT,"
+              " sol REAL, tokens REAL, trader TEXT, market_cap_sol REAL, source TEXT)")
+    c.execute("INSERT INTO launch_trades VALUES ('a','m0',?,'buy',1,1,'T',40.0,'helius')",
+              ((opened - timedelta(seconds=5)).isoformat(),))
+    c.execute("INSERT INTO launch_trades VALUES ('b','m0',?,'sell',1,1,'T',20.0,'helius')",
+              ((opened + timedelta(minutes=9)).isoformat(),))
+    c.commit()
+    c.close()
+    _open_pos(meta, "m0", opened)
+    ml.cycle(db, meta, now=opened + timedelta(minutes=10), backtest_hours=1)
+    m = sqlite3.connect(meta)
+    st, ret, sj = m.execute("SELECT status, realized_ret, state_json FROM meta_positions WHERE mint='m0'").fetchone()
+    assert st == "closed" and abs(ret - (0.5 - 1 - ml.FEE)) < 1e-6
+    assert json.loads(sj)["mark_src"] == "launch_trades"
