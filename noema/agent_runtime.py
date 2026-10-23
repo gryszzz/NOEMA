@@ -464,19 +464,20 @@ async def _fresh_launch_loop(db_path: str) -> None:
 
     runner = FreshLaunchRunner(db_path)
     dex = DexScreenerTrenchPriceClient()
-    sol_usd, sol_at = float(os.getenv("NOEMA_SOL_USD_FALLBACK", "150")), -1e9
+    from .sol_price import HEARTBEAT as _SOL_HB
+    from .sol_price import SolPrice
+
+    sol = SolPrice(dex=dex)
     while True:
         started = asyncio.get_running_loop().time()
         try:
-            if started - sol_at > 300:
-                try:
-                    pair = (await dex.tokens_by_mint(["So11111111111111111111111111111111111111112"])).get(
-                        "So11111111111111111111111111111111111111112") or {}
-                    price = float(pair.get("priceUsd") or 0)
-                    if 10 < price < 10_000:
-                        sol_usd, sol_at = price, started
-                except Exception as exc:  # noqa: BLE001 - keep last SOL price
-                    _log("fresh_launch_sol_price_error", error=type(exc).__name__)
+            sol_usd = await sol.get()
+            if sol_usd is None:  # no fresh SOL/USD: skip the tick rather than invent a price
+                from .heartbeats import record_skip as _skip
+                _skip("fresh-launch", [_SOL_HB], "tick")
+                _log("fresh_launch_skip", reason="stale " + _SOL_HB)
+                await asyncio.sleep(runner.cfg.interval_seconds)
+                continue
             stale = _fresh_gate("fresh-launch", ["feed:launch_stream"], "new entries")
             summary = await asyncio.to_thread(runner.tick, sol_usd=sol_usd, stale=stale)
             if summary["entries"] or summary["exits"]:
