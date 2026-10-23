@@ -19,6 +19,11 @@ from .ledger import ForecastLedger
 from .research_trials import ResearchTrialStore
 
 EXPERIMENT_VERSION = "cross-venue-paper-v1"
+# One trial / paper fill / settlement per canonical proposition per time bucket. Every quote
+# snapshot of the same proposition used to register its own trial (29,206 "trials" for 5 real
+# propositions), which inflated n for any significance or size-up read. Raw observations are
+# still appended to the evidence ledger; only the counted unit is deduplicated.
+TRIAL_BUCKET_SECONDS = 3600
 FRESHNESS_THRESHOLD_SECONDS = 5.0
 REQUIRED_RULE_CLAUSES = (
     "resolution_condition", "outcome_definition", "settlement_authority",
@@ -486,6 +491,36 @@ def evaluate_candidate(
     }
 
 
+def trial_bucket_seconds() -> int:
+    import os
+
+    try:
+        return max(60, int(os.getenv("NOEMA_XV_TRIAL_BUCKET_S", TRIAL_BUCKET_SECONDS)))
+    except ValueError:
+        return TRIAL_BUCKET_SECONDS
+
+
+def proposition_bucket(evaluation: dict[str, Any], *, bucket_s: int | None = None,
+                       fallback: str | None = None) -> tuple[str, str]:
+    """``(proposition key, bucket start ISO)`` - the unit counted once across venues/snapshots.
+
+    Key: canonical proposition id, else canonical event id, else the sorted venue:market legs,
+    else ``fallback``. Bucket: the decision time (comparison_at, else observed_at) floored to
+    ``NOEMA_XV_TRIAL_BUCKET_S`` (default 3600 s), in UTC.
+    """
+    bucket_s = bucket_s or trial_bucket_seconds()
+    key = evaluation.get("canonical_proposition_id") or evaluation.get("canonical_event_id")
+    if not key:
+        legs = sorted(f"{str(c.get('venue', '')).casefold()}:{c.get('market_id')}"
+                      for c in evaluation.get("native_contracts") or [] if isinstance(c, dict))
+        key = "|".join(legs) if legs else (fallback or "unknown")
+    at = _parse_time(evaluation.get("comparison_at")) or _parse_time(evaluation.get("observed_at"))
+    if at is None:
+        return str(key), "unknown"
+    floored = int(at.timestamp()) // bucket_s * bucket_s
+    return str(key), datetime.fromtimestamp(floored, UTC).isoformat()
+
+
 def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     """Append source evidence and register the exact evaluation in existing ledgers."""
     observation = {**candidate, "experiment_evaluation": result}
@@ -506,11 +541,21 @@ def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, A
     finally:
         ledger.conn.close()
 
+    proposition_key, time_bucket = proposition_bucket(result, fallback=evidence_hash)
     params = {"experiment": "cross_venue_contract_discrepancy", "version": EXPERIMENT_VERSION,
               "variant_id": "one_contract_taker_pair_v1",
-              "candidate_observation_hash": evidence_hash}
+              "proposition_key": proposition_key, "time_bucket": time_bucket,
+              "bucket_seconds": trial_bucket_seconds()}
     trials = ResearchTrialStore(path)
     try:
+        candidate_trial_id = trials.make_trial_id(
+            family="prediction_markets_cross_venue_paper",
+            hypothesis="A prospective apparent cross-venue discrepancy survives proven contract equivalence, fresh quotes, fees, depth, and paired paper execution.",
+            params=params, feature_set_version=EXPERIMENT_VERSION,
+        )
+        first_in_bucket = trials.conn.execute(
+            "SELECT 1 FROM research_trials WHERE trial_id=?", (candidate_trial_id,)
+        ).fetchone() is None
         trial_id = trials.register(
             family="prediction_markets_cross_venue_paper",
             hypothesis="A prospective apparent cross-venue discrepancy survives proven contract equivalence, fresh quotes, fees, depth, and paired paper execution.",
@@ -521,7 +566,7 @@ def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, A
     finally:
         trials.conn.close()
 
-    if inserted and isinstance(result.get("paper_simulation", {}).get("paired_fill"), dict):
+    if inserted and first_in_bucket and isinstance(result.get("paper_simulation", {}).get("paired_fill"), dict):
         from decimal import InvalidOperation
 
         from .economic_ledger import EconomicEvent, EconomicLedger
@@ -583,7 +628,8 @@ def persist_evaluation(path: str, candidate: dict[str, Any], result: dict[str, A
         conn.close()
     return {"persistence_status": "recorded" if inserted else "already_recorded",
             "trial_id": trial_id, "run_id": None if run is None else run[0],
-            "evidence_hash": evidence_hash}
+            "evidence_hash": evidence_hash, "dedupe_key": [proposition_key, time_bucket],
+            "first_in_bucket": first_in_bucket}
 
 
 def recent_evaluations(path: str, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -713,6 +759,8 @@ def mature_paper_pairs(
         )
         existing: set[str] = set()
         existing_statuses: dict[str, str] = {}
+        counted_keys: set[tuple[str, ...]] = set()
+        duplicates = 0
         for (payload,) in state_conn.execute(
             "SELECT payload_json FROM economic_events WHERE event_type='paper_cross_venue_settlement'"
         ):
@@ -722,6 +770,8 @@ def mature_paper_pairs(
                     digest = str(item["evidence_hash"])
                     existing.add(digest)
                     existing_statuses[digest] = str(item.get("status", "unknown"))
+                    if item.get("dedupe_key"):
+                        counted_keys.add(tuple(item["dedupe_key"]))
             except (ValueError, TypeError, AttributeError):
                 continue
         settled_rows: list[dict[str, Any]] = []
@@ -735,6 +785,11 @@ def mature_paper_pairs(
                 evaluation = observation.get("experiment_evaluation", {})
                 if evaluation.get("paper_simulation", {}).get("status") != "paper_fill_simulated":
                     continue
+                dedupe_key = proposition_bucket(evaluation, fallback=str(digest))
+                if dedupe_key in counted_keys:
+                    duplicates += 1  # same proposition, same bucket: already counted once
+                    continue
+                counted_keys.add(dedupe_key)
                 paper_fill_count += 1
                 run_row = None
                 if "autonomous_research_runs" in state_tables:
@@ -865,6 +920,7 @@ def mature_paper_pairs(
                             for name, row in settled.items()},
                     }
                 result["observed_at"] = evaluation.get("comparison_at")
+                result["dedupe_key"] = list(dedupe_key)
                 settled_rows.append(result)
             except (ValueError, TypeError, KeyError, InvalidOperation, ArithmeticError, AttributeError):
                 continue
@@ -907,6 +963,8 @@ def mature_paper_pairs(
             "paper_fill_count": len(existing) + paper_fill_count,
             "live_trade_count": 0,
             "capacity": "unknown",
+            "duplicates_skipped": duplicates,
+            "dedupe_unit": f"canonical proposition x {trial_bucket_seconds()}s bucket",
             "pending": pending, "walk_forward": walk_forward}
 
 

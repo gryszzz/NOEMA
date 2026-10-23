@@ -453,3 +453,70 @@ def test_contradictory_venue_settlements_are_recorded_as_rule_divergence(tmp_pat
     assert maturity["rule_divergences"] == 1
     assert payload["status"] == "settlement_rule_divergence"
     assert "realized_net_if_paper_usd" not in payload
+
+
+def _hour_start() -> datetime:
+    now = datetime.now(UTC) - timedelta(hours=3)
+    return now.replace(minute=5, second=0, microsecond=0)
+
+
+def test_repeated_snapshots_of_one_proposition_count_once_per_bucket(tmp_path):
+    from noema.cross_venue_experiment import proposition_bucket
+
+    path = str(tmp_path / "dedupe.db")
+    base = _hour_start()
+    outcomes = []
+    for index in range(5):  # five quote snapshots of the same proposition inside one hour
+        decision_at = base + timedelta(minutes=index * 7)
+        candidate = _candidate(decision_at)
+        result = evaluate_candidate(candidate, now=decision_at)
+        outcomes.append(persist_evaluation(path, candidate, result))
+    later = base + timedelta(hours=2)
+    candidate = _candidate(later)
+    outcomes.append(persist_evaluation(path, candidate, evaluate_candidate(candidate, now=later)))
+
+    assert len({o["evidence_hash"] for o in outcomes}) == 6
+    assert [o["first_in_bucket"] for o in outcomes] == [True, False, False, False, False, True]
+    assert proposition_bucket(evaluate_candidate(_candidate(base), now=base))[0] == "fixture:event:1:yes"
+    conn = sqlite3.connect(path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM canonical_pair_observations").fetchone()[0] == 6
+        assert conn.execute("SELECT COUNT(*) FROM research_trials").fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT COUNT(*) FROM economic_events WHERE event_type='paper_result'"
+        ).fetchone()[0] == 2
+        params = [json.loads(r[0]) for r in conn.execute("SELECT params_json FROM research_trials")]
+        assert all("candidate_observation_hash" not in p for p in params)
+        assert {p["proposition_key"] for p in params} == {"fixture:event:1:yes"}
+    finally:
+        conn.close()
+
+
+def test_maturation_settles_one_pair_per_proposition_bucket(tmp_path):
+    path = str(tmp_path / "dedupe-mature.db")
+    base = _hour_start()
+    for index in range(3):
+        decision_at = base + timedelta(minutes=index * 5)
+        candidate = _candidate(decision_at)
+        persist_evaluation(path, candidate, evaluate_candidate(candidate, now=decision_at))
+    store = OutcomeStore(path)
+    resolved = (base + timedelta(minutes=30)).isoformat()
+    seen = base + timedelta(minutes=31)
+    store.upsert(venue="kalshi", market_id="K-FIXTURE", outcome_yes=1, resolved_at=resolved,
+                 raw={"result": "yes", "settlement_ts": resolved, "finality": "official_kalshi_settlement"},
+                 source="kalshi_official_market_api", canonical_proposition_id="fixture:event:1:yes", seen_at=seen)
+    store.upsert(venue="polymarket-us", market_id="P-FIXTURE", outcome_yes=1, resolved_at=None,
+                 raw={"finality": "official_closed_market_and_settlement_endpoint", "market": {"closed": True},
+                      "settlement": {"slug": "P-FIXTURE", "settlement": 1}, "venue_resolved_at_available": False},
+                 source="polymarket_us_official_settlement_endpoint",
+                 canonical_proposition_id="fixture:event:1:yes", seen_at=seen)
+    store.conn.close()
+
+    audit = mature_paper_pairs(path, now=base + timedelta(minutes=40))
+    again = mature_paper_pairs(path, now=base + timedelta(minutes=41))
+
+    assert audit["matured"] == 1
+    assert audit["duplicates_skipped"] == 2
+    assert audit["paper_fill_count"] == 1
+    assert again["matured"] == 0
+    assert again["paper_fill_count"] == 1

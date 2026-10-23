@@ -391,7 +391,26 @@ def gap_stats(conn: sqlite3.Connection, *, buffer: float | None = None) -> dict[
             "hit_rate": round(len(hits) / len(rows), 5) if rows else None,
             "positive_after_fees": sum(e > 0 for e in edges),
             "median_edge": edges[len(edges) // 2] if edges else None, "max_edge": edges[-1] if edges else None,
-            "mean_edge_when_clearing": round(sum(r[3] for r in hits) / len(hits), 4) if hits else None}
+            "mean_edge_when_clearing": round(sum(r[3] for r in hits) / len(hits), 4) if hits else None,
+            **_bucketed_gap_stats(rows, buffer)}
+
+
+def _bucketed_gap_stats(rows: list[Any], buffer: float, bucket_s: int | None = None) -> dict[str, Any]:
+    """Independent samples: one per (pair, time bucket). Consecutive runs re-quote the same pair, so
+    pair_observations / observations_clearing overstate n; use these for any rate or significance read."""
+    from .cross_venue_experiment import _parse_time, trial_bucket_seconds
+
+    bucket_s = bucket_s or trial_bucket_seconds()
+    best: dict[tuple[str, str, int], float] = {}
+    for at, pm_market, kalshi_market, edge in rows:
+        parsed = _parse_time(at)
+        bucket = int(parsed.timestamp()) // bucket_s if parsed else -1
+        key = (pm_market, kalshi_market, bucket)
+        best[key] = max(best.get(key, edge), edge)
+    hits = [k for k, e in best.items() if e >= buffer]
+    return {"dedupe_bucket_s": bucket_s, "independent_observations": len(best),
+            "independent_clearing": len(hits),
+            "independent_hit_rate": round(len(hits) / len(best), 5) if best else None}
 
 
 def main() -> None:  # pragma: no cover
