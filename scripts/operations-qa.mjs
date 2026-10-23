@@ -235,6 +235,13 @@ try {
   window.EventSource = class extends NativeEventSource {
    constructor(url, options) { super(url, options); if(String(url).includes('runtime-stream')) window.qaRuntimeStream = this; }
   };
+  // Record every brief-delta value so the check below does not race later supplemental
+  // refreshes (provider/source updates) that legitimately replace the badge text.
+  window.qaBriefDeltas = [];
+  document.addEventListener('DOMContentLoaded', () => {
+   const badge = document.getElementById('brief-delta');
+   if (badge) new MutationObserver(() => window.qaBriefDeltas.push(badge.textContent)).observe(badge, {childList:true, characterData:true, subtree:true});
+  });
  });
  let releaseProvider;
  const providerWait = new Promise(resolve=>{releaseProvider=resolve;});
@@ -261,10 +268,12 @@ try {
  await streamPage.waitForFunction(()=>document.getElementById('display-status').textContent.includes('updates waiting'));
  assert.equal(await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).count(),0,'an in-flight response cannot change a paused view');
  delayOperating=false;
+ await streamPage.evaluate(()=>{window.qaBriefDeltas.length=0;});
  await streamPage.locator('#pause-updates').click();
  await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).waitFor();
- await streamPage.waitForFunction(()=>document.getElementById('brief-delta').textContent==='+1 new',null,{timeout:15000});
- assert.equal(await streamPage.locator('#brief-delta').innerText(),'+1 new');
+ // The update that delivered the fixture row must have announced exactly one new event.
+ await streamPage.waitForFunction(()=>window.qaBriefDeltas.includes('+1 new'),null,{timeout:15000})
+  .catch(async error=>{error.message+=` brief-delta history: ${JSON.stringify(await streamPage.evaluate(()=>window.qaBriefDeltas))}`;throw error;});
  await streamPage.locator(`[data-event-key="mission:${fixtureMissionId}"]`).click();
  assert.equal(await streamPage.locator('#selection-reader-text').innerText(),'<img src=x onerror=alert(1)> Full recorded update');
  assert.equal(await streamPage.locator('#selection-reader img').count(),0,'event text cannot create HTML');
