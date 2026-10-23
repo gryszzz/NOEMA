@@ -1,0 +1,36 @@
+name: TEV macOS app
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/macos/**", "noema/static/brand/tev/**", ".github/workflows/macos-app.yml"]
+  pull_request:
+    paths: ["apps/macos/**", "noema/static/brand/tev/**", ".github/workflows/macos-app.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-tev-app:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build native TEV.app (swiftc + ad-hoc sign)
+        run: bash apps/macos/build.sh "$RUNNER_TEMP/TEV-mac.zip"
+      - name: Check bundle
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP" && rm -rf chk && mkdir chk && ditto -x -k TEV-mac.zip chk
+          file chk/TEV.app/Contents/MacOS/TEV
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' chk/TEV.app/Contents/Info.plist)" = com.gryszzz.noema.tev
+          grep -q YOUR-TAILNET chk/TEV.app/Contents/Resources/tev-url.txt
+          codesign --verify --strict chk/TEV.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: TEV-mac
+          path: ${{ runner.temp }}/TEV-mac.zip
+          retention-days: 30
