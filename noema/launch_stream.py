@@ -28,6 +28,7 @@ PROGRAMS = {"pump.fun": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
             "raydium_launchlab": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"}
 CREATE_MARKERS = ("Instruction: Create", "Instruction: InitializeV2", "Instruction: Initialize")
 TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "180"))
+ALIVE_S = float(os.getenv("NOEMA_STREAM_ALIVE_S", "30"))  # log heartbeat cadence (agent:launch_stream is 60s)
 COMMIT_S = float(os.getenv("NOEMA_STREAM_COMMIT_S", "0.5"))  # short write txns: noema.db has many writers
 MAX_FOLLOW = int(os.getenv("NOEMA_STREAM_MAX_FOLLOW", "150"))
 # PumpPortal per-token trades are METERED (0.01 SOL / 10k msgs, key wallet must hold >= 0.02 SOL). Off by default:
@@ -120,10 +121,14 @@ async def committer(c: sqlite3.Connection, stop: asyncio.Event, every: float | N
     connection's write txn open for the full 60 s recv timeout (and longer across reconnect backoff),
     holding the noema.db write lock against every other writer."""
     every = COMMIT_S if every is None else every
+    last_alive = time.monotonic()
     while not stop.is_set():
         await asyncio.sleep(every)
         if c.in_transaction:
             safe_commit(c)
+        if time.monotonic() - last_alive >= ALIVE_S:     # agent:launch_stream heartbeat = log mtime;
+            last_alive = time.monotonic()                # a healthy-but-quiet stream used to read red
+            print(_now(), "alive", flush=True)
 
 
 def reload_watch(path: str = "data/smart_wallets.db") -> int:
