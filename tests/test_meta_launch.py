@@ -152,3 +152,21 @@ def test_live_trades_mark_exits(tmp_path):
     st, ret, sj = m.execute("SELECT status, realized_ret, state_json FROM meta_positions WHERE mint='m0'").fetchone()
     assert st == "closed" and abs(ret - (0.5 - 1 - ml.FEE)) < 1e-6
     assert json.loads(sj)["mark_src"] == "launch_trades"
+
+
+@pytest.mark.parametrize("flag, opened", [("1", 0), (None, 0), ("0", 1)])
+def test_retired_flag_blocks_new_paper_entries(tmp_path, monkeypatch, flag, opened):
+    """META is retired: by default the loop still scores metas/matches but opens no new paper positions."""
+    if flag is None:
+        monkeypatch.delenv("NOEMA_META_RETIRED", raising=False)
+    else:
+        monkeypatch.setenv("NOEMA_META_RETIRED", flag)
+    db, meta = str(tmp_path / "n.db"), str(tmp_path / "meta.db")
+    _db(db)
+    for mins in range(10, 60, 2):
+        ml.cycle(db, meta, now=T0 + timedelta(minutes=mins), backtest_hours=1)
+    m = sqlite3.connect(meta)
+    assert m.execute("SELECT COUNT(*) FROM meta_matches").fetchone()[0] > 0
+    assert m.execute("SELECT COUNT(*) FROM meta_positions").fetchone()[0] == opened
+    m.close()
+    assert ml.board(meta)["retired"] is (flag != "0")

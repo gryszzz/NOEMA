@@ -224,20 +224,52 @@ def meta_score(m: dict[str, Any], hit_rate: float | None) -> float:
 
 # ------------------------------------------------------------------ shield
 _SMART: dict[str, Any] = {}
+SMART_TTL_S = 600
 
 
-def _smart_feats(mint: str) -> dict[str, float]:
-    """Vetted smart-wallet buys of this mint (vetting as of the previous hour; no look-ahead). Zeros if unavailable."""
+def _vetted_wallets() -> frozenset[str]:
+    """Vetted wallets from the smart_wallets loop's last cycle (watch_wallets, why='vetted'), cached 10 min.
+
+    Previously this rebuilt every position from the full trade history in-process (~2.2 GB RSS); the smart_wallets
+    loop already publishes the vetted set, so only that small set is cached here."""
+    now = time.time()
+    if now - _SMART.get("at", 0) > SMART_TTL_S:
+        from .smart_wallets import load_watch
+        w = load_watch(os.getenv("NOEMA_SMART_DB", "data/smart_wallets.db"))
+        _SMART.update(at=now, vet=frozenset(k for k, why in w.items() if why == "vetted"))
+    return _SMART["vet"]
+
+
+def _smart_feats(mint: str, c: sqlite3.Connection | None = None, asof: datetime | None = None) -> dict[str, float]:
+    """Vetted smart-wallet buys of this mint before `asof` (first buy per wallet). Zeros if unavailable.
+
+    Per-mint indexed query on launch_trades (mint, received_at) - never loads the full trade table."""
     try:
-        from .smart_wallets import build_positions, load_trades, smart_features, wallet_stats
-        now = time.time()
-        if now - _SMART.get("at", 0) > 600:
-            tr, meta = load_trades(os.getenv("NOEMA_DB_PATH", "data/noema.db"), os.getenv("NOEMA_SMART_DB", "data/smart_wallets.db"))
-            pos = build_positions(tr, meta)
-            _SMART.update(at=now, pos=pos, vet=wallet_stats(pos, (now // 3600) * 3600))
-        return smart_features(_SMART["pos"], mint, now, _SMART["vet"])
+        vet = _vetted_wallets()
+        if not vet:
+            return {"smart_buyers": 0.0, "smart_buy_sol": 0.0}
+        own = c is None
+        if own:
+            c = _ro(os.getenv("NOEMA_DB_PATH", "data/noema.db"))
+        try:
+            until = (asof or datetime.now(UTC)).isoformat()
+            first: dict[str, float] = {}
+            for w, sol in c.execute("SELECT trader, sol FROM launch_trades WHERE mint=? AND received_at<? "
+                                    "AND side='buy' AND trader IS NOT NULL ORDER BY received_at", (mint, until)):
+                if w in vet and w not in first:
+                    first[w] = float(sol or 0)
+        finally:
+            if own:
+                c.close()
+        return {"smart_buyers": float(len(first)), "smart_buy_sol": round(sum(first.values()), 4)}
     except Exception:  # noqa: BLE001
         return {"smart_buyers": 0.0, "smart_buy_sol": 0.0}
+
+
+def retired() -> bool:
+    """META strategy retired (default): keep scoring metas/matches for the record, but open NO new paper positions.
+    Existing open positions are still managed to exit. Set NOEMA_META_RETIRED=0 to re-enable entries."""
+    return os.getenv("NOEMA_META_RETIRED", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def shield(launch: dict[str, Any], ca: dict[str, tuple[int, int, float]], warn: dict[str, list[str]]
@@ -364,7 +396,7 @@ def replay(c: sqlite3.Connection, since: datetime, until: datetime, *, step_min:
                      "top_holders": float(a.get("topHoldersPercentage") or 0),
                      "liquidity_usd": float(la["d"].get("liquidity") or 0),
                      "hit_rate": m["hit_rate"] if m["hit_rate"] is not None else -1.0}
-            feats.update(_smart_feats(la["mint"]))
+            feats.update(_smart_feats(la["mint"], c, now))
             rec = {"mint": la["mint"], "meta": m["meta"], "matched_at": now, "launched_at": la["at"],
                    "name": la["name"], "symbol": la["symbol"], "rank": rank, "sim": sim, "x_ca": cam,
                    "shield_ok": ok, "shield": why, "features": feats, "stage": m["stage"]}
@@ -566,7 +598,7 @@ def cycle(db: str, meta_db: str, life_db: str | None = None, now: datetime | Non
         # paper entries: only fresh (matched in the last step), shield-pass, first-per-meta, meta not fading
         size = round(0.03 * BANKROLL, 2) if _proven(life_db) else PROBE_USD
         tier = "proven" if size > PROBE_USD else "probe"
-        for m in matches:
+        for m in ([] if retired() else matches):  # retired: no new entries, open ones are still managed below
             if (m["shield_ok"] and m["rank"] == "first" and m["stage"] != "fading"
                     and m["matched_at"] >= now - timedelta(minutes=10)):
                 mk = obs_marks(src, [m["mint"]], now).get(m["mint"])
@@ -633,7 +665,7 @@ SHIELD_GAPS = ["wallet-level bundle/sniper detection (we only see holder counts,
 
 
 def board(meta_db: str) -> dict[str, Any]:
-    out: dict[str, Any] = {"schema": "tev.metas.v1", "mode": "paper only", "metas": [], "matches": [],
+    out: dict[str, Any] = {"schema": "tev.metas.v1", "mode": "paper only", "retired": retired(), "metas": [], "matches": [],
                            "rejections": [], "positions": [], "walk_forward": None, "shield_gaps": SHIELD_GAPS}
     if not os.path.isfile(meta_db):
         return out
