@@ -170,3 +170,43 @@ def test_backfill_legacy_null_source(tmp_path):
     assert ls.backfill_legacy_source(c) == 1
     got = dict(c.execute("SELECT signature, source FROM launch_trades"))
     assert got == {"A": "helius", "B": None, "C": None}
+
+
+def test_queued_writer_never_blocks_and_survives_busy(tmp_path):
+    import sqlite3
+    import time as _t
+
+    db = str(tmp_path / "w.db")
+    ls.connect(db).close()
+    hog = sqlite3.connect(db, timeout=0)
+    hog.execute("BEGIN IMMEDIATE")  # another process holds the write lock
+    w = ls.QueuedWriter(db, every=0.01).start()
+    t0 = _t.monotonic()
+    for i in range(200):
+        ls.insert_trade(w, f"s{i}", "M", "buy", 1.0, 1.0, "T", 30.0, "helius", 123 + i)
+    assert _t.monotonic() - t0 < 0.5  # enqueue only: the event loop never waits on the lock
+    _t.sleep(0.3)
+    hog.rollback()
+    hog.close()
+    deadline = _t.monotonic() + 40
+    while w.written < 400 and _t.monotonic() < deadline:
+        _t.sleep(0.05)
+    w.close()
+    c = sqlite3.connect(db)
+    assert c.execute("SELECT COUNT(*), MIN(slot), MAX(slot) FROM launch_trades").fetchone() == (200, 123, 322)
+    assert w.dropped == 0
+
+
+def test_writer_runs_prune_on_its_thread(tmp_path):
+    db = str(tmp_path / "p.db")
+    ls.connect(db).close()
+    w = ls.QueuedWriter(db, every=0.01).start()
+    w.execute("INSERT INTO launch_trades (signature, mint, received_at) VALUES ('old','M','2000-01-01T00:00:00+00:00')")
+    assert w.submit(ls.prune_sync).result(timeout=10) == 1
+    w.close()
+
+
+def test_rpc_trade_carries_slot_and_follow_window_is_long(tmp_path):
+    assert ls.TRADE_FOLLOW_S >= 600
+    c = ls.connect(str(tmp_path / "s.db"))
+    assert "slot" in {r[1] for r in c.execute("PRAGMA table_info(launch_trades)")}
