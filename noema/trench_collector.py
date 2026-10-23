@@ -767,6 +767,41 @@ def update_trench_research_from_observations(
         research.conn.close()
 
 
+def recompute_counterfactuals(db_path: str, mints: list[str] | None = None) -> dict[str, int]:
+    """Data repair: drop and re-derive counterfactual labels with the tradeable-price rule (one short txn per mint)."""
+    collector = TrenchCollectorStore(db_path)
+    research = TrenchResearchStore(db_path)
+    done = labels = 0
+    try:
+        if mints is None:
+            mints = [r[0] for r in research.conn.execute("SELECT DISTINCT token_mint FROM trench_candidates")]
+        for mint in mints:
+            research.conn.execute("DELETE FROM trench_counterfactuals WHERE candidate_id IN "
+                                  "(SELECT candidate_id FROM trench_candidates WHERE token_mint=?)", (mint,))
+            research.conn.commit()
+            labels += _update_trench_research_with_stores(collector, research, mint=mint)[1]
+            research.conn.commit()
+            done += 1
+    finally:
+        collector.close()
+        research.conn.close()
+    return {"mints": done, "labels": labels}
+
+
+CF_MIN_LIQ_USD = float(os.getenv("NOEMA_TRENCH_CF_MIN_LIQ_USD", "100"))
+FALLBACK_MIN_LIQ_USD = float(os.getenv("NOEMA_TRENCH_FALLBACK_MIN_LIQ_USD", "100"))
+
+
+def tradeable_path_price(price: float, liquidity: float | None, last_accepted: float,
+                         min_liq: float = CF_MIN_LIQ_USD) -> float:
+    """A price quoted on a pool with ~no liquidity cannot be sold into: it may count a loss, never a gain.
+    (One $0.02-liquidity DexScreener quote turned a dead coin into +20,865,000% and dragged the stored
+    15m mean counterfactual to +24.8.)"""
+    if liquidity is None or liquidity < min_liq:
+        return min(price, last_accepted)
+    return price
+
+
 def _update_trench_research_with_stores(
     collector: TrenchCollectorStore,
     research: TrenchResearchStore,
@@ -800,18 +835,26 @@ def _update_trench_research_with_stores(
         return assessments, counterfactuals
 
     candidate_id, captured_at, reference_price = candidate
+    ref_liq = research.conn.execute(
+        "SELECT reference_liquidity_usd FROM trench_candidates WHERE candidate_id=?", (candidate_id,)).fetchone()
+    if ref_liq is not None and (ref_liq[0] or 0) < CF_MIN_LIQ_USD:
+        return assessments, counterfactuals  # no tradeable entry -> no counterfactual return
     later = [
         (horizon, tick)
         for horizon, tick, _ in collector.observations(mint)
         if horizon > ASSESSMENT_HORIZON and tick.observed_at >= captured_at
     ]
     path_prices = [reference_price]
+    last_accepted = reference_price
     for horizon, tick in later:
-        path_prices.append(tick.price_usd)
+        price = tradeable_path_price(tick.price_usd, tick.liquidity_usd, last_accepted)
+        if price == tick.price_usd and (tick.liquidity_usd or 0) >= CF_MIN_LIQ_USD:
+            last_accepted = price
+        path_prices.append(price)
         if research.has_counterfactual(candidate_id, horizon):
             continue
         final_return = (
-            (tick.price_usd - reference_price) / reference_price
+            (price - reference_price) / reference_price
             if reference_price > 0
             else 0.0
         )
@@ -983,6 +1026,9 @@ async def _collect_trench_cycle(
         fallback_liquidity_data = fallback_pair.get("liquidity") if fallback_pair else None
         fallback_liquidity = (_positive_market_value(fallback_liquidity_data.get("usd"))
                               if isinstance(fallback_liquidity_data, dict) else None)
+        if (fallback_price is not None and fallback_liquidity is not None
+                and fallback_liquidity < FALLBACK_MIN_LIQ_USD):
+            fallback_price = None  # a quote on a ~$0 pool is not a price (cf. +20,865,000% counterfactual)
         if jupiter_price is None and fallback_price is not None:
             token["usdPrice"] = fallback_price
         if jupiter_liquidity is None and fallback_liquidity is not None:
