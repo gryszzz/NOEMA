@@ -21,11 +21,12 @@ def test_pumpportal_create_and_trade(tmp_path):
     assert not ok and "stream-only" in bad[0]
 
 
-def test_rpc_url_never_needs_key(monkeypatch):
+def test_rpc_url_is_free_first(monkeypatch):
     monkeypatch.delenv("HELIUS_API_KEY", raising=False)
-    assert "helius" not in ls.rpc_ws_url()
+    assert "helius" not in ls.rpc_ws_url() and ls.helius_ws_url() is None and ls.helius_http_url() is None
     monkeypatch.setenv("HELIUS_API_KEY", "x")
-    assert ls.rpc_ws_url().startswith("wss://mainnet.helius-rpc.com/")
+    assert "helius" not in ls.rpc_ws_url()  # a key no longer moves the firehose onto Helius
+    assert ls.helius_ws_url().startswith("wss://mainnet.helius-rpc.com/")
 
 
 def test_pmus_yes_price():
@@ -210,3 +211,117 @@ def test_rpc_trade_carries_slot_and_follow_window_is_long(tmp_path):
     assert ls.TRADE_FOLLOW_S >= 600
     c = ls.connect(str(tmp_path / "s.db"))
     assert "slot" in {r[1] for r in c.execute("PRAGMA table_info(launch_trades)")}
+
+
+def test_budget_caps_helius_and_resets_daily(monkeypatch):
+    day = ["2026-10-22"]
+    b = ls.Budget(day_fn=lambda: day[0])
+    monkeypatch.setattr(ls, "HELIUS_CREDITS_DAY", 100.0)
+    assert ls.helius_credits(100_000) == 2 and ls.helius_credits(0, 5) == 5
+    b.add("helius", 4_900_000)  # 98 credits
+    assert b.helius_ok()
+    b.add("helius", http=2, msgs=0)
+    assert not b.helius_ok()
+    day[0] = "2026-10-23"
+    assert b.helius_ok() and b.credits() == 0
+
+
+def test_usage_survives_restart(tmp_path, monkeypatch):
+    db = str(tmp_path / "n.db")
+    ls.connect(db).close()
+    monkeypatch.setattr(ls, "HELIUS_CREDITS_DAY", 100.0)
+    tr = ls.Transport(ls.Budget())
+    tr.budget.add("helius", 6_000_000)  # 120 credits -> over the cap
+    tr.budget.add("free", 1234)
+    c = sqlite3.connect(db)
+    assert ls.save_usage(tr)(c) == 2
+    c.close()
+    tr2 = ls.Transport(ls.Budget())  # "restart"
+    ls.load_usage(db, tr2)
+    assert tr2.budget.credits() == 120 and not tr2.budget.helius_ok()
+    assert tr2.budget._get("free")["bytes"] == 1234
+    s = ls.write_status(ls.status_path(db), tr2)
+    assert s["helius"]["credits"] == 120 and "api-key" not in __import__("pathlib").Path(ls.status_path(db)).read_text()
+
+
+def test_helius_only_after_free_failures_and_under_cap(monkeypatch):
+    monkeypatch.setenv("HELIUS_API_KEY", "x")
+    monkeypatch.setattr(ls, "FREE_WS", ["wss://a", "wss://b"])
+    monkeypatch.setattr(ls, "HELIUS_CREDITS_DAY", 10.0)
+    tr = ls.Transport(ls.Budget())
+    assert not tr.use_helius()
+    tr.free_fail = 3
+    assert not tr.use_helius()
+    tr.free_fail = 4
+    assert tr.use_helius()
+    tr.budget.add("helius", 500_000)  # 10 credits = cap
+    assert not tr.use_helius()
+    monkeypatch.delenv("HELIUS_API_KEY")
+    tr.budget = ls.Budget()
+    assert not tr.use_helius()
+
+
+def test_get_tx_free_first_then_capped_helius(monkeypatch):
+    monkeypatch.setenv("HELIUS_API_KEY", "x")
+    monkeypatch.setattr(ls, "FREE_HTTP", ["https://free1", "https://free2"])
+    monkeypatch.setattr(ls, "HELIUS_CREDITS_DAY", 1.0)
+    calls = []
+
+    def post(url, body):
+        calls.append(url)
+        if "helius" in url:
+            return {"ok": "helius"}
+        raise OSError("429")
+    monkeypatch.setattr(ls, "_post", post)
+    tr = ls.Transport(ls.Budget())
+    assert ls._get_tx("S", tr) == {"ok": "helius"}
+    assert [u.split("/")[2] for u in calls] == ["free1", "free2", "mainnet.helius-rpc.com"]
+    assert tr.budget.credits() == 1 and tr.budget._get("free")["http"] == 2
+    try:  # cap reached: Helius is not called again, the free error surfaces
+        ls._get_tx("S2", tr)
+        raise AssertionError("expected the free-node error")
+    except OSError:
+        pass
+    assert sum("helius" in u for u in calls) == 1
+    monkeypatch.setattr(ls, "_post", lambda url, body: {"ok": url})
+    assert ls._get_tx("S3", tr) == {"ok": "https://free1"}
+
+
+def test_run_rpc_falls_back_to_helius_then_auto_stops(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("HELIUS_API_KEY", "x")
+    monkeypatch.setattr(ls, "FREE_WS", ["wss://free"])
+    monkeypatch.setattr(ls, "HELIUS_CREDITS_DAY", 4.0)
+    seen = []
+
+    async def fake_session(url, src, c, stop, llq=None, tr=None, until=None):
+        seen.append(src)
+        if len(seen) >= 8:
+            stop.set()
+        if src == "free":
+            raise OSError("down")
+        tr.budget.add("helius", 250_000)  # 5 credits > cap
+        tr.stopped = "helius daily budget reached"
+
+    async def nosleep(_s):
+        return None
+    monkeypatch.setattr(ls, "rpc_session", fake_session)
+    monkeypatch.setattr(ls.asyncio, "sleep", nosleep)
+
+    class W:
+        def commit(self):
+            pass
+    tr = ls.Transport(ls.Budget())
+    asyncio.run(ls.run_rpc(W(), asyncio.Event(), None, tr))
+    assert seen[:3] == ["free", "free", "helius"]  # 2 x len(FREE_WS) free failures, then one Helius session
+    assert seen.count("helius") == 1 and tr.stopped  # capped: never back on Helius today
+
+
+def test_heartbeat_shows_transport(tmp_path):
+    from noema import heartbeats as hb
+    db = str(tmp_path / "noema.db")
+    assert hb._launch_transport(db) == ""
+    tr = ls.Transport(ls.Budget())
+    tr.mode = "free"
+    ls.write_status(ls.status_path(db), tr)
+    assert "free public node" in hb._launch_transport(db)
