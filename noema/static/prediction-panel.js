@@ -12,33 +12,49 @@ function mount(){if(document.getElementById("pb-panel"))return document.getEleme
  const body=el("div","body");body.id="pb-body";body.append(el("div","empty","waiting for /api/prediction-bot…"));sec.append(h,body);
  const anchor=document.getElementById("v7-pmc"),right=document.querySelector(".right");
  if(anchor&&anchor.parentNode)anchor.after(sec);else if(right)right.append(sec);else document.body.append(sec);return sec}
-function pickRow(p){const tr=el("tr");
+const STAKE_RE=/stake \$([0-9,.]+)/i;
+function stakeOf(p){if(typeof p.stake_usd==="number"&&isFinite(p.stake_usd))return p.stake_usd;
+ const m=STAKE_RE.exec(String(p.note||""));if(!m)return null;const v=parseFloat(m[1].replace(/,/g,""));return isFinite(v)?v:null}
+function usd(v){return v==null?"—":"$"+(v>=100?Math.round(v):v.toFixed(2))}
+function ts(s){const t=Date.parse(s||"");return isFinite(t)?t:0}
+/* Flatten every post's picks and keep only the latest version of each venue + market + side. */
+function latestPicks(posts){const best=new Map();
+ for(const post of posts||[])for(const pk of post.picks||[]){const at=ts(post.posted_at);
+  const key=[pk.venue,String(pk.market_id||pk.market||"").trim().toLowerCase(),pk.side].join("|");
+  const cur=best.get(key);if(!cur||at>cur.at||(at===cur.at&&String(post.id)>String(cur.id)))best.set(key,{at,id:post.id,pk})}
+ return [...best.values()].sort((a,b)=>String(a.pk.resolves||"9").localeCompare(String(b.pk.resolves||"9"))||b.at-a.at).map(x=>x.pk)}
+function marked(p){return p.status==="settled"||p.current!=null}
+function pickRow(p,showMarks){const tr=el("tr");
  const vn=el("td","vn");vn.append(el("span",p.venue==="kalshi"?"vk":"vp",p.venue==="kalshi"?"K":"PM"));
- const mk=el("td","mk",p.market);mk.title=[p.market,p.market_id,p.note,p.resolves?"resolves "+p.resolves:"",p.url].filter(Boolean).join(" · ");
+ const mk=el("td","mk",p.market);mk.title=p.market;
  const sd=el("td","sd-"+(p.side==="YES"?"YES":"NO"),p.side);
- const pf=el("td");pf.append(document.createTextNode(c(p.price)+"→"+c(p.fair)+" "),el("span","cf",(p.confidence||"")[0]?.toUpperCase()||""));
- pf.title=`entry ${c(p.price)} · fair ${c(p.fair)} · edge ${pp(p.fair-p.price)} · confidence ${p.confidence||"?"}`;
- const now=el("td",null,p.status==="settled"?(p.outcome==="won"?"WON":"LOST"):c(p.current));
- if(p.status==="settled")now.className=p.outcome==="won"?"won":"lost";
- now.title=p.status==="settled"?"settled on venue resolution":p.current==null?"NOEMA has no fresh quote for this market yet":`${p.current_source||""} · ${ago(p.current_at)}`;
- const pl=el("td",p.pnl==null?"flat":p.pnl>0?"won":p.pnl<0?"lost":"flat",p.pnl==null?"—":pp(p.pnl));pl.title="paper P&L per $1 contract";
- tr.append(vn,mk,sd,pf,now,pl);return tr}
+ const pf=el("td",null,c(p.price)+"→"+c(p.fair));
+ const st=el("td",null,usd(stakeOf(p)));
+ const rs=el("td","dt",p.resolves?String(p.resolves).slice(5,10):"—");if(p.resolves)rs.title=String(p.resolves);
+ tr.append(vn,mk,sd,pf,st,rs);
+ if(showMarks){const now=el("td",null,p.status==="settled"?(p.outcome==="won"?"WON":"LOST"):c(p.current));
+  if(p.status==="settled")now.className=p.outcome==="won"?"won":"lost";
+  const pl=el("td",p.pnl==null?"flat":p.pnl>0?"won":p.pnl<0?"lost":"flat",p.pnl==null?"—":pp(p.pnl));tr.append(now,pl)}
+ return tr}
 function render(d){mount();const body=document.getElementById("pb-body"),tag=document.getElementById("pb-tag");body.textContent="";
- const s=d&&d.stats;
- if(!d||!(d.posts||[]).length){body.append(el("div","empty",(d&&d.note)||"No Prediction Bot posts yet. Drops land in /workspace/noema-run/prediction-inbox."));tag.textContent="paper picks · never trades";return}
- tag.textContent=`paper · ingest ${ago(d.last_run_at)}`;
+ const picks=latestPicks(d&&d.posts);
+ if(!picks.length){body.append(el("div","empty","No Prediction Bot picks yet."));tag.textContent="paper picks · never trades";return}
+ const open=picks.filter(p=>p.status!=="settled"),settled=picks.filter(p=>p.status==="settled"),won=settled.filter(p=>p.outcome==="won");
+ const pnls=picks.filter(p=>p.pnl!=null).map(p=>p.pnl),pnl=pnls.reduce((a,b)=>a+b,0);
+ tag.textContent=`paper · ${open.length} open · ingest ${ago(d.last_run_at)}`;
  const sum=el("div","pb-sum");const kv=(k,v,cl)=>{const sp=el("span",null,k+" ");const b=el("b",cl||null,v);sp.append(b);sum.append(sp)};
- kv("hit rate",s.settled?`${Math.round(s.hit_rate*100)}% (${s.won}/${s.settled})`:`— (0/${s.picks} settled)`);
- kv("open",String(s.open));kv("marked",`${s.marked_open}/${s.open}`);
- kv("paper P&L",pp(s.paper_pnl_per_contract)+"/ct",s.paper_pnl_per_contract>0?"won":s.paper_pnl_per_contract<0?"lost":null);
+ kv("hit rate",settled.length?`${Math.round(won.length/settled.length*100)}% (${won.length}/${settled.length})`:`— (0/${picks.length} settled)`);
+ kv("open",String(open.length));kv("marked",`${open.filter(marked).length}/${open.length}`);
+ if(pnls.length)kv("paper P&L",pp(pnl)+"/ct",pnl>0?"won":pnl<0?"lost":null);
  body.append(sum);
- for(const p of d.posts){const box=el("div","pb-post");const h=el("div","pb-h");const t=el("span","pb-t",p.title);t.title=p.title;
-  h.append(t,el("span","pb-ago",ago(p.posted_at)));box.append(h);const sm=el("div","pb-s",p.summary);sm.title=p.summary+(p.report_path?"\nreport: "+p.report_path:"");box.append(sm);
-  const tb=el("table");const cg=el("colgroup");for(const w of ["24px","","30px","72px","40px","48px"]){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
-  const hr=el("tr");for(const x of ["","market","side","px→fair","now","P&L"])hr.append(el("th",null,x));tb.append(hr);
-  for(const pk of p.picks||[])tb.append(pickRow(pk));box.append(tb);body.append(box)}}
+ const showMarks=picks.some(marked);
+ const tb=el("table");const cg=el("colgroup");
+ const cols=showMarks?["24px","","30px","72px","44px","38px","40px","48px"]:["24px","","30px","72px","44px","38px"];
+ for(const w of cols){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
+ const hr=el("tr");for(const x of (showMarks?["","market","side","px→fair","stake","settle","now","P&L"]:["","market","side","px→fair","stake","settle"]))hr.append(el("th",null,x));tb.append(hr);
+ for(const pk of picks)tb.append(pickRow(pk,showMarks));body.append(tb)}
 async function poll(){if(busy||document.hidden)return;busy=true;try{const r=await fetch("/api/prediction-bot",{cache:"no-store"});if(r.ok)render(await r.json())}catch(e){}finally{busy=false}}
-window.TEV_PB={render,pp,c};
+window.TEV_PB={render,pp,c,stakeOf,latestPicks};
 function start(){mount();poll();setInterval(poll,POLL_MS)}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",()=>setTimeout(start,400));else setTimeout(start,400);
 })();
