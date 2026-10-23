@@ -203,11 +203,25 @@ def _wallets(main: str) -> list[dict[str, Any]]:
     return out
 
 
+def _launch_transport(main: str) -> str:
+    """' (free public node | helius fallback 12/10000 cr)' from noema.launch_stream's status file, if any."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(main)), "launch_stream_status.json")) as fh:
+            st = json.load(fh)
+    except (OSError, ValueError):
+        return ""
+    h = st.get("helius") or {}
+    mode = {"free": "free public node", "helius": "HELIUS FALLBACK"}.get(st.get("mode"), str(st.get("mode")))
+    out = f" ({mode} | helius fallback {h.get('credits')}/{h.get('credits_budget')} cr today"
+    return out + (f" | {st['stopped']})" if st.get("stopped") else ")")
+
+
 def _launch_sources(main: str) -> list[dict[str, Any]]:
     got = {s: to_epoch(t) for s, t in _q(
         main, "SELECT source, MAX(received_at) FROM (SELECT source, received_at FROM launch_trades "
               "ORDER BY rowid DESC LIMIT 20000) GROUP BY source")}
-    label = {"helius": "helius (pump.fun trades via logsSubscribe, free)", "pumpportal": "pumpportal (keyed trades, paid)"}
+    label = {"helius": "pump.fun trades via logsSubscribe" + _launch_transport(main),
+             "pumpportal": "pumpportal (keyed trades, paid)"}
     srcs = ("helius", "pumpportal") if os.getenv("NOEMA_STREAM_TRADES", "0") == "1" else ("helius",)
     out = [_rec(f"feed:{s}", "feed", 30, got.get(s), detail=label[s]) for s in srcs]
     if len(srcs) == 1:  # keyed trades off: PumpPortal only supplies free creates/migrations

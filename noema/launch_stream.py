@@ -2,9 +2,13 @@
 
 * PumpPortal (wss://pumpportal.fun/api/data, free, no key): `subscribeNewToken` -> every pump.fun create;
   each new mint's trades are followed for TRADE_FOLLOW_S via `subscribeTokenTrade` (capped concurrency).
-* Solana RPC websocket `logsSubscribe` (mentions pump.fun / Raydium LaunchLab programs) as an independent
-  backup detector, keyed by transaction signature. Uses HELIUS_API_KEY from the environment if present
-  (never printed or stored), else the public mainnet endpoint.
+* Solana RPC websocket `logsSubscribe` (mentions pump.fun / Raydium LaunchLab programs): the pump.fun trade tape
+  plus an independent create detector, keyed by transaction signature. FREE FIRST: the public mainnet node(s) in
+  NOEMA_STREAM_WS_URLS. Helius (HELIUS_API_KEY, never printed or stored) is only a capped fallback when every
+  free endpoint keeps failing: metered like Helius bills websockets (2 credits / 0.1 MB, 1 / RPC call), hard
+  daily cap NOEMA_STREAM_HELIUS_CREDITS_DAY persisted in launch_stream_usage (survives restarts), auto-stop.
+  Trade rows keep source='helius' = "pump.fun logsSubscribe decoder" (a tape label used downstream), whatever
+  the transport; the transport and its usage are in launch_stream_usage / launch_stream_status.json.
 Writes data/noema.db tables launch_stream / launch_trades / launch_rpc_events. Nothing here signs or trades.
 """
 from __future__ import annotations
@@ -51,6 +55,18 @@ _LL_CREATE = hashlib.sha256(b"event:PoolCreateEvent").digest()[:8]
 WSOL = "So11111111111111111111111111111111111111112"
 LL_POOLS: dict[str, dict[str, Any]] = {}  # LaunchLab pool_state -> {"mint", "at"} (SOL-quoted pools only)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+# ---- transport / cost (free public node first, Helius capped fallback) ----------------------------
+FREE_WS = [u for u in os.getenv("NOEMA_STREAM_WS_URLS", os.getenv("NOEMA_SOLANA_WS_URL", "")
+                                or "wss://api.mainnet-beta.solana.com,wss://solana-rpc.publicnode.com").split(",") if u]
+FREE_HTTP = [u for u in os.getenv("NOEMA_STREAM_HTTP_URLS", os.getenv("NOEMA_SOLANA_HTTP_URL", "")
+                                  or "https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com").split(",")
+             if u]
+HELIUS_ON = os.getenv("NOEMA_STREAM_HELIUS", "1") == "1"
+# The full pump.fun firehose is ~0.3-0.7 MB/s (~600k-1M credits/day on Helius), so the cap buys roughly
+# 10-25 min of fallback per UTC day (~0.5 GB); after that the stream waits for the free node.
+HELIUS_CREDITS_DAY = float(os.getenv("NOEMA_STREAM_HELIUS_CREDITS_DAY", "10000"))
+HELIUS_SESSION_S = float(os.getenv("NOEMA_STREAM_HELIUS_SESSION_S", "300"))  # then retry the free endpoints
+SILENT_S = 60.0  # a subscription that delivers nothing for this long counts as a failed endpoint
 
 
 def b58(b: bytes) -> str:
@@ -344,16 +360,33 @@ def mint_from_tx(tx: dict[str, Any]) -> tuple[str | None, bool]:
     return (base[0] if len(base) == 1 else None), (WSOL in mints or len(base) == 1)
 
 
-def _get_tx(sig: str) -> dict[str, Any] | None:
+def _post(url: str, body: bytes) -> dict[str, Any] | None:
     import urllib.request
-    url = rpc_http_url()
-    if not url:
-        return None
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "getTransaction",
-                       "params": [sig, {"maxSupportedTransactionVersion": 0, "commitment": "confirmed"}]}).encode()
-    req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
+    req = urllib.request.Request(url, body, {"Content-Type": "application/json",
+                                             "User-Agent": "noema-launch-stream/1 (paper research)"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read()).get("result")
+
+
+def _get_tx(sig: str, tr: Transport | None = None) -> dict[str, Any] | None:
+    """getTransaction on the free public HTTP nodes; Helius (1 credit, capped) only if they all fail."""
+    tr = tr or TRANSPORT
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "getTransaction",
+                       "params": [sig, {"maxSupportedTransactionVersion": 0, "commitment": "confirmed"}]}).encode()
+    err: Exception | None = None
+    for url in FREE_HTTP:
+        tr.budget.add("free", http=1, msgs=0)
+        try:
+            return _post(url, body)
+        except Exception as exc:  # noqa: BLE001 - try the next free node
+            err = exc
+    hu = helius_http_url()
+    if hu and tr.budget.helius_ok():
+        tr.budget.add("helius", http=1, msgs=0)
+        return _post(hu, body)
+    if err:
+        raise err
+    return None
 
 
 async def resolve_ll_pools(c: sqlite3.Connection, q: asyncio.Queue, stop: asyncio.Event) -> None:
@@ -368,7 +401,7 @@ async def resolve_ll_pools(c: sqlite3.Connection, q: asyncio.Queue, stop: asynci
             try:
                 tx = await asyncio.to_thread(_get_tx, p["sig"])
             except Exception as exc:  # noqa: BLE001
-                print(_now(), "rpc_http", type(exc).__name__, flush=True)  # never print the URL
+                print(_now(), "rpc_http", type(exc).__name__, flush=True)  # never print the URL (may hold a key)
                 continue
             if tx:
                 mint, sol_q = mint_from_tx(tx)
@@ -398,14 +431,19 @@ CREATE TABLE IF NOT EXISTS launch_trade_seen (signature TEXT NOT NULL, source TE
   PRIMARY KEY (signature, source));
 CREATE TABLE IF NOT EXISTS launch_rpc_events (signature TEXT PRIMARY KEY, program TEXT, received_at TEXT NOT NULL,
   slot INTEGER);
+CREATE TABLE IF NOT EXISTS launch_stream_usage (day TEXT NOT NULL, source TEXT NOT NULL, msgs INTEGER, bytes INTEGER,
+  http_calls INTEGER, credits REAL, updated_at TEXT, PRIMARY KEY (day, source));
 """
 
 
 def rpc_ws_url() -> str:
+    """First free websocket endpoint (never Helius - see helius_ws_url)."""
+    return FREE_WS[0] if FREE_WS else "wss://api.mainnet-beta.solana.com"
+
+
+def helius_ws_url() -> str | None:
     key = os.getenv("HELIUS_API_KEY")
-    if key:
-        return f"wss://mainnet.helius-rpc.com/?api-key={key}"
-    return os.getenv("NOEMA_SOLANA_WS_URL", "wss://api.mainnet-beta.solana.com")
+    return f"wss://mainnet.helius-rpc.com/?api-key={key}" if key and HELIUS_ON else None  # never printed
 
 
 def connect(path: str) -> sqlite3.Connection:
@@ -428,9 +466,113 @@ def pumpportal_url() -> str:
     return f"{PUMPPORTAL}?api-key={key}" if key else PUMPPORTAL
 
 
-def rpc_http_url() -> str | None:
+def helius_http_url() -> str | None:
     key = os.getenv("HELIUS_API_KEY")
-    return f"https://mainnet.helius-rpc.com/?api-key={key}" if key else os.getenv("NOEMA_SOLANA_HTTP_URL")
+    return f"https://mainnet.helius-rpc.com/?api-key={key}" if key and HELIUS_ON else None  # never printed
+
+
+def utc_day(t: float | None = None) -> str:
+    return datetime.fromtimestamp(t or time.time(), UTC).strftime("%Y-%m-%d")
+
+
+def helius_credits(nbytes: int, http_calls: int = 0) -> float:
+    """Helius bills websocket traffic at 2 credits per 0.1 MB and 1 credit per standard RPC call. Metered on the
+    decompressed payload (len of each message) - an upper bound if the socket negotiated permessage-deflate."""
+    return nbytes / 100_000 * 2 + http_calls
+
+
+class Budget:
+    """Per-UTC-day usage per transport ('free' public node, 'helius'). Helius auto-stops at HELIUS_CREDITS_DAY;
+    load() restores today's counters from launch_stream_usage so a restart cannot reset the cap."""
+
+    def __init__(self, day_fn: Any = utc_day) -> None:
+        self.day_fn, self.day = day_fn, day_fn()
+        self.u: dict[str, dict[str, int]] = {}
+
+    def _get(self, src: str) -> dict[str, int]:
+        d = self.day_fn()
+        if d != self.day:  # UTC rollover resets every counter (and lifts the auto-stop)
+            self.day, self.u = d, {}
+        return self.u.setdefault(src, {"msgs": 0, "bytes": 0, "http": 0})
+
+    def add(self, src: str, nbytes: int = 0, msgs: int = 1, http: int = 0) -> None:
+        g = self._get(src)
+        g["msgs"] += msgs
+        g["bytes"] += nbytes
+        g["http"] += http
+
+    def load(self, src: str, msgs: int, nbytes: int, http: int) -> None:
+        g = self._get(src)
+        g["msgs"], g["bytes"], g["http"] = max(g["msgs"], msgs), max(g["bytes"], nbytes), max(g["http"], http)
+
+    def credits(self, src: str = "helius") -> float:
+        g = self._get(src)
+        return helius_credits(g["bytes"], g["http"])
+
+    def helius_ok(self) -> bool:
+        return HELIUS_ON and self.credits("helius") < HELIUS_CREDITS_DAY
+
+
+class Transport:
+    """Which websocket the logsSubscribe tape is on, consecutive free failures, and the day's usage."""
+
+    def __init__(self, budget: Budget | None = None) -> None:
+        self.budget = budget or Budget()
+        self.mode, self.free_fail, self.stopped = "starting", 0, None
+        self.switches: dict[str, int] = {"free": 0, "helius": 0}
+
+    def use_helius(self) -> bool:
+        return self.free_fail >= 2 * max(1, len(FREE_WS)) and bool(helius_ws_url()) and self.budget.helius_ok()
+
+
+TRANSPORT = Transport()
+
+
+def load_usage(db: str, tr: Transport | None = None) -> None:
+    tr = tr or TRANSPORT
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    try:
+        if _has(c, "launch_stream_usage"):
+            for src, msgs, nb, http in c.execute("SELECT source, msgs, bytes, http_calls FROM launch_stream_usage"
+                                                 " WHERE day=?", (tr.budget.day,)):
+                tr.budget.load(src, msgs or 0, nb or 0, http or 0)
+    finally:
+        c.close()
+
+
+def save_usage(tr: Transport | None = None) -> Any:
+    tr = tr or TRANSPORT
+    rows = [(tr.budget.day, src, g["msgs"], g["bytes"], g["http"],
+             helius_credits(g["bytes"], g["http"]) if src == "helius" else 0.0, _now())
+            for src, g in list(tr.budget.u.items())]
+
+    def fn(c: sqlite3.Connection) -> int:
+        c.executemany("INSERT OR REPLACE INTO launch_stream_usage VALUES (?,?,?,?,?,?,?)", rows)
+        c.commit()
+        return len(rows)
+    return fn
+
+
+def status_path(db: str) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(db)), "launch_stream_status.json")
+
+
+def write_status(path: str, tr: Transport | None = None) -> dict[str, Any]:
+    import tempfile
+    tr = tr or TRANSPORT
+    f, h = tr.budget._get("free"), tr.budget._get("helius")
+    s = {"updated_at": _now(), "day_utc": tr.budget.day, "mode": tr.mode, "stopped": tr.stopped,
+         "free_fail": tr.free_fail, "switches": dict(tr.switches),
+         "free": {"msgs": f["msgs"], "mb": round(f["bytes"] / 1e6, 1), "http_calls": f["http"]},
+         "helius": {"enabled": bool(helius_ws_url()), "msgs": h["msgs"], "mb": round(h["bytes"] / 1e6, 2),
+                    "http_calls": h["http"], "credits": round(tr.budget.credits("helius"), 1),
+                    "credits_budget": HELIUS_CREDITS_DAY}}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".lss")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(s, fh)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return s
 
 
 def insert_trade(c: sqlite3.Connection, sig: str, mint: str, side: str | None, sol: Any, tokens: Any, trader: Any,
@@ -537,60 +679,112 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
             backoff = min(60.0, backoff * 2)
 
 
-async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue | None = None) -> None:
-    import websockets
-    backoff = 1.0
-    while not stop.is_set():
+def handle_rpc_message(c: Any, m: dict[str, Any], subs: dict[int, str], llq: asyncio.Queue | None = None) -> None:
+    """One logsSubscribe notification (either transport)."""
+    p = (m.get("params") or {})
+    v = ((p.get("result") or {}).get("value") or {})
+    logs = v.get("logs") or []
+    slot = ((p.get("result") or {}).get("context") or {}).get("slot")
+    if v.get("err") is None and any(any(k in ln for k in CREATE_MARKERS) for ln in logs):
+        c.execute("INSERT OR IGNORE INTO launch_rpc_events VALUES (?,?,?,?)", (
+            v.get("signature"), subs.get(p.get("subscription"), "?"), _now(), slot))
+    if RPC_TRADES and v.get("err") is None:
+        if subs.get(p.get("subscription")) == "raydium_launchlab":
+            _n, new_pools = handle_launchlab_logs(c, v.get("signature"), logs, slot=slot)
+            for pool in new_pools:
+                if llq is not None and llq.qsize() < 50:
+                    llq.put_nowait(pool)
+        else:
+            handle_rpc_logs(c, v.get("signature"), logs, slot=slot)
+
+
+def _rpc_housekeeping() -> None:
+    prune_follow(FOLLOW)
+    if time.time() - _OPEN_AT[0] > 60:
+        _OPEN_AT[0] = time.time()
         try:
-            async with websockets.connect(rpc_ws_url(), ping_interval=20, max_size=2**23) as ws:
-                for i, (_name, prog) in enumerate(PROGRAMS.items()):
-                    await ws.send(json.dumps({"jsonrpc": "2.0", "id": i + 1, "method": "logsSubscribe",
-                                              "params": [{"mentions": [prog]}, {"commitment": "processed"}]}))
-                subs: dict[int, str] = {}
-                backoff, last_commit = 1.0, time.time()
-                while not stop.is_set():
-                    m = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
-                    if "result" in m and isinstance(m.get("id"), int):
-                        subs[m["result"]] = list(PROGRAMS)[m["id"] - 1]
-                        continue
-                    p = (m.get("params") or {})
-                    v = ((p.get("result") or {}).get("value") or {})
-                    logs = v.get("logs") or []
-                    slot = ((p.get("result") or {}).get("context") or {}).get("slot")
-                    if v.get("err") is None and any(any(k in ln for k in CREATE_MARKERS) for ln in logs):
-                        c.execute("INSERT OR IGNORE INTO launch_rpc_events VALUES (?,?,?,?)", (
-                            v.get("signature"), subs.get(p.get("subscription"), "?"), _now(), slot))
-                    if RPC_TRADES and v.get("err") is None:
-                        if subs.get(p.get("subscription")) == "raydium_launchlab":
-                            _n, new_pools = handle_launchlab_logs(c, v.get("signature"), logs, slot=slot)
-                            for pool in new_pools:
-                                if llq is not None and llq.qsize() < 50:
-                                    llq.put_nowait(pool)
-                        else:
-                            handle_rpc_logs(c, v.get("signature"), logs, slot=slot)
-                    if time.time() - last_commit > COMMIT_S:
-                        safe_commit(c)
-                        prune_follow(FOLLOW)
-                        if time.time() - _OPEN_AT[0] > 60:
-                            _OPEN_AT[0] = time.time()
-                            try:
-                                reload_open_positions()
-                            except Exception as exc:  # noqa: BLE001 - optional
-                                print("open-position reload failed", type(exc).__name__, flush=True)
-                        if time.time() - _WATCH_AT[0] > 300:
-                            _WATCH_AT[0] = time.time()
-                            try:
-                                reload_watch()
-                            except Exception as exc:  # noqa: BLE001 - watchlist is optional
-                                print("watchlist reload failed", type(exc).__name__, flush=True)
-                        for pk in [k for k, x in LL_POOLS.items() if time.time() - x["at"] > TRADE_FOLLOW_S]:
-                            LL_POOLS.pop(pk, None)
-                        last_commit = time.time()
-        except Exception as exc:  # noqa: BLE001
-            print(_now(), "rpc", type(exc).__name__, flush=True)  # never print the URL (may hold a key)
+            reload_open_positions()
+        except Exception as exc:  # noqa: BLE001 - optional
+            print("open-position reload failed", type(exc).__name__, flush=True)
+    if time.time() - _WATCH_AT[0] > 300:
+        _WATCH_AT[0] = time.time()
+        try:
+            reload_watch()
+        except Exception as exc:  # noqa: BLE001 - watchlist is optional
+            print("watchlist reload failed", type(exc).__name__, flush=True)
+    for pk in [k for k, x in LL_POOLS.items() if time.time() - x["at"] > TRADE_FOLLOW_S]:
+        LL_POOLS.pop(pk, None)
+
+
+async def rpc_session(url: str, src: str, c: Any, stop: asyncio.Event, llq: asyncio.Queue | None = None,
+                      tr: Transport | None = None, until: float | None = None) -> None:
+    """One logsSubscribe websocket (pump.fun + LaunchLab). Every message is metered against `src`; a Helius
+    session returns at `until` or the moment the daily credit cap is reached (tr.stopped is set)."""
+    import websockets
+    tr = tr or TRANSPORT
+    async with websockets.connect(url, ping_interval=20, max_size=2**23, open_timeout=15,
+                                  user_agent_header="noema-launch-stream/1 (paper research)") as ws:
+        for i, (_name, prog) in enumerate(PROGRAMS.items()):
+            await ws.send(json.dumps({"jsonrpc": "2.0", "id": i + 1, "method": "logsSubscribe",
+                                      "params": [{"mentions": [prog]}, {"commitment": "processed"}]}))
+        subs: dict[int, str] = {}
+        tr.mode = src
+        tr.switches[src] = tr.switches.get(src, 0) + 1
+        print(_now(), "rpc connected", src, flush=True)
+        last_commit, first = time.time(), True
+        while not stop.is_set():
+            if until and time.time() > until:
+                return
+            raw = await asyncio.wait_for(ws.recv(), timeout=SILENT_S)
+            tr.budget.add(src, len(raw))
+            if src == "helius" and not tr.budget.helius_ok():
+                tr.stopped = f"helius daily budget reached ({HELIUS_CREDITS_DAY:.0f} credits)"
+                print(_now(), "rpc", tr.stopped, flush=True)
+                return
+            m = json.loads(raw)
+            if "result" in m and isinstance(m.get("id"), int):
+                if isinstance(m["result"], int):
+                    subs[m["result"]] = list(PROGRAMS)[m["id"] - 1]
+                continue
+            if "error" in m:
+                raise RuntimeError(f"subscribe error {str(m['error'])[:80]}")
+            if first:  # a notification arrived: this endpoint really streams
+                first = False
+                if src == "free":
+                    tr.free_fail = 0
+            handle_rpc_message(c, m, subs, llq)
+            if time.time() - last_commit > COMMIT_S:
+                safe_commit(c)
+                _rpc_housekeeping()
+                last_commit = time.time()
+
+
+async def run_rpc(c: Any, stop: asyncio.Event, llq: asyncio.Queue | None = None, tr: Transport | None = None) -> None:
+    """Free public node first (rotating FREE_WS). Only after 2 x len(FREE_WS) consecutive free failures, a
+    HELIUS_SESSION_S Helius session while today's credits are under the cap; then back to the free nodes."""
+    tr = tr or TRANSPORT
+    i, backoff = 0, 1.0
+    while not stop.is_set():
+        if tr.stopped and tr.budget.helius_ok():
+            tr.stopped = None  # new UTC day: cap lifted
+        use_helius = tr.use_helius()
+        try:
+            if use_helius:
+                await rpc_session(helius_ws_url() or "", "helius", c, stop, llq, tr,
+                                  until=time.time() + HELIUS_SESSION_S)
+                tr.free_fail = 0  # go back and retry the free endpoints
+            else:
+                await rpc_session(FREE_WS[i % len(FREE_WS)], "free", c, stop, llq, tr)
+            backoff = 1.0
+        except Exception as exc:  # noqa: BLE001 - reconnect; never print a Helius URL / error (may hold a key)
+            print(_now(), "rpc", "helius" if use_helius else f"free#{i % len(FREE_WS)}", type(exc).__name__,
+                  "" if use_helius else str(exc)[:80], flush=True)
             safe_commit(c)
+            if not use_helius:
+                tr.free_fail += 1
+                i += 1
             await asyncio.sleep(backoff)
-            backoff = min(120.0, backoff * 2)
+            backoff = min(30.0, backoff * 2)
 
 
 def latency_report(db: str, hours: float = 6) -> dict[str, Any]:
@@ -682,7 +876,21 @@ async def _main(db: str) -> None:
     stop = asyncio.Event()
 
     connect(db).close()  # schema / migrations up front
+    load_usage(db)  # today's Helius / free usage survives restarts (the cap cannot be reset by a restart)
     c = QueuedWriter(db).start()  # all writes on one background thread; the event loop never waits on a lock
+    sp = status_path(db)
+
+    async def usage_loop() -> None:
+        while True:
+            await asyncio.sleep(ALIVE_S)
+            try:
+                s = write_status(sp)
+                c.submit(save_usage())
+                print(_now(), "transport", s["mode"], f"free_mb={s['free']['mb']}",
+                      f"helius_mb={s['helius']['mb']} helius_credits={s['helius']['credits']}/{HELIUS_CREDITS_DAY:.0f}",
+                      f"stopped={s['stopped']}" if s["stopped"] else "", flush=True)
+            except Exception as exc:  # noqa: BLE001 - metering must never take the stream down
+                print(_now(), "usage", type(exc).__name__, str(exc)[:120], flush=True)
 
     async def housekeeping() -> None:
         while True:
@@ -694,7 +902,7 @@ async def _main(db: str) -> None:
                 print(_now(), "housekeeping", type(exc).__name__, str(exc)[:120], flush=True)
     llq: asyncio.Queue = asyncio.Queue()
     await asyncio.gather(run_pumpportal(c, stop), run_rpc(c, stop, llq), resolve_ll_pools(c, llq, stop),
-                         committer(c, stop), housekeeping())
+                         committer(c, stop), housekeeping(), usage_loop())
 
 
 def main() -> None:  # pragma: no cover
