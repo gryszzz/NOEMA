@@ -87,3 +87,30 @@ is > 0 with the 97.5% clustered CI excluding 0; otherwise it "collapses".
 Every decision (trade or skip) is written to `data/fx_spotvol.db` with: agent, ticker, decision time, signal
 quote time/bid/ask, spot bar time/value, model prob, side, fill quote time, fill price (incl. slippage),
 fee, contracts, settlement, P&L, skip reason. Heartbeat `agent:fx_spotvol` in `/api/heartbeats`.
+
+## 8. Red-team results (appended after the prereg commit fb869e0; run 2026-10-22 22:04–22:13 ET)
+
+Data: 4,002 FX markets, 2026-09-23 → 2026-10-22 (GBP/AUD/CAD 15M), Kalshi 1-minute public candlesticks,
+spot from completed 5m bars only, model_cal walk-forward. Per-contract P&L, 97.5% CI clustered by close time.
+
+| Variant | fx-spotvol n / mean / CI | fx-model_cal n / mean / CI |
+|---|---|---|
+| Snapshot quote, no delay/slip (original view, look-ahead removed) | 3257 / −0.30¢ / [−2.00, +1.52] | 3166 / −0.41¢ / [−2.15, +1.34] |
+| **Pre-registered: ask +60s, +1¢ slip, fee** | **3202 / −1.66¢ / [−3.24, −0.11]** | **3117 / −2.08¢ / [−3.72, −0.51]** |
+| ask +60s, 0¢ slip | 3202 / −0.66¢ / [−2.23, +0.91] | 3117 / −1.05¢ / [−2.69, +0.52] |
+| ask +60s, 2¢ slip | 3202 / −2.66¢ / [−4.24, −1.11] | 3117 / −3.10¢ / [−4.74, −1.52] |
+| ask +30s, 1¢ slip | 3232 / −1.85¢ / [−3.52, −0.13] | 3145 / −1.96¢ / [−3.64, −0.23] |
+| Re-check edge at fill | 2603 / −1.60¢ / [−3.41, +0.21] | 2530 / −1.97¢ / [−3.79, −0.11] |
+
+Every pair is negative under the pre-registered rules (spotvol: GBP −1.69¢, AUD −0.73¢, CAD −2.63¢).
+Skips: 141 stale spot, ~180 stale signal quote, ~47 stale fill quote per agent.
+
+**Root cause of the +6.9¢ / +7.1¢.** The stored agent stats were computed at 2026-10-21 22:48 ET, 24 minutes
+before #167 (b701153) fixed reference-bar look-ahead. Re-running the *original* `pm_models.evaluate` on the
+same 3,497 rows with the pre-#167 bar rule reproduces it exactly (3,076 trades, +6.90¢, CI [5.46, 8.37]); with
+the fix, the same code and rows give −0.28¢ [−1.77, +1.15] (Brier 0.2231 vs market 0.1667). The old rule used the
+5m bar starting at the snapshot, whose close is 150 s before contract close — future information.
+
+**Verdict: the +7¢ does not survive.** Under the pre-registered rules both agents would have hit the KILL rule
+(CI upper bound < 0) historically. Recommendation: keep both agents fired; the forward run is kept only as the
+pre-registered confirmation and is expected to FAIL.
