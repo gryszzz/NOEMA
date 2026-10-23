@@ -41,6 +41,8 @@ ALPHA = 0.05
 # module reproduces trench72.py on already-published data; it never enters the verdict.
 SETS: dict[str, tuple[int, int]] = {"A": (1058, 1061), "B": (1052, 1057), "R": (1062, 1064)}
 VERDICT_SETS = ("A", "B")
+# Amendment 2026-10-23 (before any Set A data was read): side check, does not change the pass bar.
+SIDE_EXCLUDE_EPOCH = {"A": 1061}
 
 # ---- frozen definitions (copied from the study; do not change) -------------------------------------
 L_PRIMARY = 5                # entry at signal slot + 5
@@ -126,6 +128,7 @@ def verdict(res: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "pass": _passes(t, "all", adj["all"][(i, s)]),
             "p_nogap": t["p_nogap"], "holm_nogap": adj["nogap"][(i, s)], "lift_nogap": t["lift_nogap"],
             "pass_nogap": _passes(t, "nogap", adj["nogap"][(i, s)])}
+    out["side_checks"] = side_checks(res)
     for i in ("f", "g"):
         ok = all(out["tests"][f"{i}|{s}"]["pass"] for s in VERDICT_SETS)
         ok_ng = all(out["tests"][f"{i}|{s}"]["pass_nogap"] for s in VERDICT_SETS)
@@ -144,6 +147,23 @@ def verdict(res: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 idea["why_no_desk"] = ("did not pass" if not ok else
                                        "mean net return of kept (treatment) trades not above 0 in every set")
         out["ideas"][i] = idea
+    return out
+
+
+def side_checks(res: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Amendment side check: Set A also reported with epoch 1061 excluded (1058-1060 only), because 1061 files
+    were on disk before registration. Raw p-values only; NOT in the Holm family and NOT part of the pass bar."""
+    out: dict[str, Any] = {}
+    for s, ep in SIDE_EXCLUDE_EPOCH.items():
+        cut = res.get(s, {}).get(f"excl_epoch{ep}")
+        key = f"{s}_excl_{ep}"
+        if cut is None:
+            out[key] = {"status": "MISSING", "note": "set not run yet or run predates the side check"}
+            continue
+        a, b = SETS[s]
+        out[key] = {"epochs": [e for e in range(a, b + 1) if e != ep], "affects_pass_bar": False,
+                    **{i: {k: cut[i].get(k) for k in ("p_all", "lift_all", "kept_mean_all", "n_treat", "n_ctrl")
+                           if k in cut[i]} for i in ("f", "g")}}
     return out
 
 
@@ -283,6 +303,7 @@ def run_set(name: str, work: str = WORK) -> dict[str, Any]:  # pragma: no cover 
             fcells[key] = cell
             if bk == F_BASE and rn == f"sniper_share>{F_SNIPER_SHARE}":
                 fprim = cell
+                fprim_r, fprim_e, fprim_v = r, e, vet
     out["f_all_cells_descriptive"] = fcells
     out["f"] = {"cell": f"{F_BASE}|sniper_share>{F_SNIPER_SHARE}", "exit": F_EXIT,
                 "p_all": fprim["welch_p"], "lift_all": fprim["lift"],
@@ -313,6 +334,18 @@ def run_set(name: str, work: str = WORK) -> dict[str, Any]:  # pragma: no cover 
                 "arms_nogap": {"treatment": describe(tr[0][tng], boot=False),
                                "matched_control": describe(mc[0][cng], boot=False)},
                 "units": gunits}
+
+    # ---- amendment side check: same tests with one epoch's trades dropped (by entry slot); not in the pass bar
+    if name in SIDE_EXCLUDE_EPOCH:
+        xe = SIDE_EXCLUDE_EPOCH[name]
+        fk = epoch_of(fprim_e) != xe
+        fr, fv_ = fprim_r[fk], fprim_v[fk]
+        tk, ck = epoch_of(tr[1]) != xe, epoch_of(mc[1]) != xe
+        out[f"excl_epoch{xe}"] = {
+            "f": {"p_all": welch_less(fr[fv_], fr[~fv_]), "lift_all": _lift(fr[~fv_], fr),
+                  "kept_mean_all": _mean(fr[~fv_]), "n_treat": int((~fv_).sum()), "n_ctrl": len(fr)},
+            "g": {"p_all": welch_less(mc[0][ck], tr[0][tk]), "lift_all": _lift(tr[0][tk], mc[0][ck]),
+                  "kept_mean_all": _mean(tr[0][tk]), "n_treat": int(tk.sum()), "n_ctrl": int(ck.sum())}}
     return out
 
 
