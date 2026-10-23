@@ -79,9 +79,10 @@ def lexicon_stance(text: str) -> tuple[float, float]:
     return round((u - d) / (u + d), 3), 0.15
 
 
-def pending_links(conn: sqlite3.Connection, *, hours: int = 48, limit: int = 200) -> list[dict[str, Any]]:
+def pending_links(conn: sqlite3.Connection, *, hours: int = 48, limit: int = 200,
+                  now: datetime | None = None) -> list[dict[str, Any]]:
     """Linked (post, market) pairs without a stance yet, newest first, with market context."""
-    since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    since = ((now or datetime.now(UTC)) - timedelta(hours=hours)).isoformat()
     rows = conn.execute(
         "SELECT l.post_id, l.venue, l.market_id, l.title, p.text FROM x_market_links l JOIN x_posts p "
         "USING (post_id) LEFT JOIN x_stance s ON s.post_id=l.post_id AND s.venue=l.venue AND "
@@ -115,8 +116,8 @@ def _rules(conn: sqlite3.Connection, keys: set[tuple[str, str]]) -> dict[tuple[s
     return out
 
 
-def spent_today(conn: sqlite3.Connection) -> float:
-    day = datetime.now(UTC).date().isoformat()
+def spent_today(conn: sqlite3.Connection, now: datetime | None = None) -> float:
+    day = (now or datetime.now(UTC)).date().isoformat()
     row = conn.execute("SELECT COALESCE(SUM(estimated_usd),0) FROM x_stance_spend WHERE at>=?", (day,)).fetchone()
     return float(row[0] or 0)
 
@@ -178,7 +179,7 @@ def classify_pending(conn: sqlite3.Connection, *, db_path: str | None = None, cl
     ensure_stance_schema(conn)
     now = now or datetime.now(UTC)
     max_items = max_items or int(os.getenv("NOEMA_X_STANCE_MAX_ITEMS", "80"))
-    items = pending_links(conn, limit=max_items)
+    items = pending_links(conn, limit=max_items, now=now)
     stats = {"pending": len(items), "cached": 0, "model": 0, "lexicon": 0, "estimated_usd": 0.0, "status": "idle"}
     todo = []
     for it in items:
@@ -200,7 +201,7 @@ def classify_pending(conn: sqlite3.Connection, *, db_path: str | None = None, cl
         if est is None:
             stats["status"] = "lexicon: cognition not configured or unpriced"
         else:
-            affordable = len(batches) if est == 0 else int(max(0.0, cap - spent_today(conn)) / est)
+            affordable = len(batches) if est == 0 else int(max(0.0, cap - spent_today(conn, now)) / est)
             batches = batches[:affordable]
             if not batches:
                 stats["status"] = "lexicon: daily stance budget used"
