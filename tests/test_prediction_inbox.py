@@ -139,6 +139,14 @@ def test_api_and_room_assets(tmp_path, monkeypatch):
     assert "innerHTML" not in js.replace("no innerHTML", "") and "purple" not in js
 
 
+def test_panel_hides_post_text_and_stake_from_note():
+    js = (dashboard_app._STATIC_DIR / "prediction-panel.js").read_text()
+    for gone in ("p.title", "p.summary", "p.note", "pb-post", "report_path"):
+        assert gone not in js
+    assert pi.note_stake("stake $4.78, cap $184") == 4.78 and pi.note_stake("stake $1,250.") == 1250.0
+    assert pi.note_stake("no stake here") is None and pi.note_stake(None) is None
+
+
 # --- kind / stake_usd / capacity_usd / parlay legs (all optional, backward compatible) -------------------------
 
 def _parlay(**kw):

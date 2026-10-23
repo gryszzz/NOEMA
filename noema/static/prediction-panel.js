@@ -14,7 +14,7 @@ function mount(){if(document.getElementById("pb-panel"))return document.getEleme
  if(anchor&&anchor.parentNode)anchor.after(sec);else if(right)right.append(sec);else document.body.append(sec);return sec}
 // Picks only: market, side, price, fair, stake, resolves (+ now and P&L once marks exist). No post titles,
 // summaries or notes are displayed (they stay stored server-side). Pairs and parlays list their legs.
-function money(v){return v==null||!isFinite(v)?"—":"$"+(v>=1000?Math.round(v/100)/10+"k":Math.round(v*100)/100)}
+function money(v){return v==null||!isFinite(v)?"—":"$"+(v>=1000?Math.round(v/100)/10+"k":v>=10?Math.round(v):v.toFixed(2))}
 function pct(v){if(v==null||!isFinite(v))return"—";const x=Math.round(v*1000)/10;return(x>0?"+":"")+x+"%"}
 function marked(p){return p.status==="settled"||p.current!=null}
 function safeUrl(u){return typeof u==="string"&&/^https:\/\/([a-z0-9-]+\.)*(kalshi\.com|polymarket\.com)(\/|$)/i.test(u)?u:null}
@@ -22,28 +22,29 @@ function mkCell(text,url){const td=el("td","mk");const u=safeUrl(url);
  if(u){const a=el("a",null,text);a.href=u;a.target="_blank";a.rel="noopener noreferrer";td.append(a)}else td.textContent=String(text);return td}
 function venueTag(v){return el("span",v==="kalshi"?"vk":"vp",v==="kalshi"?"K":"PM")}
 function px(v){return v==null||!isFinite(v)?"—":v>1?"$"+(Math.round(v*1000)/1000):c(v)}
-function pickRow(p,showNow){const kind=p.kind||"single";const tr=el("tr","k-"+kind);const planned=p.status==="planned";
+function pf(price,fair){return px(price)+"→"+px(fair)}
+function pickRow(p,showNow){const kind=p.kind||"single";const tr=el("tr","k-"+kind);const planned=p.status==="planned";const combo=kind==="pair"||kind==="parlay";
  const sd=kind==="parlay"?(p.legs||[]).length+"-leg":kind==="pair"?"pair":p.side;
  const st=p.posted_stake_usd!=null?p.posted_stake_usd:p.stake_usd;
- tr.append(mkCell(p.market,p.url),el("td",kind==="pair"||kind==="parlay"?"sd-PAR":"sd-"+(p.side==="YES"?"YES":"NO"),sd),
-  el("td",null,px(p.price)),el("td",null,px(p.fair)),el("td",null,money(st)),el("td","rs",p.resolves?p.resolves.slice(5):"—"));
+ const vn=el("td","vn");if(!combo)vn.append(venueTag(p.venue));
+ tr.append(vn,mkCell(p.market,p.url),el("td",combo?"sd-PAR":"sd-"+(p.side==="YES"?"YES":"NO"),sd),
+  el("td",null,pf(p.price,p.fair)),el("td",null,money(st)),el("td","rs",p.resolves?p.resolves.slice(5,10):"—"));
  if(showNow){const done=p.status==="settled";
   const now=el("td",done?(p.outcome==="won"?"won":"lost"):null,done?(p.outcome==="won"?"WON":"LOST"):px(p.current));
   const pl=planned?el("td","flat","planned"):el("td",p.pnl==null?"flat":p.pnl>0?"won":p.pnl<0?"lost":"flat",p.pnl==null?"—":pp(p.pnl));
   tr.append(now,pl)}
  const rows=[tr];
- if(kind==="parlay"||kind==="pair")for(const g of p.legs||[]){const lr=el("tr","leg");const m=mkCell("",g.url);
-  const a=m.querySelector("a")||m;a.textContent="";a.append(venueTag(g.venue),document.createTextNode(" "+g.market));
-  lr.append(m,el("td","sd-"+(g.side==="YES"?"YES":"NO"),g.side),el("td",null,c(g.price)),el("td"),el("td"),el("td"));
+ if(combo)for(const g of p.legs||[]){const lr=el("tr","leg");const vn2=el("td","vn");vn2.append(venueTag(g.venue));
+  lr.append(vn2,mkCell(g.market,g.url),el("td","sd-"+(g.side==="YES"?"YES":"NO"),g.side),el("td",null,c(g.price)),el("td"),el("td"));
   if(showNow)lr.append(el("td",g.result?(g.result==="won"?"won":"lost"):null,g.result?(g.result==="won"?"WON":"LOST"):c(g.current)),el("td"));
   rows.push(lr)}
- if(kind==="pair"&&p.pair){const m=p.pair;const lr=el("tr","leg pm");
+ if(kind==="pair"&&p.pair){const m=p.pair;const lr=el("tr","leg pm");lr.append(el("td"));
   const td=el("td","mk "+(m.locked?"won":"flat"),`cost ${px(m.combined_cost)} · ${m.locked?"locked ":""}${pct(m.profit_per_usd)}/$ · ${pct(m.annualized)} ann · ${m.rules_match?"rules match":"unverified"}`);
-  td.colSpan=showNow?8:6;lr.append(td);rows.push(lr)}
+  td.colSpan=showNow?7:5;lr.append(td);rows.push(lr)}
  return rows}
 function table(picks,showNow){const tb=el("table");const cg=el("colgroup");
- for(const w of ["","40px","40px","36px","44px","40px"].concat(showNow?["40px","46px"]:[])){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
- const hr=el("tr");for(const x of ["market","side","price","fair","stake","resolves"].concat(showNow?["now","P&L"]:[]))hr.append(el("th",null,x));tb.append(hr);
+ for(const w of ["24px","","36px","74px","46px","46px"].concat(showNow?["40px","48px"]:[])){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
+ const hr=el("tr");for(const x of ["","market","side","px→fair","stake","settle"].concat(showNow?["now","P&L"]:[]))hr.append(el("th",null,x));tb.append(hr);
  for(const pk of picks)for(const r of pickRow(pk,showNow))tb.append(r);return tb}
 function render(d){mount();const body=document.getElementById("pb-body"),tag=document.getElementById("pb-tag");body.textContent="";
  let all=(d&&d.picks)||null;if(!all){all=[];for(const p of (d&&d.posts)||[])for(const pk of p.picks||[])all.push(pk)}
