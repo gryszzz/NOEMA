@@ -1187,6 +1187,16 @@ async def timing_api() -> dict[str, Any]:
     return await asyncio.to_thread(board, tdb)
 
 
+@app.get("/api/other-chains")
+async def other_chains_api() -> dict[str, Any]:
+    """Read-only OTHER CHAINS board (paper only): per-chain funnel, skips by reason, discovery lag,
+    paper results and the pre-registered go/no-go verdict."""
+    from .other_chains import board
+    db = os.getenv("NOEMA_OTHERCHAIN_DB",
+                   os.path.join(os.path.dirname(_db_path()) or ".", "other_chains.db"))
+    return await asyncio.to_thread(board, db)
+
+
 @app.get("/api/metas")
 async def metas_api() -> dict[str, Any]:
     """Read-only META LAUNCH board: hot metas, matched launches, shield rejections, paper positions and the
