@@ -187,14 +187,24 @@ class ForecastLedger:
         )
         # Materialize the graph from the same immutable observation so Home
         # and later analysis can query either current links or historical proof.
-        self._append_canonical_graph(observation, observed_at, payload)
+        self._append_canonical_graph(observation, observed_at, payload, digest)
         self.conn.commit()
         return cursor.rowcount == 1
 
     def _append_canonical_graph(
         self, observation: dict[str, Any], observed_at: str, payload: str,
+        pair_observation_hash: str | None = None,
     ) -> None:
         identity = observation["canonical_identity"]
+        # The full observation payload lives once in canonical_pair_observations.
+        # Projection rows keep their own hashes (still derived from the full
+        # payload) but store a compact reference instead of another ~57 KB copy;
+        # the 4-5x duplication grew noema.console-state.db by ~9 GB/day.
+        pair_hash = pair_observation_hash or hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        pair_ref = json.dumps(
+            {"ref": "canonical_pair_observations", "observation_hash": pair_hash},
+            sort_keys=True, separators=(",", ":"),
+        )
         comparison = identity["comparison"]
         contracts = identity["contracts"]
         event_id = comparison.get("canonical_event_id")
@@ -245,7 +255,9 @@ class ForecastLedger:
                 """INSERT OR IGNORE INTO contract_observations
                    (venue, contract_id, observed_at, observation_hash, observation_json)
                    VALUES (?, ?, ?, ?, ?)""",
-                (venue, contract_id, observed_at, observation_hash, payload),
+                (venue, contract_id, observed_at, observation_hash, json.dumps(
+                    {"ref": "canonical_pair_observations", "observation_hash": pair_hash,
+                     "contract": contract}, sort_keys=True, separators=(",", ":"), default=str)),
             )
             self.conn.execute(
                 """INSERT INTO venue_contracts
@@ -267,7 +279,7 @@ class ForecastLedger:
                (observed_at, canonical_event_id, canonical_proposition_id,
                 status_json, assessment_hash, evidence_json)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (observed_at, event_id, proposition_id, assessment, assessment_hash, payload),
+            (observed_at, event_id, proposition_id, assessment, assessment_hash, pair_ref),
         )
         settlement_evidence = observation.get("settlement_assessment")
         if isinstance(settlement_evidence, dict):
@@ -282,7 +294,7 @@ class ForecastLedger:
                 """INSERT OR IGNORE INTO settlement_assessments
                    (observed_at, canonical_proposition_id, status, assessment_hash, evidence_json)
                    VALUES (?, ?, ?, ?, ?)""",
-                (observed_at, proposition_id, str(settlement), settlement_hash, payload),
+                (observed_at, proposition_id, str(settlement), settlement_hash, pair_ref),
             )
         economic_evidence = observation.get("economic_comparability")
         if isinstance(economic_evidence, dict):

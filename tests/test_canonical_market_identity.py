@@ -462,3 +462,50 @@ def test_registered_quote_fast_path_does_not_rerun_identity_resolver(monkeypatch
     assert refreshed["kalshi"]["yes_bid"] == 0.31
     assert refreshed["polymarket_us"]["yes_ask"] == 0.35
     assert refreshed["economic_comparability"]["status"] == "unavailable"
+
+
+def test_canonical_graph_projections_reference_pair_payload_instead_of_copying(tmp_path):
+    import hashlib
+    import json
+
+    kalshi = _identity("kalshi", "KXMLB-26LAD", 2026, "Los Angeles Dodgers", "Rule A")
+    polymarket = _identity("polymarket-us", "ws-champion-dodgers", 2026, "Dodgers", "Rule B")
+    observation = {
+        "observed_at": "2026-09-28T12:00:00+00:00",
+        "canonical_identity": {
+            "comparison": compare_contract_identities(kalshi, polymarket),
+            "contracts": [kalshi.to_dict(), polymarket.to_dict()],
+        },
+        "contract_clauses": {"blob": "x" * 20_000},
+        "kalshi": {"yes_bid": 0.16, "yes_ask": 0.17},
+        "polymarket_us": {"yes_bid": 0.16, "yes_ask": 0.168},
+    }
+    ledger = ForecastLedger(str(tmp_path / "predictions.db"))
+    assert ledger.append_canonical_pair_observation(observation) is True
+    conn = ledger.conn
+    pair_hash, pair_json = conn.execute(
+        "SELECT observation_hash, observation_json FROM canonical_pair_observations").fetchone()
+    assert len(pair_json) > 20_000
+    assert pair_hash == hashlib.sha256(pair_json.encode()).hexdigest()
+    projections = (
+        [r[0] for r in conn.execute("SELECT observation_json FROM contract_observations ORDER BY id")]
+        + [r[0] for r in conn.execute("SELECT evidence_json FROM identity_assessments")]
+        + [r[0] for r in conn.execute("SELECT evidence_json FROM settlement_assessments")]
+    )
+    assert len(projections) == 4
+    for raw in projections:
+        assert len(raw) < 5_000
+        ref = json.loads(raw)
+        assert ref["ref"] == "canonical_pair_observations"
+        assert ref["observation_hash"] == pair_hash
+    contracts = [json.loads(r[0])["contract"] for r in
+                 conn.execute("SELECT observation_json FROM contract_observations ORDER BY id")]
+    assert [c["venue"] for c in contracts] == ["kalshi", "polymarket-us"]
+    # The reference resolves back to the single stored copy.
+    resolved = conn.execute("SELECT observation_json FROM canonical_pair_observations WHERE observation_hash=?",
+                            (json.loads(projections[0])["observation_hash"],)).fetchone()[0]
+    assert resolved == pair_json
+    # Re-appending the identical observation stays idempotent across all tables.
+    assert ledger.append_canonical_pair_observation(observation) is False
+    assert conn.execute("SELECT count(*) FROM contract_observations").fetchone()[0] == 2
+    conn.close()
