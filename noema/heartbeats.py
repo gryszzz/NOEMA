@@ -367,6 +367,10 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                                "SELECT MAX(at) FROM oc_polls WHERE ok=1 AND source='geckoterminal'"),
                           detail="other-chain launches (paper)"), "feed:other_chains", "feed", 60))
     P(_probe(lambda: _x_inbox(main_db), "social:x_inbox", "social", 600))
+    P(_probe(lambda: _rec("feed:prediction_bot", "feed", 300,
+                          _max(j("prediction_bot.db"), "SELECT MAX(at) FROM prediction_ingest_runs"),
+                          detail="Prediction Bot drops -> prediction-inbox (paper picks)"),
+             "feed:prediction_bot", "feed", 300))
     P(_probe(lambda: _news(main_db), "social:news", "social", 300))
     P(_probe(lambda: _rec("social:culture", "social", 600,
                           _max(main_db, "SELECT MAX(started_at) FROM crawl_sweeps WHERE crawler='culture' AND errors<requests"),
