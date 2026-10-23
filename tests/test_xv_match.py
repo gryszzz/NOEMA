@@ -75,3 +75,27 @@ def test_stored_pairs_roundtrip():
     x.ensure_schema(c)
     c.execute("INSERT INTO xv_pairs VALUES ('p','k','F','X','equivalent','[]','{}','{}','null',1.0,datetime('now'))")
     assert x.stored_pairs(c)[0]["verdict"] == "equivalent"
+
+
+def test_gap_stats_reports_independent_pair_bucket_samples():
+    import sqlite3 as _sqlite3
+
+    from noema import xv_match
+
+    conn = _sqlite3.connect(":memory:")
+    xv_match.ensure_schema(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(xv_gap_history)")]
+    rows = [("2026-10-23T10:00:00+00:00", 0.05), ("2026-10-23T10:10:00+00:00", 0.06),
+            ("2026-10-23T10:20:00+00:00", -0.01), ("2026-10-23T12:00:00+00:00", -0.02)]
+    for at, edge in rows:
+        values = {"at": at, "pm_market": "PM-1", "kalshi_market": "K-1", "edge": edge,
+                  "verdict": "equivalent", "skew_s": 0.0}
+        use = [c for c in cols if c in values]
+        conn.execute(f"INSERT INTO xv_gap_history ({','.join(use)}) VALUES ({','.join('?' * len(use))})",
+                     [values[c] for c in use])
+    stats = xv_match.gap_stats(conn, buffer=0.02)
+    assert stats["pair_observations"] == 4
+    assert stats["observations_clearing"] == 2
+    assert stats["independent_observations"] == 2
+    assert stats["independent_clearing"] == 1
+    assert stats["independent_hit_rate"] == 0.5
