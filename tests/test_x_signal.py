@@ -109,7 +109,7 @@ def test_ingest_end_to_end(tmp_path, monkeypatch):
     _drop(inbox, "c.json", "politics", [_post(1), _post(2, handle="NateSilver538")])
     s2 = xs.ingest_inbox(db, inbox, config=CFG, now=NOW)
     assert s2["posts_new"] == 0 and s2["duplicates"] == 2 and s2["ledger_forecasts"] == 0
-    ctx = xs.x_context_for_market(db, "polymarket-us", "tx-sen-d")
+    ctx = xs.x_context_for_market(db, "polymarket-us", "tx-sen-d", now=NOW)
     assert ctx["trust"] == "untrusted_social_text" and ctx["posts_top"][0]["author"].startswith("@")
     w = xs.x_wire(db)
     assert w["status"] == "active" and w["effects"] and {t["topic"] for t in w["topics"]} == set(xs.TOPICS)
