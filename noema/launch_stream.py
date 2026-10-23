@@ -150,8 +150,9 @@ class QueuedWriter:
 
     in_transaction = False
 
-    def __init__(self, path: str, every: float | None = None, max_batch: int = 5000) -> None:
+    def __init__(self, path: str, every: float | None = None, max_batch: int = 5000, connect_fn: Any = None) -> None:
         self.path, self.every, self.max_batch = path, COMMIT_S if every is None else every, max_batch
+        self.connect_fn = connect_fn  # other stream DBs (pool_stream) reuse the writer with their own schema
         self.q: queue.SimpleQueue = queue.SimpleQueue()
         self.written = self.retries = self.dropped = 0
         self.max_lag_s = 0.0
@@ -201,7 +202,7 @@ class QueuedWriter:
                 time.sleep(0.25)
 
     def _run(self) -> None:
-        conn = connect(self.path)
+        conn = (self.connect_fn or connect)(self.path)
         batch: list = []
         try:
             while not (self._stop.is_set() and self.q.empty()):
