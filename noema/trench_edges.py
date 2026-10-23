@@ -83,21 +83,18 @@ def apply_gap_guard(coins: dict[str, dict[str, Any]], gap_s: float = GAP_S) -> d
     return out
 
 
-def _rpc_only(db: str, known: set[str]) -> dict[str, dict[str, Any]]:
+def _rpc_only(db: str, known: set[str], quality: bool = True) -> dict[str, dict[str, Any]]:
     """Mints whose trades Helius decoded but whose create PumpPortal never delivered. t0 = first recorded trade
-    (the stream starts following at the on-chain create, so the first trade is at or just after creation)."""
+    (the stream starts following at the on-chain create, so the first trade is at or just after creation).
+    Same tape_quality rules as hft.load; exclusions are added to hft.QUALITY."""
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    out: dict[str, dict[str, Any]] = {}
-    for mint, at, side, sol, trader, mc in c.execute(
-            "SELECT mint, received_at, side, sol, trader, market_cap_sol FROM launch_trades WHERE mint LIKE '%pump' "
-            "AND source='helius' ORDER BY received_at"):
-        if mint in known or not mc or mc <= 0 or side not in ("buy", "sell"):
-            continue
-        t = hft._ts(at)
-        v = out.setdefault(mint, {"t0": t, "creator": None, "tr": [], "smart": set(), "rpc_only": True})
-        v["tr"].append((t, side == "buy", float(sol or 0), trader, float(mc)))
+    raw, _end = hft.load_tape(c, "WHERE mint LIKE '%pump' AND source='helius'", keep=lambda m: m not in known)
     c.close()
-    return {m: v for m, v in out.items() if len(v["tr"]) >= 3}
+    out: dict[str, dict[str, Any]] = {}
+    for mint, (tr, flags) in hft.clean_tape(raw, {}, hft.QUALITY, quality).items():
+        if len(tr) >= 3:
+            out[mint] = {"t0": tr[0][0], "creator": None, "tr": tr, "smart": set(), "rpc_only": True, "flags": flags}
+    return out
 
 
 def creator_history(db: str) -> dict[str, list[float]]:

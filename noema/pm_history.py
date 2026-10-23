@@ -182,6 +182,7 @@ def backfill_reference(c: sqlite3.Connection, client: httpx.Client) -> dict[str,
             continue
         rows = [(sym, t, float(v)) for t, v in zip(ts, closes, strict=False) if v]
         c.executemany("INSERT OR REPLACE INTO pm_ref_bars VALUES (?,?,?)", rows)
+        c.commit()  # never hold pm_train.db across the next fetch + sleep
         out[sym] = len(rows)
         time.sleep(0.5)
     c.commit()
@@ -203,6 +204,7 @@ def backfill_weather(c: sqlite3.Connection, client: httpx.Client, since: datetim
             c.execute("INSERT OR REPLACE INTO pm_weather_fc VALUES (?,?,?,?,?)",
                       (code, day, hi, lo, datetime.now(UTC).isoformat()))
             n += 1
+        c.commit()
         time.sleep(0.3)
     c.commit()
     return n
@@ -247,10 +249,15 @@ if __name__ == "__main__":
 
 
 def refresh_live(c: sqlite3.Connection, client: httpx.Client | None = None) -> dict[str, int]:
-    """Keep the last 2 days of reference bars and today's/tomorrow's weather forecast fresh for live agents."""
+    """Keep the last 2 days of reference bars and today's/tomorrow's weather forecast fresh for live agents.
+
+    All HTTP happens first with no write transaction open; the rows are then written in one short
+    transaction (previously Yahoo/open-meteo fetches ran inside it and held pm_train.db up to 143 s)."""
     ensure_schema(c)
+    c.commit()
     client = client or httpx.Client(timeout=20)
     out: dict[str, int] = {}
+    bars: list[tuple[str, int, float]] = []
     for _, sym in REFERENCE:
         try:
             r = client.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
@@ -260,8 +267,9 @@ def refresh_live(c: sqlite3.Connection, client: httpx.Client | None = None) -> d
                                                       strict=False) if v]
         except Exception:  # noqa: BLE001, S112
             continue
-        c.executemany("INSERT OR REPLACE INTO pm_ref_bars VALUES (?,?,?)", rows)
+        bars += rows
         out[sym] = len(rows)
+    fc: list[tuple[str, str, float, float, str]] = []
     for code, (lat, lon) in CITIES.items():
         try:
             d = client.get("https://api.open-meteo.com/v1/forecast", params={
@@ -269,8 +277,9 @@ def refresh_live(c: sqlite3.Connection, client: httpx.Client | None = None) -> d
                 "temperature_unit": "fahrenheit", "timezone": "America/New_York"}).json()["daily"]
         except Exception:  # noqa: BLE001, S112
             continue
-        for day, hi, lo in zip(d["time"], d["temperature_2m_max"], d["temperature_2m_min"], strict=False):
-            c.execute("INSERT OR REPLACE INTO pm_weather_fc VALUES (?,?,?,?,?)",
-                      (code, day, hi, lo, datetime.now(UTC).isoformat()))
+        fc += [(code, day, hi, lo, datetime.now(UTC).isoformat())
+               for day, hi, lo in zip(d["time"], d["temperature_2m_max"], d["temperature_2m_min"], strict=False)]
+    c.executemany("INSERT OR REPLACE INTO pm_ref_bars VALUES (?,?,?)", bars)
+    c.executemany("INSERT OR REPLACE INTO pm_weather_fc VALUES (?,?,?,?,?)", fc)
     c.commit()
     return out

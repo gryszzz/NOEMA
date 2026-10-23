@@ -24,7 +24,10 @@ import itertools
 import json
 import math
 import os
+import random
+import re
 import sqlite3
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,6 +36,7 @@ import httpx
 
 from .accuracy_ledger import ensure_accuracy_schema, record_forecast, resolve_open_forecasts
 from .sqlite_util import connect as sqlite_connect
+from .sqlite_util import is_busy
 
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 COINBASE = "https://api.exchange.coinbase.com"
@@ -111,26 +115,87 @@ def category(series: str) -> str:
     return "other"
 
 
+RETRY_STATUS = {429, 500, 502, 503, 504}
+_SECRETISH = re.compile(r"(?i)(key|token|secret|signature|authorization|bearer)[^,;&\s]*[=:]\s*[^,;&\s]+")
+
+
+def _safe_body(r: httpx.Response, limit: int = 200) -> str:
+    """First bytes of an error body for diagnostics; anything secret-shaped is redacted."""
+    try:
+        text = r.text[:limit]
+    except Exception:  # noqa: BLE001
+        return ""
+    return _SECRETISH.sub(r"\1=<redacted>", text.replace("\n", " "))
+
+
+def _log_http(event: str, **fields: Any) -> None:
+    fields.update(event=event, ts=datetime.now(UTC).isoformat(timespec="seconds"))
+    print(json.dumps(fields, default=str), file=sys.stderr, flush=True)
+
+
 class Api:
-    def __init__(self, client: httpx.Client | None = None) -> None:
-        self.c = client or httpx.Client(timeout=20, headers={"accept": "application/json"})
+    """Public Kalshi/Coinbase reads with a minimum gap, jittered backoff and bounded retries.
+
+    Retries 429 / 5xx / timeouts / transport errors (honoring Retry-After), and a 403 once
+    (Kalshi's edge returns transient 403s under burst). Each failure is logged with the HTTP
+    status and the first bytes of the body (secret-shaped substrings redacted; requests carry
+    no credentials).
+    """
+
+    def __init__(self, client: httpx.Client | None = None, *, attempts: int = 4,
+                 base_backoff: float = 1.0, sleep: Any = time.sleep) -> None:
+        self.c = client or httpx.Client(timeout=httpx.Timeout(20, connect=8),
+                                        headers={"accept": "application/json"})
         self.last = 0.0
         self.calls = 0
+        self.attempts = attempts
+        self.base_backoff = base_backoff
+        self.sleep = sleep
+        self.errors: dict[str, int] = {}
+
+    def _count(self, key: str) -> None:
+        self.errors[key] = self.errors.get(key, 0) + 1
+
+    def _backoff(self, attempt: int, retry_after: str | None = None) -> float:
+        try:
+            ra = float(retry_after) if retry_after else 0.0
+        except ValueError:
+            ra = 0.0
+        d = max(ra, self.base_backoff * 2 ** attempt) * (0.5 + random.random())
+        return min(30.0, d)
 
     def get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        wait = MIN_GAP_S - (time.monotonic() - self.last)
-        if wait > 0:
-            time.sleep(wait)
-        for attempt in range(3):
+        path = httpx.URL(url).path
+        forbidden_retried = False
+        last_exc: Exception | None = None
+        for attempt in range(self.attempts):
+            wait = MIN_GAP_S - (time.monotonic() - self.last)
+            if wait > 0:
+                self.sleep(wait)
             self.last = time.monotonic()
             self.calls += 1
-            r = self.c.get(url, params=params)
-            if r.status_code == 429:
-                time.sleep(2 * (attempt + 1))
+            try:
+                r = self.c.get(url, params=params)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                self._count(type(exc).__name__)
+                _log_http("fs_http_error", path=path, error=type(exc).__name__, attempt=attempt + 1)
+                last_exc = exc
+                self.sleep(self._backoff(attempt))
                 continue
-            r.raise_for_status()
-            return r.json()
-        raise RuntimeError("rate limited")
+            if r.status_code < 400:
+                return r.json()
+            self._count(str(r.status_code))
+            _log_http("fs_http_error", path=path, status=r.status_code, attempt=attempt + 1,
+                      body=_safe_body(r))
+            retryable = r.status_code in RETRY_STATUS or (r.status_code == 403 and not forbidden_retried)
+            if r.status_code == 403:
+                forbidden_retried = True
+            if not retryable or attempt == self.attempts - 1:
+                r.raise_for_status()
+            self.sleep(self._backoff(attempt, r.headers.get("retry-after")))
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("kalshi request retries exhausted")
 
 
 def _quote(m: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
@@ -168,6 +233,7 @@ def discover(c: sqlite3.Connection, api: Api, now: datetime, max_pages: int = 20
                 tracked += 1
             b, a, last = _quote(m)
             c.execute("INSERT OR IGNORE INTO fs_quotes VALUES (?,?,?,?,?)", (m["ticker"], now.isoformat(), b, a, last))
+        c.commit()  # never hold the noema.db write lock across the next page fetch
         cursor = data.get("cursor")
         if not cursor:
             break
@@ -408,6 +474,7 @@ def forecast(c: sqlite3.Connection, api: Api, live: dict[str, dict[str, Any]], n
             if agent.startswith("pm-"):
                 paper_trade(c, agent, why, row["ticker"], p, b, a, now)
             written += 1
+        c.commit()  # forecasts_for() may call Coinbase for the next market
     c.row_factory = None
     return written
 
@@ -462,69 +529,212 @@ def schedule_marks(c: sqlite3.Connection, now: datetime) -> int:
     return added
 
 
-_PM: dict[str, Any] = {}
+PM_BUDGET = int(os.environ.get("NOEMA_FS_PM_BUDGET", "200"))  # distinct PM-US markets quoted per cycle
+TOKEN_SETTLE_S = 120  # a 1m Coinbase candle is final ~2 min after its minute starts
+_CB_MISSING: set[str] = set()  # symbols without a Coinbase <SYM>-USD product
 
 
-def _pm_bbo(slug: str) -> tuple[float | None, float | None]:
-    if "client" not in _PM:
-        from polymarket_us import PolymarketUS  # public market data only
-        _PM["client"] = PolymarketUS(timeout=7.0, max_retries=0)
-    d = (_PM["client"].markets.bbo(slug) or {}).get("marketData") or {}
-    def px(v: Any) -> float | None:
-        if isinstance(v, dict):
-            v = v.get("value")
-        return _f(v)
-    return px(d.get("bestBid")), px(d.get("bestAsk"))
+def _mark_late(off: int, late: float) -> bool:
+    return late > max(90, off * 0.25)
+
+
+def _pm_quotes(slugs: list[str], now: datetime) -> dict[str, tuple[float | None, float | None, str]]:
+    """Live PM-US top of book: pm_watch (<= 45 s old) first, then one batched public list call
+    per 100 slugs (bestBidQuote/bestAskQuote), never one BBO call per market (per-IP rate limit)."""
+    from . import pm_watch
+    out: dict[str, tuple[float | None, float | None, str]] = {}
+    try:
+        for slug, (b, a, _at) in pm_watch.latest_many(slugs, max_age_s=45, now=now).items():
+            out[slug] = (b, a, "ok")
+    except Exception:  # noqa: BLE001, S110 - the watcher is an accelerator, never a dependency
+        pass
+    todo = [s_ for s_ in slugs if s_ not in out][:PM_BUDGET]
+    if todo:
+        try:
+            got = pm_watch.fetch_batch(todo)
+        except Exception as exc:  # noqa: BLE001
+            got = {}
+            err = f"error:{type(exc).__name__}"
+            for s_ in todo:
+                out[s_] = (None, None, err)
+        for s_ in todo:
+            if s_ in got:
+                out[s_] = (*got[s_], "ok")
+            elif s_ not in out:
+                out[s_] = (None, None, "error:not_listed")
+    return out
+
+
+def _cb_symbol(sym: str) -> str | None:
+    sym = (sym or "").upper()
+    if not re.fullmatch(r"[A-Z0-9]{2,10}", sym) or sym in _CB_MISSING or sym in {"USDC", "USDT", "USD"}:
+        return None
+    return f"{sym}-USD"
+
+
+def token_prices(api: Api, sym: str, times: list[datetime]) -> dict[datetime, float | None]:
+    """USD price at each time from public Coinbase 1-minute candles (open of the minute containing t).
+
+    Coinbase returns <= 300 candles per call, so times are grouped into <= 290-minute windows.
+    A symbol without a Coinbase USD product returns {} and is remembered as unpriceable.
+    """
+    product = _cb_symbol(sym)
+    if not product or not times:
+        return {}
+    out: dict[datetime, float | None] = {}
+    ts = sorted(set(times))
+    i = 0
+    while i < len(ts):
+        start = ts[i].replace(second=0, microsecond=0) - timedelta(minutes=5)
+        end = start + timedelta(minutes=290)
+        group = [t for t in ts[i:] if t < end]
+        i += len(group)
+        try:
+            rows = api.get(f"{COINBASE}/products/{product}/candles",
+                           {"granularity": 60, "start": start.isoformat(), "end": end.isoformat()})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (400, 404):
+                _CB_MISSING.add(sym.upper())
+                return {}
+            raise
+        opens = {int(r[0]): float(r[3]) for r in rows or [] if isinstance(r, list) and len(r) >= 5}
+        for t in group:
+            m = int(t.timestamp()) // 60 * 60
+            px = next((opens[k] for k in (m, m - 60, m - 120) if k in opens), None)
+            out[t] = px
+    return out
 
 
 def capture_marks(c: sqlite3.Connection, api: Api, now: datetime) -> int:
+    """Measure due news/X marks: read due rows, fetch with no transaction open, write once.
+
+    * Kalshi: live quote (or stored quote / 1m candle for the -5m mark).
+    * Polymarket US: pm_watch quote or one batched public list call per 100 markets.
+    * Token (X-linked crypto symbols): Coinbase 1m candle at the exact due time - exact even
+      when processed late, so token marks are never 'missed' (status 'candle', mid=USD price;
+      'unpriceable' when the symbol has no Coinbase USD market).
+    """
     due = c.execute("SELECT item_kind, item_id, venue, market_id, t0, offset_s, due_at FROM news_quote_marks"
-                    " WHERE captured_at IS NULL AND due_at <= ? ORDER BY due_at LIMIT 200",
+                    " WHERE captured_at IS NULL AND due_at <= ? ORDER BY due_at LIMIT 600",
                     (now.isoformat(),)).fetchall()
-    cache: dict[tuple[str, str], tuple[float | None, float | None, str]] = {}
-    got = 0
-    pm_budget = 15  # Polymarket US public BBO calls per cycle
+    if c.in_transaction:
+        c.commit()
+    res: dict[tuple, tuple[float | None, float | None, float | None, str]] = {}
+    kalshi_live: set[str] = set()
+    pm_live: list[str] = []
+    tokens: dict[str, list[tuple[tuple, datetime]]] = {}
     for kind, item, venue, mid, t0, off, due_at in due:
+        pk = (kind, item, venue, mid, off)
         late = (now - _dt(due_at)).total_seconds()
-        status = "ok"
-        b = a = None
-        if off < 0:
-            # Pre-event mark: only real stored history counts (Kalshi tracked quote or 1m candle).
+        if venue == "token":
+            if late < TOKEN_SETTLE_S:
+                continue  # candle not final yet; measure next cycle
+            if _cb_symbol(mid) is None:
+                res[pk] = (None, None, None, "unpriceable")
+            else:
+                tokens.setdefault(mid.upper(), []).append((pk, _dt(due_at)))
+        elif off < 0:
             row = c.execute("SELECT bid, ask FROM fs_quotes WHERE ticker=? AND at BETWEEN ? AND ? ORDER BY at DESC"
                             " LIMIT 1", (mid, (_dt(due_at) - timedelta(minutes=3)).isoformat(), due_at)).fetchone()
             if row:
-                b, a, status = row[0], row[1], "history"
+                res[pk] = (row[0], row[1], None, "history")
             elif venue.startswith("kalshi"):
-                b, a, status = _kalshi_candle(api, mid, _dt(due_at))
+                b, a, st = _kalshi_candle(api, mid, _dt(due_at))
+                res[pk] = (b, a, None, st)
             else:
-                status = "no_history"
-        elif late > max(90, off * 0.25):
-            status = "missed"
-        else:
-            key = (venue, mid)
-            if key not in cache and not venue.startswith("kalshi"):
-                if pm_budget <= 0:
-                    continue
-                pm_budget -= 1
-            if key not in cache:
+                hist = None
                 try:
-                    if venue.startswith("kalshi"):
-                        m = fetch_by_tickers(api, [mid]).get(mid) or {}
-                        qb, qa, _ = _quote(m)
-                    else:
-                        qb, qa = _pm_bbo(mid)
-                    cache[key] = (qb, qa, "ok")
-                except Exception as exc:  # noqa: BLE001
-                    cache[key] = (None, None, f"error:{type(exc).__name__}")
-            b, a, status = cache[key]
-            if status.startswith("error") and late < max(90, off * 0.25):
-                continue  # transient (e.g. rate limit): retry next cycle while still on time
-        midp = (b + a) / 2 if b is not None and a is not None else None
-        c.execute("UPDATE news_quote_marks SET captured_at=?, bid=?, ask=?, mid=?, status=? WHERE item_kind=? AND"
-                  " item_id=? AND venue=? AND market_id=? AND offset_s=?",
-                  (now.isoformat(), b, a, midp, status, kind, item, venue, mid, off))
-        got += 1
-    return got
+                    from . import pm_watch
+                    hist = pm_watch.quote_at(mid, _dt(due_at))
+                except Exception:  # noqa: BLE001
+                    hist = None
+                res[pk] = (hist[0], hist[1], None, "history") if hist else (None, None, None, "no_history")
+        elif _mark_late(off, late):
+            res[pk] = (None, None, None, "missed")
+        elif venue.startswith("kalshi"):
+            kalshi_live.add(mid)
+        else:
+            if mid not in pm_live:
+                pm_live.append(mid)
+    kq: dict[str, dict[str, Any]] = {}
+    if kalshi_live:
+        try:
+            kq = fetch_by_tickers(api, sorted(kalshi_live))
+        except Exception as exc:  # noqa: BLE001
+            _log_http("fs_marks_kalshi_error", error=type(exc).__name__)
+            kq = {}
+    pq = _pm_quotes(pm_live, now) if pm_live else {}
+    for sym, items in tokens.items():
+        try:
+            px = token_prices(api, sym, [t for _, t in items])
+        except Exception as exc:  # noqa: BLE001 - retry next cycle
+            _log_http("fs_marks_token_error", symbol=sym, error=type(exc).__name__)
+            continue
+        for pk, t in items:
+            if _cb_symbol(sym) is None:
+                res[pk] = (None, None, None, "unpriceable")
+            elif px.get(t) is not None:
+                res[pk] = (None, None, px[t], "candle")
+            else:
+                res[pk] = (None, None, None, "no_history")
+    for kind, item, venue, mid, t0, off, due_at in due:
+        pk = (kind, item, venue, mid, off)
+        if pk in res or venue == "token" or off < 0:
+            continue
+        late = (now - _dt(due_at)).total_seconds()
+        if venue.startswith("kalshi"):
+            m = kq.get(mid)
+            if m is None:
+                if kalshi_live and kq:
+                    res[pk] = (None, None, None, "error:not_found")
+                continue  # fetch failed: retry next cycle while still on time
+            qb, qa, _ = _quote(m)
+            res[pk] = (qb, qa, None, "ok")
+        else:
+            q = pq.get(mid)
+            if q is None or q[2].startswith("error"):
+                if q is not None and _mark_late(off, late + CYCLE_SECONDS):
+                    res[pk] = (None, None, None, q[2])
+                continue  # over budget / transient: next cycle while still on time
+            res[pk] = (q[0], q[1], None, "ok")
+    rows = []
+    for (kind, item, venue, mid, off), (b, a, m, st) in res.items():
+        if m is None and b is not None and a is not None:
+            m = (b + a) / 2
+        rows.append((now.isoformat(), b, a, m, st, kind, item, venue, mid, off))
+    if rows:
+        c.executemany("UPDATE news_quote_marks SET captured_at=?, bid=?, ask=?, mid=?, status=? WHERE item_kind=?"
+                      " AND item_id=? AND venue=? AND market_id=? AND offset_s=?", rows)
+        c.commit()
+    return len(rows)
+
+
+def backfill_token_marks(c: sqlite3.Connection, api: Api, *, limit: int = 20000) -> dict[str, int]:
+    """Re-measure token marks recorded as missed/no_history from exact Coinbase 1m candles."""
+    rows = c.execute("SELECT item_kind, item_id, venue, market_id, offset_s, due_at FROM news_quote_marks"
+                     " WHERE venue='token' AND status IN ('missed','no_history') AND due_at <= ? LIMIT ?",
+                     ((datetime.now(UTC) - timedelta(seconds=TOKEN_SETTLE_S)).isoformat(), limit)).fetchall()
+    by_sym: dict[str, list[tuple[tuple, datetime]]] = {}
+    for kind, item, venue, mid, off, due_at in rows:
+        by_sym.setdefault((mid or "").upper(), []).append(((kind, item, venue, mid, off), _dt(due_at)))
+    out = {"candle": 0, "unpriceable": 0, "no_history": 0}
+    stamp = datetime.now(UTC).isoformat()
+    for sym, items in by_sym.items():
+        px = token_prices(api, sym, [t for _, t in items]) if _cb_symbol(sym) else {}
+        upd = []
+        for pk, t in items:
+            if _cb_symbol(sym) is None:
+                st, m = "unpriceable", None
+            elif px.get(t) is not None:
+                st, m = "candle", px[t]
+            else:
+                st, m = "no_history", None
+            out[st] += 1
+            upd.append((stamp, m, st, *pk))
+        c.executemany("UPDATE news_quote_marks SET captured_at=?, bid=NULL, ask=NULL, mid=?, status=? WHERE"
+                      " item_kind=? AND item_id=? AND venue=? AND market_id=? AND offset_s=?", upd)
+        c.commit()
+    return out
 
 
 def _kalshi_candle(api: Api, ticker: str, at: datetime) -> tuple[float | None, float | None, str]:
@@ -569,35 +779,59 @@ def stats(c: sqlite3.Connection, now: datetime) -> dict[str, Any]:
     }
 
 
+def _phase(c: sqlite3.Connection, out: dict[str, Any], name: str, fn: Any, default: Any = None,
+           attempts: int = 3) -> Any:
+    """Run one phase; a busy/locked DB rolls back and retries, then degrades to '<name>_error'.
+
+    Every phase is idempotent (INSERT OR IGNORE / guarded UPDATEs), so a retry never double counts,
+    and one phase losing the lock race no longer discards the whole cycle.
+    """
+    for i in range(attempts):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if not is_busy(exc):
+                raise
+            try:
+                c.rollback()
+            except sqlite3.Error:
+                pass
+            if i == attempts - 1:
+                out[f"{name}_error"] = "database_busy"
+                out.setdefault("lock_errors", 0)
+                out["lock_errors"] += 1
+                return default
+            time.sleep(min(8.0, 0.5 * 2 ** i) * (0.5 + random.random()))
+    return default
+
+
 def run_once(db: str, api: Api | None = None, now: datetime | None = None, *, force_discover: bool = False) -> dict[str, Any]:
     api = api or Api()
     now = now or datetime.now(UTC)
     c = sqlite_connect(db)
     try:
-        ensure_schema(c)
+        _phase(c, {}, "schema", lambda: (ensure_schema(c), c.commit()), attempts=6)
         out: dict[str, Any] = {"at": now.isoformat()}
         last = c.execute("SELECT MAX(at) FROM fs_runs WHERE summary_json LIKE '%\"discovered\"%'").fetchone()[0]
         if force_discover or not last or (now - _dt(last)).total_seconds() >= DISCOVER_EVERY:
-            out["discovered"] = discover(c, api, now)
-            c.commit()
-        live = snapshot(c, api, now)
-        c.commit()
+            out["discovered"] = _phase(c, out, "discover", lambda: (discover(c, api, now), c.commit())[0], 0)
+        live = _phase(c, out, "snapshot", lambda: (snapshot(c, api, now), c.commit())[0], {})
         try:
             pm_refresh()
         except Exception as exc:  # noqa: BLE001
-            out["pm_error"] = f"{type(exc).__name__}: {exc}"
-        out["microstructure"] = capture_microstructure(c, api, now)
-        c.commit()
-        out["forecasts_written"] = forecast(c, api, live, now)
-        c.commit()
-        out["settled_markets"], out["resolved_forecasts"] = settle(c, api, now, db)
-        c.commit()
-        out["marks_scheduled"] = schedule_marks(c, now)
-        out["marks_captured"] = capture_marks(c, api, now)
+            out["pm_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        out["microstructure"] = _phase(c, out, "microstructure",
+                                       lambda: (capture_microstructure(c, api, now), c.commit())[0], {})
+        out["forecasts_written"] = _phase(c, out, "forecast", lambda: (forecast(c, api, live, now), c.commit())[0], 0)
+        out["settled_markets"], out["resolved_forecasts"] = _phase(
+            c, out, "settle", lambda: (settle(c, api, now, db), c.commit())[0], (0, 0))
+        out["marks_scheduled"] = _phase(c, out, "schedule_marks", lambda: (schedule_marks(c, now), c.commit())[0], 0)
+        out["marks_captured"] = _phase(c, out, "capture_marks", lambda: capture_marks(c, api, now), 0)
         out["api_calls"] = api.calls
-        out.update(stats(c, now))
-        c.execute("INSERT INTO fs_runs (at, summary_json) VALUES (?,?)", (now.isoformat(), json.dumps(out)))
-        c.commit()
+        out["api_errors"] = dict(getattr(api, "errors", {}))
+        out.update(_phase(c, out, "stats", lambda: stats(c, now), {}) or {})
+        _phase(c, out, "run_log", lambda: (c.execute("INSERT INTO fs_runs (at, summary_json) VALUES (?,?)",
+                                                      (now.isoformat(), json.dumps(out))), c.commit()), attempts=6)
         return out
     finally:
         c.close()
@@ -608,8 +842,17 @@ def main() -> None:
     ap.add_argument("--db", default=os.environ.get("NOEMA_DB_PATH", "data/noema.db"))
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--backfill-token-marks", action="store_true",
+                    help="re-measure missed/no_history token marks from Coinbase 1m candles, then exit")
     a = ap.parse_args()
     api = Api()
+    if a.backfill_token_marks:
+        c = sqlite_connect(a.db)
+        try:
+            print(json.dumps(backfill_token_marks(c, api)), flush=True)
+        finally:
+            c.close()
+        return
     first = True
     while True:
         t = time.monotonic()
@@ -619,6 +862,7 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({"at": datetime.now(UTC).isoformat(), "error": f"{type(exc).__name__}: {exc}"}), flush=True)
         api.calls = 0
+        api.errors = {}
         if not a.loop:
             return
         time.sleep(max(5.0, CYCLE_SECONDS - (time.monotonic() - t)))

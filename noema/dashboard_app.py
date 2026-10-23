@@ -1247,6 +1247,13 @@ async def room_v7(since: int = 0) -> dict[str, Any]:
     return await asyncio.to_thread(build_room_v7, _db_path(), since_id=max(0, since))
 
 
+@app.get("/api/prediction-bot")
+async def prediction_bot_feed() -> dict[str, Any]:
+    """Read-only: Prediction Bot posts + paper-tracked picks (drop folder ingest; never trades)."""
+    from .prediction_inbox import default_db, room_view
+    return await asyncio.to_thread(room_view, default_db(_db_path()))
+
+
 _STATIC_DIR = Path(__file__).with_name("static")
 _ASSET_REF = re.compile(r'(/static/[\w./-]+\.(?:js|css|mjs))(?:\?v=[\w]+)?"')
 
@@ -1268,7 +1275,8 @@ def versioned_assets(html: str, static_dir: Path = _STATIC_DIR) -> str:
 async def _no_stale_room_assets(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path.startswith(("/static/", "/trading-room")) or path in ("/api/room-v7", "/api/opportunities"):
+    if path.startswith(("/static/", "/trading-room")) or path in (
+            "/api/room-v7", "/api/opportunities", "/api/prediction-bot"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
@@ -1480,3 +1488,10 @@ async def live_account() -> dict[str, Any]:
 async def prediction_venues(*, force: bool = False) -> dict[str, Any]:
     """Current official read-only status for supported prediction venues."""
     return await build_prediction_venue_status(force=force)
+
+
+# Added last so it is the outermost layer: traversal/smuggled paths are rejected before the auth
+# middleware, route matching or any static handler can interpret them.
+from .path_guard import PathGuardMiddleware
+
+app.add_middleware(PathGuardMiddleware)

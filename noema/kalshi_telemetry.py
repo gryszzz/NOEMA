@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import random
+import re
+import sys
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -27,6 +31,32 @@ def _dt(value: object | None) -> datetime | None:
 def _price(raw: dict[str, Any], name: str) -> Decimal | None:
     value = raw.get(name)
     return None if value is None else decimal_value(value)
+
+
+_SECRETISH = re.compile(r"(?i)(key|token|secret|signature|authorization|password)([\"']?\s*[:=]\s*)[^\s,&}]+")
+
+
+def _safe_body(response: httpx.Response, limit: int = 200) -> str:
+    try:
+        text = response.text[:limit]
+    except Exception:  # noqa: BLE001 - diagnostics only
+        return ""
+    return _SECRETISH.sub(r"\1\2[redacted]", " ".join(text.split()))
+
+
+def _backoff(attempt: int, retry_after: str | None = None, base: float = 0.5, cap: float = 15.0) -> float:
+    if retry_after:
+        try:
+            return min(cap, max(0.0, float(retry_after)))
+        except ValueError:
+            pass
+    return min(cap, base * (2 ** attempt)) * random.uniform(0.5, 1.5)
+
+
+def _log_http_error(path: str, status: int | None, attempt: int, detail: str) -> None:
+    # Path only: no query string, headers, key id or signature ever reach the log.
+    print(json.dumps({"event": "kalshi_http_error", "path": path, "status": status,
+                      "attempt": attempt, "detail": detail}), file=sys.stderr, flush=True)
 
 
 class KalshiTelemetry:
@@ -65,21 +95,40 @@ class KalshiTelemetry:
         params: dict[str, Any] | None = None,
         retries: int = 4,
     ) -> dict[str, Any]:
-        delay = 0.25
+        """Signed GET with jittered exponential backoff.
+
+        Retries 429/5xx, timeouts and transport errors; a 403 is retried once with a fresh
+        signature (a stale timestamp or a transient edge rejection looks identical to a bad key).
+        Each failed attempt logs path, status and a redacted body excerpt, never headers.
+        """
         sign_path = f"/trade-api/v2{endpoint}"
+        forbidden_retried = False
         for attempt in range(retries + 1):
-            response = await self.client.get(
-                endpoint,
-                params=params,
-                headers=self.signer.headers("GET", sign_path),
-            )
-            if response.status_code != 429:
-                response.raise_for_status()
+            last = attempt == retries
+            try:
+                response = await self.client.get(
+                    endpoint,
+                    params=params,
+                    headers=self.signer.headers("GET", sign_path),  # re-signed every attempt
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if isinstance(exc, httpx.LocalProtocolError):
+                    raise
+                _log_http_error(sign_path, None, attempt, type(exc).__name__)
+                if last:
+                    raise
+                await asyncio.sleep(_backoff(attempt))
+                continue
+            code = response.status_code
+            if code < 400:
                 return response.json()
-            if attempt == retries:
+            _log_http_error(sign_path, code, attempt, _safe_body(response))
+            retryable = code == 429 or code >= 500 or (code == 403 and not forbidden_retried)
+            if code == 403:
+                forbidden_retried = True
+            if last or not retryable:
                 response.raise_for_status()
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 4.0)
+            await asyncio.sleep(_backoff(attempt, response.headers.get("retry-after")))
         raise RuntimeError("unreachable")
 
     async def orders(self) -> list[ObservedOrder]:

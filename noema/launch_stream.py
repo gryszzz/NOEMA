@@ -23,6 +23,7 @@ from concurrent.futures import Future
 from datetime import UTC, datetime
 from typing import Any
 
+from . import tape_quality as tq
 from .sqlite_util import connect as sqlite_connect
 from .sqlite_util import is_busy
 
@@ -60,6 +61,27 @@ def b58(b: bytes) -> str:
     return "1" * (len(b) - len(b.lstrip(b"\0"))) + out
 
 
+def _trade_tail(data: bytes) -> tuple[int | None, str | None]:
+    """(mayhem_mode, quote_mint) from the extended TradeEvent tail, (None, None) on the short legacy layout.
+    After real_token_reserves(121..129): fee_recipient, fee_bps, fee, creator, creator_fee_bps, creator_fee,
+    track_volume u8 + 4 u64, ix_name string, mayhem_mode u8, 4 u64, vec<34 B>, quote_mint, quote_amount, v_quote."""
+    try:
+        o = 129 + 32 + 16 + 32 + 16 + 1 + 32
+        n = int.from_bytes(data[o:o + 4], "little")
+        o += 4 + n
+        if n > 64 or o >= len(data):
+            return None, None
+        mayhem = data[o]
+        o += 1 + 32
+        k = int.from_bytes(data[o:o + 4], "little")
+        o += 4 + 34 * k
+        if k > 64 or o + 32 > len(data):
+            return mayhem, None
+        return mayhem, b58(data[o:o + 32])
+    except IndexError:
+        return None, None
+
+
 def decode_event(data: bytes) -> dict[str, Any] | None:
     """pump.fun Anchor events (borsh). TradeEvent: mint,sol,tokens,is_buy,user,ts,vsol,vtok,...; CreateEvent: name,symbol,uri,mint,curve,user."""
     kind = _DISC.get(data[:8])
@@ -67,9 +89,14 @@ def decode_event(data: bytes) -> dict[str, Any] | None:
         if kind == "TradeEvent" and len(data) >= 113:
             sol, tok = int.from_bytes(data[40:48], "little"), int.from_bytes(data[48:56], "little")
             vsol, vtok = int.from_bytes(data[97:105], "little"), int.from_bytes(data[105:113], "little")
+            rsol = int.from_bytes(data[113:121], "little") if len(data) >= 121 else None
+            mayhem, quote = _trade_tail(data)
+            quality = tq.ingest_quality(mayhem, quote, vsol, rsol)
             return {"kind": "trade", "mint": b58(data[8:40]), "sol": sol / 1e9, "tokens": tok / 1e6,
                     "side": "buy" if data[56] else "sell", "trader": b58(data[57:89]),
-                    "market_cap_sol": round(vsol * 1e6 / vtok, 4) if vtok else None}
+                    # a non-SOL-quoted curve has no SOL reserves: its "mcap in SOL" is undefined, not 0
+                    "market_cap_sol": round(vsol * 1e6 / vtok, 4) if vtok and quality != "non_sol_quote" else None,
+                    "mayhem": mayhem, "quote_mint": quote, "quality": quality}
         if kind == "CreateEvent":
             o = 8
             for _ in range(3):
@@ -262,7 +289,7 @@ def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], fol
                 EXTEND[ev["mint"]] = now + WATCH_FOLLOW_S  # price the watched wallet's exit (smart-wallet study)
             key = sig if n == 0 else f"{sig}:{n}"
             n += insert_trade(c, key, ev["mint"], ev["side"], ev["sol"], ev["tokens"], ev["trader"],
-                              ev["market_cap_sol"], "helius", slot)
+                              ev["market_cap_sol"], "helius", slot, ev.get("quality"))
     return n
 
 
@@ -389,6 +416,8 @@ def connect(path: str) -> sqlite3.Connection:
         c.execute("ALTER TABLE launch_trades ADD COLUMN source TEXT")
     if "slot" not in cols:  # Solana slot of the trade (Helius context.slot); NULL for PumpPortal / older rows
         c.execute("ALTER TABLE launch_trades ADD COLUMN slot INTEGER")
+    if "quality" not in cols:  # tape_quality flag: mayhem / non_sol_quote / nonstd_curve; NULL = standard SOL curve
+        c.execute("ALTER TABLE launch_trades ADD COLUMN quality TEXT")
     c.commit()
     return c
 
@@ -404,13 +433,14 @@ def rpc_http_url() -> str | None:
 
 
 def insert_trade(c: sqlite3.Connection, sig: str, mint: str, side: str | None, sol: Any, tokens: Any, trader: Any,
-                 mcap: Any, source: str, slot: int | None = None) -> int:
-    """Dedupe by signature across sources; launch_trade_seen records every source's arrival for overlap/latency."""
+                 mcap: Any, source: str, slot: int | None = None, quality: str | None = None) -> int:
+    """Dedupe by signature across sources; launch_trade_seen records every source's arrival for overlap/latency.
+    quality: decoder flag (tape_quality.INGEST_FLAGS) for prints off the standard SOL curve; NULL = standard."""
     now = _now()
     c.execute("INSERT OR IGNORE INTO launch_trade_seen VALUES (?,?,?)", (sig.split(":")[0], source, now))
     return c.execute("INSERT OR IGNORE INTO launch_trades (signature, mint, received_at, side, sol, tokens, trader,"
-                     " market_cap_sol, source, slot) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                     (sig, mint, now, side, sol, tokens, trader, mcap, source, slot)).rowcount
+                     " market_cap_sol, source, slot, quality) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (sig, mint, now, side, sol, tokens, trader, mcap, source, slot, quality)).rowcount
 
 
 def _now() -> str:

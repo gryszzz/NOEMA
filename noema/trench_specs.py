@@ -25,6 +25,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from . import tape_quality as tq
 from . import trench_edges as te
 from . import trench_hft as hft
 
@@ -74,7 +75,7 @@ def ext_trades(db: str, mints: set[str]) -> dict[str, list[tuple[float, bool, fl
     for sig, mint, at, side, tok, trader, mc, sol in c.execute(
             "SELECT signature, mint, received_at, side, tokens, trader, market_cap_sol, sol FROM launch_trades "
             "WHERE mint LIKE '%pump' ORDER BY received_at"):
-        if mint in mints and side in ("buy", "sell") and mc:
+        if mint in mints and tq.row_reason(side, sol, tok, mc) is None:  # same row rules as hft.load
             out[mint].append((hft._ts(at), side == "buy", float(tok or 0), trader or "", float(mc),
                               (sig or "").split(":")[0], float(sol or 0)))
     c.close()
