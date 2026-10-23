@@ -429,27 +429,37 @@ def pm_forecasts(row: sqlite3.Row, mid: float, now: datetime) -> dict[str, tuple
     return out
 
 
-def paper_trade(c: sqlite3.Connection, agent: str, why: dict, ticker: str, p: float, b: float, a: float, now: datetime) -> None:
-    """Paper only: record a 10-contract trade when the trained agent is cleared (OOS P&L CI > 0) and edge > fee."""
+def paper_trade(c: sqlite3.Connection, agent: str, why: dict, ticker: str, p: float, b: float, a: float, now: datetime,
+                budget: Any = None, title: str = "") -> None:
+    """Paper only: when the trained agent is cleared (OOS P&L CI > 0) take the side whose fair minus
+    (price + fee + slippage) beats the entry buffer, sized at quarter-Kelly from the shared paper bankroll
+    (paper_risk: 5% per bet / per correlated group, small cap until the category has a held-out record)."""
     if not why.get("trade_enabled"):
         return
-    from .pm_models import kalshi_fee
-    if p - a > kalshi_fee(a):
-        side, price, edge = "yes", a, p - a - kalshi_fee(a)
-    elif (1 - p) - (1 - b) > kalshi_fee(1 - b):
-        side, price, edge = "no", 1 - b, (1 - p) - (1 - b) - kalshi_fee(1 - b)
-    else:
+    from . import paper_risk
+    if c.execute("SELECT 1 FROM fs_paper_trades WHERE agent_id=? AND ticker=?", (agent, ticker)).fetchone():
         return
-    from .edge_strategies import clears_fee_buffer
-    if not clears_fee_buffer(edge):
+    sides = [("yes", a, p), ("no", 1 - b, 1 - p)]
+    side, price, fair = max(sides, key=lambda x: paper_risk.net_edge("kalshi", x[2], x[1]))
+    if not paper_risk.passes_gate("kalshi", fair, price):
         return
+    budget = budget if budget is not None else paper_risk.load_budget(c)
+    d = budget.size("fast_settle", "kalshi", ticker, title, fair, price, reserve=False)
+    unit = paper_risk.all_in_cost("kalshi", price)
+    contracts = int(d.usd // unit) if d.usd > 0 else 0
+    if contracts < 1:
+        return
+    budget._take("noema", "fast_settle", "kalshi", ticker, title, contracts * (price + paper_risk.fee("kalshi", price)))
     c.execute("INSERT OR IGNORE INTO fs_paper_trades (at, agent_id, ticker, side, price, fee, prob, edge, contracts)"
-              " VALUES (?,?,?,?,?,?,?,?,?)", (now.isoformat(), agent, ticker, side, price, kalshi_fee(price), p, edge, 10))
+              " VALUES (?,?,?,?,?,?,?,?,?)", (now.isoformat(), agent, ticker, side, price,
+                                              paper_risk.fee("kalshi", price), p,
+                                              paper_risk.net_edge("kalshi", fair, price), contracts))
 
 
 def forecast(c: sqlite3.Connection, api: Api, live: dict[str, dict[str, Any]], now: datetime) -> int:
     c.row_factory = sqlite3.Row
     written = 0
+    budget = None
     rows = c.execute("SELECT * FROM fs_markets WHERE result IS NULL AND close_time > ?",
                      ((now + timedelta(minutes=2)).isoformat(),)).fetchall()
     for row in rows:
@@ -472,7 +482,10 @@ def forecast(c: sqlite3.Connection, api: Api, live: dict[str, dict[str, Any]], n
                           "close_time": row["close_time"], "bid": b, "ask": a, "paper_only": True})
             c.execute("INSERT INTO fs_forecasts VALUES (?,?,?,?)", (row["ticker"], agent, fid, now.isoformat()))
             if agent.startswith("pm-"):
-                paper_trade(c, agent, why, row["ticker"], p, b, a, now)
+                if why.get("trade_enabled") and budget is None:
+                    from .paper_risk import load_budget
+                    budget = load_budget(c)
+                paper_trade(c, agent, why, row["ticker"], p, b, a, now, budget, row["title"] or "")
             written += 1
         c.commit()  # forecasts_for() may call Coinbase for the next market
     c.row_factory = None
@@ -805,6 +818,26 @@ def _phase(c: sqlite3.Connection, out: dict[str, Any], name: str, fn: Any, defau
     return default
 
 
+def bet_moves(c: sqlite3.Connection, now: datetime) -> dict[str, int]:
+    """Schedule + capture the 1h/1d/1w price move after every NOEMA paper bet (read-only public quotes)."""
+    from . import paper_risk, public_quotes
+    n = paper_risk.schedule_moves(c, paper_risk.noema_bets(c, now - timedelta(days=8)))
+    c.commit()
+    q = public_quotes.shared()
+    q.new_cycle()
+    return {"scheduled": n, **paper_risk.capture_moves(c, now, q, known=paper_risk.noema_resolution(c))}
+
+
+def publish_risk_budget(c: sqlite3.Connection, now: datetime) -> dict[str, Any]:
+    from . import paper_risk
+    paper_risk.seed_lineage(c, now)
+    c.commit()
+    snap = paper_risk.write_budget(paper_risk.load_budget(c), now=now)
+    if c.in_transaction:
+        c.commit()
+    return {"open_usd": snap["open_exposure_usd"], "groups": len(snap["groups"])}
+
+
 def run_once(db: str, api: Api | None = None, now: datetime | None = None, *, force_discover: bool = False) -> dict[str, Any]:
     api = api or Api()
     now = now or datetime.now(UTC)
@@ -827,6 +860,8 @@ def run_once(db: str, api: Api | None = None, now: datetime | None = None, *, fo
             c, out, "settle", lambda: (settle(c, api, now, db), c.commit())[0], (0, 0))
         out["marks_scheduled"] = _phase(c, out, "schedule_marks", lambda: (schedule_marks(c, now), c.commit())[0], 0)
         out["marks_captured"] = _phase(c, out, "capture_marks", lambda: capture_marks(c, api, now), 0)
+        out["bet_moves"] = _phase(c, out, "bet_moves", lambda: bet_moves(c, now), {})
+        out["risk_budget"] = _phase(c, out, "risk_budget", lambda: publish_risk_budget(c, now), {})
         out["api_calls"] = api.calls
         out["api_errors"] = dict(getattr(api, "errors", {}))
         out.update(_phase(c, out, "stats", lambda: stats(c, now), {}) or {})

@@ -740,7 +740,32 @@ def size_for(conn: sqlite3.Connection, strategy: str, sig: dict[str, Any]) -> fl
     return round(size, 2)
 
 
-def open_signal(conn: sqlite3.Connection, sig: dict[str, Any], now: datetime) -> int | None:
+def budget_size(conn: sqlite3.Connection, sig: dict[str, Any], size: float, budget: Any = None) -> float:
+    """Draw the stake from the shared paper bankroll (paper_risk). Directional binary bets: quarter-Kelly
+    off the measured side-relative fair, only when fair - (price + fee + slippage) > entry buffer; signals
+    without a measured edge are shadowed. Locked arbs / token probes: tier size clipped to the 5% per-bet
+    and per-group caps and the room left in the shared bankroll. Unproven strategies stay at probe size."""
+    from . import paper_risk
+    if size <= 0:
+        return 0.0
+    budget = budget if budget is not None else paper_risk.load_budget(conn)
+    leg = sig["legs"][0]
+    venue, mid, title = str(leg.get("venue") or ""), str(leg.get("market_id") or ""), str(sig.get("title") or "")
+    desk = f"strategy:{sig['strategy']}"
+    if leg.get("side") in ("yes", "no") and not sig.get("locked_payoff"):
+        if sig.get("edge") is None or sig.get("fair") is None:
+            return 0.0  # no measured edge -> shadow
+        d = budget.size(desk, venue, mid, title, float(sig["fair"]), float(leg["price"]), reserve=False)
+        from .proven_sizing import strategy_proof
+        proven = strategy_proof(conn).get(sig["strategy"], {}).get("tier") == "proven"
+        usd = d.usd if proven else min(d.usd, size)
+        if usd > 0:
+            budget._take("noema", desk, venue, mid, title, usd)
+        return round(usd, 2)
+    return budget.clip(desk, venue, mid, title, size).usd
+
+
+def open_signal(conn: sqlite3.Connection, sig: dict[str, Any], now: datetime, budget: Any = None) -> int | None:
     from .accuracy_ledger import record_forecast
 
     if conn.execute("SELECT 1 FROM strategy_signals WHERE strategy=? AND key=? AND status='open'",
@@ -749,6 +774,7 @@ def open_signal(conn: sqlite3.Connection, sig: dict[str, Any], now: datetime) ->
     size = size_for(conn, sig["strategy"], sig)
     if sig.get("edge") is not None and not clears_fee_buffer(sig.get("edge")):
         size = 0.0  # fee-plus-buffer gate: record as shadow, never enter
+    size = budget_size(conn, sig, size, budget)
     status = "open" if size > 0 else "shadow"
     if status == "shadow" and conn.execute("SELECT 1 FROM strategy_signals WHERE strategy=? AND key=? AND "
                                            "status='shadow' AND at>=?", (sig["strategy"], sig["key"],
@@ -929,13 +955,24 @@ def run_cycle(conn: sqlite3.Connection, *, client: Any = None, now: datetime | N
     conn.commit()
     allocate(conn, now)
     sigs += smart_money_signals(conn, now)
+    from . import paper_risk
+    budget = paper_risk.load_budget(conn)
     for s in sigs:
         report["signals"][s["strategy"]] = report["signals"].get(s["strategy"], 0) + 1
-        if open_signal(conn, s, now):
+        if open_signal(conn, s, now, budget):
             report["opened"][s["strategy"]] = report["opened"].get(s["strategy"], 0) + 1
     report["closed"] = settle(conn, quotes, now, prices)
     report["alloc"] = allocate(conn, now)
     conn.commit()
+    try:
+        paper_risk.seed_lineage(conn, now)
+        conn.commit()
+        snap = paper_risk.write_budget(paper_risk.load_budget(conn), now=now)
+        report["risk_budget"] = {"open_usd": snap["open_exposure_usd"], "groups": len(snap["groups"])}
+    except (OSError, sqlite3.Error) as exc:
+        report["risk_budget"] = {"error": type(exc).__name__}
+    if conn.in_transaction:
+        conn.commit()
     return report
 
 
@@ -1048,6 +1085,22 @@ def strategies_board(db_path: str) -> dict[str, Any]:
             for row in out["strategies"]:
                 p = proof.get(row["strategy"], {})
                 row["sizing_tier"], row["sizing_why"] = p.get("tier"), p.get("why")
+        except sqlite3.Error:
+            pass
+        try:
+            from . import paper_risk
+            budget = paper_risk.load_budget(conn)
+            out["categories"] = paper_risk.category_table(conn, budget)
+            snap = budget.snapshot()
+            out["risk_budget"] = {k: snap[k] for k in ("bankroll_usd", "open_exposure_usd", "available_usd",
+                                                       "cap_usd", "bots")}
+            out["risk_budget"]["top_groups"] = snap["groups"][:6]
+            out["bet_moves"] = paper_risk.moves_summary(conn)
+            for row in out["strategies"]:
+                row["alloc_status"] = row["status"]  # allocator: exploring | active | benched
+                row.update(paper_risk.lineage_fields(row["strategy"], budget.lineage.get(row["strategy"]),
+                                                     snap["strategies"].get(row["strategy"])))
+            out["families"] = snap["families"]
         except sqlite3.Error:
             pass
         out["recent"] = [{"at": r[0], "strategy": r[1], "title": r[2], "edge": r[3], "size_usd": r[4], "status": r[5],

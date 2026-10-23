@@ -12,49 +12,50 @@ function mount(){if(document.getElementById("pb-panel"))return document.getEleme
  const body=el("div","body");body.id="pb-body";body.append(el("div","empty","waiting for /api/prediction-bot…"));sec.append(h,body);
  const anchor=document.getElementById("v7-pmc"),right=document.querySelector(".right");
  if(anchor&&anchor.parentNode)anchor.after(sec);else if(right)right.append(sec);else document.body.append(sec);return sec}
-const STAKE_RE=/stake \$([0-9,.]+)/i;
-function stakeOf(p){if(typeof p.stake_usd==="number"&&isFinite(p.stake_usd))return p.stake_usd;
- const m=STAKE_RE.exec(String(p.note||""));if(!m)return null;const v=parseFloat(m[1].replace(/,/g,""));return isFinite(v)?v:null}
-function usd(v){return v==null?"—":"$"+(v>=10?Math.round(v):v.toFixed(2))}
-function ts(s){const t=Date.parse(s||"");return isFinite(t)?t:0}
-/* Flatten every post's picks and keep only the latest version of each venue + market + side. */
-function latestPicks(posts){const best=new Map();
- for(const post of posts||[])for(const pk of post.picks||[]){const at=ts(post.posted_at);
-  const key=[pk.venue,String(pk.market_id||pk.market||"").trim().toLowerCase(),pk.side].join("|");
-  const cur=best.get(key);if(!cur||at>cur.at||(at===cur.at&&String(post.id)>String(cur.id)))best.set(key,{at,id:post.id,pk})}
- return [...best.values()].sort((a,b)=>String(a.pk.resolves||"9").localeCompare(String(b.pk.resolves||"9"))||b.at-a.at).map(x=>x.pk)}
+// Picks only: market, side, price, fair, stake, resolves (+ now and P&L once marks exist). No post titles,
+// summaries or notes are displayed (they stay stored server-side). Pairs and parlays list their legs.
+function money(v){return v==null||!isFinite(v)?"—":"$"+(v>=1000?Math.round(v/100)/10+"k":v>=10?Math.round(v):v.toFixed(2))}
+function pct(v){if(v==null||!isFinite(v))return"—";const x=Math.round(v*1000)/10;return(x>0?"+":"")+x+"%"}
 function marked(p){return p.status==="settled"||p.current!=null}
-function pickRow(p,showMarks){const tr=el("tr");
- const vn=el("td","vn");vn.append(el("span",p.venue==="kalshi"?"vk":"vp",p.venue==="kalshi"?"K":"PM"));
- const mk=el("td","mk",p.market);mk.title=p.market;
- const sd=el("td","sd-"+(p.side==="YES"?"YES":"NO"),p.side);
- const pf=el("td",null,c(p.price)+"→"+c(p.fair));
- const st=el("td",null,usd(stakeOf(p)));
- const rs=el("td","dt",p.resolves?String(p.resolves).slice(5,10):"—");if(p.resolves)rs.title=String(p.resolves);
- tr.append(vn,mk,sd,pf,st,rs);
- if(showMarks){const now=el("td",null,p.status==="settled"?(p.outcome==="won"?"WON":"LOST"):c(p.current));
-  if(p.status==="settled")now.className=p.outcome==="won"?"won":"lost";
-  const pl=el("td",p.pnl==null?"flat":p.pnl>0?"won":p.pnl<0?"lost":"flat",p.pnl==null?"—":pp(p.pnl));tr.append(now,pl)}
- return tr}
+function safeUrl(u){return typeof u==="string"&&/^https:\/\/([a-z0-9-]+\.)*(kalshi\.com|polymarket\.com)(\/|$)/i.test(u)?u:null}
+function mkCell(text,url){const td=el("td","mk");const u=safeUrl(url);
+ if(u){const a=el("a",null,text);a.href=u;a.target="_blank";a.rel="noopener noreferrer";td.append(a)}else td.textContent=String(text);return td}
+function venueTag(v){return el("span",v==="kalshi"?"vk":"vp",v==="kalshi"?"K":"PM")}
+function px(v){return v==null||!isFinite(v)?"—":v>1?"$"+(Math.round(v*1000)/1000):c(v)}
+function pf(price,fair){return px(price)+"→"+px(fair)}
+function pickRow(p,showNow){const kind=p.kind||"single";const tr=el("tr","k-"+kind);const planned=p.status==="planned";const combo=kind==="pair"||kind==="parlay";
+ const sd=kind==="parlay"?(p.legs||[]).length+"-leg":kind==="pair"?"pair":p.side;
+ const st=p.posted_stake_usd!=null?p.posted_stake_usd:p.stake_usd;
+ const vn=el("td","vn");if(!combo)vn.append(venueTag(p.venue));
+ tr.append(vn,mkCell(p.market,p.url),el("td",combo?"sd-PAR":"sd-"+(p.side==="YES"?"YES":"NO"),sd),
+  el("td",null,pf(p.price,p.fair)),el("td",null,money(st)),el("td","rs",p.resolves?p.resolves.slice(5,10):"—"));
+ if(showNow){const done=p.status==="settled";
+  const now=el("td",done?(p.outcome==="won"?"won":"lost"):null,done?(p.outcome==="won"?"WON":"LOST"):px(p.current));
+  const pl=planned?el("td","flat","planned"):el("td",p.pnl==null?"flat":p.pnl>0?"won":p.pnl<0?"lost":"flat",p.pnl==null?"—":pp(p.pnl));
+  tr.append(now,pl)}
+ const rows=[tr];
+ if(combo)for(const g of p.legs||[]){const lr=el("tr","leg");const vn2=el("td","vn");vn2.append(venueTag(g.venue));
+  lr.append(vn2,mkCell(g.market,g.url),el("td","sd-"+(g.side==="YES"?"YES":"NO"),g.side),el("td",null,c(g.price)),el("td"),el("td"));
+  if(showNow)lr.append(el("td",g.result?(g.result==="won"?"won":"lost"):null,g.result?(g.result==="won"?"WON":"LOST"):c(g.current)),el("td"));
+  rows.push(lr)}
+ if(kind==="pair"&&p.pair){const m=p.pair;const lr=el("tr","leg pm");lr.append(el("td"));
+  const td=el("td","mk "+(m.locked?"won":"flat"),`cost ${px(m.combined_cost)} · ${m.locked?"locked ":""}${pct(m.profit_per_usd)}/$ · ${pct(m.annualized)} ann · ${m.rules_match?"rules match":"unverified"}`);
+  td.colSpan=showNow?7:5;lr.append(td);rows.push(lr)}
+ return rows}
+function table(picks,showNow){const tb=el("table");const cg=el("colgroup");
+ for(const w of ["24px","","36px","74px","46px","46px"].concat(showNow?["40px","48px"]:[])){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
+ const hr=el("tr");for(const x of ["","market","side","px→fair","stake","settle"].concat(showNow?["now","P&L"]:[]))hr.append(el("th",null,x));tb.append(hr);
+ for(const pk of picks)for(const r of pickRow(pk,showNow))tb.append(r);return tb}
 function render(d){mount();const body=document.getElementById("pb-body"),tag=document.getElementById("pb-tag");body.textContent="";
- const picks=latestPicks(d&&d.posts);
- if(!picks.length){body.append(el("div","empty","No Prediction Bot picks yet."));tag.textContent="paper picks · never trades";return}
- const open=picks.filter(p=>p.status!=="settled"),settled=picks.filter(p=>p.status==="settled"),won=settled.filter(p=>p.outcome==="won");
- const pnls=picks.filter(p=>p.pnl!=null).map(p=>p.pnl),pnl=pnls.reduce((a,b)=>a+b,0);
- tag.textContent=`paper · ${open.length} open · ingest ${ago(d.last_run_at)}`;
- const sum=el("div","pb-sum");const kv=(k,v,cl)=>{const sp=el("span",null,k+" ");const b=el("b",cl||null,v);sp.append(b);sum.append(sp)};
- kv("hit rate",settled.length?`${Math.round(won.length/settled.length*100)}% (${won.length}/${settled.length})`:`— (0/${picks.length} settled)`);
- kv("open",String(open.length));kv("marked",`${open.filter(marked).length}/${open.length}`);
- if(pnls.length)kv("paper P&L",pp(pnl)+"/ct",pnl>0?"won":pnl<0?"lost":null);
- body.append(sum);
- const showMarks=picks.some(marked);
- const tb=el("table");const cg=el("colgroup");
- const cols=showMarks?["24px","","36px","74px","46px","46px","40px","48px"]:["24px","","36px","74px","46px","46px"];
- for(const w of cols){const col=el("col");if(w)col.style.width=w;cg.append(col)}tb.append(cg);
- const hr=el("tr");for(const x of (showMarks?["","market","side","px→fair","stake","settle","now","P&L"]:["","market","side","px→fair","stake","settle"]))hr.append(el("th",null,x));tb.append(hr);
- for(const pk of picks)tb.append(pickRow(pk,showMarks));body.append(tb)}
+ let all=(d&&d.picks)||null;if(!all){all=[];for(const p of (d&&d.posts)||[])for(const pk of p.picks||[])all.push(pk)}
+ if(!all.length){body.append(el("div","empty","No Prediction Bot picks yet."));tag.textContent="paper picks · never trades";return}
+ const s=d.stats||{};tag.textContent=`paper · ${s.open||0} open${s.planned?" · "+s.planned+" planned":""}${s.settled?" · hit "+Math.round(s.hit_rate*100)+"%":""}`;
+ const showNow=all.some(marked);
+ const groups=[["Singles",x=>(x.kind||"single")==="single"],["Pairs",x=>x.kind==="pair"],["Parlays",x=>x.kind==="parlay"],["Scaled",x=>x.kind==="scaled"]];
+ for(const [name,f] of groups){const picks=all.filter(f);if(!picks.length)continue;const box=el("div","pb-grp");
+  box.append(el("div","pb-gh",name),table(picks,showNow));body.append(box)}}
 async function poll(){if(busy||document.hidden)return;busy=true;try{const r=await fetch("/api/prediction-bot",{cache:"no-store"});if(r.ok)render(await r.json())}catch(e){}finally{busy=false}}
-window.TEV_PB={render,pp,c,stakeOf,latestPicks};
+window.TEV_PB={render,pp,c};
 function start(){mount();poll();setInterval(poll,POLL_MS)}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",()=>setTimeout(start,400));else setTimeout(start,400);
 })();

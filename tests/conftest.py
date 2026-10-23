@@ -37,3 +37,11 @@ def _isolated_heartbeats(tmp_path_factory: pytest.TempPathFactory, monkeypatch: 
     from noema import heartbeats
 
     monkeypatch.setattr(heartbeats, "RUN_DIR", str(d / "run"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_risk_budget(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never write the live risk_budget.json or read the live MQGB capacity file from tests."""
+    d = tmp_path_factory.mktemp("rb")
+    monkeypatch.setenv("NOEMA_RISK_BUDGET_PATH", str(d / "risk_budget.json"))
+    monkeypatch.setenv("NOEMA_STRATEGY_CAPACITY_PATH", str(d / "strategy_capacity.json"))
