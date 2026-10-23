@@ -84,6 +84,8 @@ def test_quality_rules():
     ok = ps.decode_swap(swap_ev(base=1_000_000_000, quote=int(85e9 * 1e9 / (180e12 - 1e9) * 1.1)))
     assert ps.quality(ok) is None                         # 10% over x*y=k is normal on graduated pools
     assert ps.quality(ok, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") == "non_sol_quote"
+    drained = ps.decode_swap(swap_ev("sell", base=1_000_000_000, quote=int(85e9 * 1e9 / (180e12 + 1e9) * 1.5)))
+    assert ps.quality(drained) is None                    # ~50% premium seen live on a drained pool
     bad = ps.decode_swap(swap_ev(base=1_000_000_000, quote=5_000_000_000))
     assert "off_reserves" in ps.quality(bad)
     assert "low_liq" in ps.quality(ps.decode_swap(swap_ev(pool_quote=100_000_000)))
