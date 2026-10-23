@@ -56,3 +56,55 @@ test('side charts cycle only live launch-stream finds, not the stale sweep list'
   assert.match(cp, /TEVLive/);
   assert.doesNotMatch(cp, /funnel/);
 });
+
+test('numeric intervals (seconds) are labelled, not shown as bare numbers', () => {
+  assert.equal(C.tfLabel(1), '1s');
+  assert.equal(C.tfLabel(10), '10s');
+  assert.equal(C.tfLabel(300), '5m');
+  assert.equal(C.tfLabel(3600), '1h');
+  assert.equal(C.tfLabel('15m'), '15m');
+  assert.equal(C.tfLabel(null), '?');
+});
+
+function fakeCanvas(W, H) {
+  const rects = [];
+  const ctx = new Proxy({ rects }, {
+    get(t, k) {
+      if (k === 'rects') return rects;
+      if (k === 'fillRect') return (x, y, w, h) => rects.push([x, y, w, h]);
+      if (k === 'measureText') return () => ({ width: 10 });
+      if (k in t) return t[k];
+      return () => {};
+    },
+    set(t, k, v) { t[k] = v; return true; },
+  });
+  return { clientWidth: W, clientHeight: H, width: 0, height: 0, style: {}, getContext: () => ctx, addEventListener() {}, ctx };
+}
+
+test('slot mode packs few candles at a fixed width, right-aligned (not stretched)', () => {
+  const rows = Array.from({ length: 6 }, (_, i) => [i, 1 + i, 2 + i, 0.5 + i, 1.5 + i, 0]);
+  const cv = fakeCanvas(1000, 300);
+  const st = C.draw(cv, rows, { interval: 1, slot: 10, key: 'k' });
+  assert.equal(st.geo.w, 10);
+  assert.equal(st.geo.n, 6);
+  assert.equal(st.geo.x0 + st.geo.n * st.geo.w, st.geo.cw - 6, 'candles sit at the right edge next to the price tag');
+  // without slot the old behaviour stretches across the width
+  const st2 = C.draw(fakeCanvas(1000, 300), rows, { interval: 1, key: 'k2' });
+  assert.equal(st2.geo.x0, 0);
+  assert.ok(st2.geo.w > 100);
+});
+
+test('slot mode shrinks then keeps only the newest candles that fit', () => {
+  const rows = Array.from({ length: 500 }, (_, i) => [i, 1, 2, 0.5, 1.5, 0]);
+  const st = C.draw(fakeCanvas(300, 200), rows, { interval: 1, slot: 10, key: 'k3' });
+  assert.equal(st.geo.w, 3);
+  assert.ok(st.geo.n < 500 && st.geo.n >= 80);
+  assert.equal(st.geo.c[st.geo.n - 1][0], 499);
+});
+
+test('fresh launch panels use packed slot candles', () => {
+  const lp = readFileSync(new URL('../noema/static/live-panels.js', import.meta.url), 'utf8');
+  const v7 = readFileSync(new URL('../noema/static/room-v7.js', import.meta.url), 'utf8');
+  assert.match(lp, /slot:\d+/);
+  assert.equal((v7.match(/slot:9/g) || []).length, 2);
+});

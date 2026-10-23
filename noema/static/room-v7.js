@@ -117,9 +117,9 @@ function cgBuild(){const g=byId("v7-cg");if(!g)return null;const cm=document.que
 function cgTick(k){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d),S=V.cg[k],cv=g.querySelectorAll("canvas")[k];if(!cv)return;
  if(!pool.length){TEVCandles.draw(cv,[],{key:"none",empty:"no fresh launch finds yet · waiting for live stream"});return}
  const taken=V.cg.filter((_,j)=>j!==k).map(o=>o.key);S.i=T.nextPick(pool,S.i,taken);const it=pool[S.i];S.key=it.key;V.shown.add(it.key);
- TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${S.i+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})}
+ TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${S.i+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V",slot:9})}
 function cgRefresh(){const g=cgBuild();if(!g||!window.TEVCandles)return;const pool=T.candlePool(V.d);(V.cg||[]).forEach((S,k)=>{const it=pool.find(p=>p.key===S.key),cv=g.querySelectorAll("canvas")[k];
- if(it&&cv)TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${pool.indexOf(it)+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V"})})}
+ if(it&&cv)TEVCandles.draw(cv,it.ohlc,{interval:it.interval,key:it.key,label:`${pool.indexOf(it)+1}/${pool.length} ${it.sym} · ${it.src}`,markers:it.markers,volLabel:it.vol||"V",slot:9})})}
 function cgBoot(){const D=5000;[0,1,2,3].forEach(k=>setTimeout(()=>{cgTick(k);every(()=>{if(k<cgN())cgTick(k)},D)},700+k*D/4));every(cgRefresh,30000);window.addEventListener("resize",()=>{cgBuild();cgRefresh()})}
 function link(fromId,toEl){const a=byId(fromId),svg=byId("v7-links");if(!a||!svg||!toEl)return;const r1=a.getBoundingClientRect(),r2=toEl.getBoundingClientRect();
  const x1=r1.right,y1=r1.top+r1.height/2,x2=r2.left,y2=r2.top+r2.height/2,mx=(x1+x2)/2;
