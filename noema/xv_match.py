@@ -24,7 +24,6 @@ import re
 import sqlite3
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -162,6 +161,35 @@ def pmus_latest(conn: sqlite3.Connection, prefix: str) -> list[dict[str, Any]]:
     return out
 
 
+def pmus_bbo_batch(pm_client: Any, slugs: list[str]) -> dict[str, dict[str, float | None]]:
+    """Top of book for many PM-US markets in one public list call per 100 slugs.
+
+    markets.list returns bestBidQuote/bestAskQuote (identical to /bbo), so a family costs one
+    request instead of one per pair - the per-IP public rate limit is shared box-wide.
+    """
+    out: dict[str, dict[str, float | None]] = {}
+    uniq = list(dict.fromkeys(slugs))
+    for i in range(0, len(uniq), 100):
+        part = uniq[i:i + 100]
+        payload = pm_client.markets.list({"slug": part, "limit": len(part)})
+        at = time.time()
+        for m in (payload or {}).get("markets") or []:
+            if not isinstance(m, dict) or m.get("slug") not in part or m.get("closed") is True:
+                continue
+
+            def px(v: Any) -> float | None:
+                if isinstance(v, dict):
+                    v = v.get("value")
+                x = es._f(v)
+                return x if x is not None and 0 <= x <= 1 else None
+            bid, ask = px(m.get("bestBidQuote")), px(m.get("bestAskQuote"))
+            if bid is not None and ask is not None and bid > ask:
+                continue
+            out[m["slug"]] = {"yes_bid": bid, "yes_ask": ask, "no_bid": None if ask is None else round(1 - ask, 4),
+                              "no_ask": None if bid is None else round(1 - bid, 4), "at": at}
+    return out
+
+
 def pmus_bbo(pm_client: Any, slug: str) -> dict[str, float | None] | None:
     payload = None
     for attempt in range(3):
@@ -267,9 +295,11 @@ def run(conn: sqlite3.Connection, *, client: Any = None, pm_client: Any = None,
             pairs, amb = match_family(kind, pms, ks)
             fresh = {}
             if pm_client is not None and pairs:
-                with ThreadPoolExecutor(workers) as ex:
-                    for (pm, _), bbo in zip(pairs, ex.map(lambda p: pmus_bbo(pm_client, p[0]["market_id"]), pairs)):
-                        fresh[pm["market_id"]] = bbo
+                try:
+                    fresh = pmus_bbo_batch(pm_client, [pm["market_id"] for pm, _ in pairs])
+                except Exception as exc:  # noqa: BLE001 - stale PM legs are simply not "synced"
+                    summary["errors"].append(f"pm_batch: {type(exc).__name__}")
+                    fresh = {}
             fam = {"kind": kind, "pm_markets": len(pms), "kalshi_markets": len(ks), "pairs": len(pairs),
                    "ambiguous": amb, "positive": 0}
             for pm, k in pairs:

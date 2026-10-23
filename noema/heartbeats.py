@@ -283,6 +283,7 @@ LOOPS = {  # connection -> (process cmdline marker, cadence_s, log file in RUN_D
     "agent:fast_settle": ("noema.fast_settle", 300, "fast_settle.log"),
     "agent:cross_venue": ("noema.xv_match", 900, "xv.log"),
     "agent:pm_history": ("noema.pmus_history", 3600, "pmus_history.log"),
+    "agent:pm_watch": ("noema.pm_watch", 60, "pm_watch.log"),
     "agent:news": ("noema.news_crawler", 300, "news.log"),
     "agent:culture": ("noema.culture_crawler", 600, "culture.log"),
     "agent:other_chains": ("noema.other_chains", 120, "other_chains.log"),
@@ -357,6 +358,8 @@ def observe(main_db: str) -> list[dict[str, Any]]:
                           detail="PM <-> Kalshi gaps"), "feed:cross_venue", "feed", 900))
     P(_probe(lambda: _rec("feed:pm_history", "feed", 3600, _max(j("pmus_history.db"), "SELECT MAX(at) FROM pmus_quotes"),
                           detail="Polymarket US history"), "feed:pm_history", "feed", 3600))
+    P(_probe(lambda: _rec("feed:pm_watch", "feed", 60, _max(j("pm_watch.db"), "SELECT MAX(at) FROM pm_watch_latest"),
+                          detail="watched Polymarket US quotes (30s refresh)"), "feed:pm_watch", "feed", 60))
     P(_probe(lambda: _rec("feed:smart_wallets", "feed", 300, _max(j("smart_wallets.db"), "SELECT MAX(at) FROM wallet_trades"),
                           detail="vetted wallet moves"), "feed:smart_wallets", "feed", 300))
     P(_probe(lambda: _rec("feed:other_chains", "feed", 60,

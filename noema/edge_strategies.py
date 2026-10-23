@@ -162,6 +162,35 @@ def _quotes(conn: sqlite3.Connection, now: datetime, max_age_min: float = 60) ->
         out.append({"venue": venue, "market_id": mid, "title": str(s.get("title") or ""),
                     "at": at.timestamp() if at else None,
                     "rules": str(s.get("resolution_rules") or ""), "closes_at": s.get("closes_at"), **q})
+    return _overlay_pm_watch(out, now)
+
+
+def _overlay_pm_watch(quotes: list[dict[str, Any]], now: datetime, max_age_s: float = 60) -> list[dict[str, Any]]:
+    """Replace stale Polymarket US rows with the pm_watch quote (<= max_age_s old) when available."""
+    slugs = sorted({q["market_id"] for q in quotes if q["venue"] == "polymarket-us"})
+    if not slugs:
+        return quotes
+    try:
+        from . import pm_watch
+        fresh = pm_watch.latest_many(slugs, max_age_s=max_age_s, now=now)
+    except Exception:  # noqa: BLE001 - the watcher is optional
+        return quotes
+    if not fresh:
+        return quotes
+    out, done = [], set()
+    for q in quotes:
+        mid = q["market_id"]
+        if q["venue"] != "polymarket-us" or mid not in fresh:
+            out.append(q)
+            continue
+        if mid in done:
+            continue
+        b, a, at = fresh[mid]
+        if b is None or a is None or not 0 < b < 1 or not 0 < a < 1:
+            continue  # one-sided now -> unpriceable
+        done.add(mid)
+        out.append({**q, "yes_bid": b, "yes_ask": a, "no_bid": round(1 - a, 6), "no_ask": round(1 - b, 6),
+                    "at": at, "source": "pm_watch"})
     return out
 
 
@@ -860,12 +889,13 @@ def _store_bt(conn: sqlite3.Connection, strategy: str, now: datetime, res: dict[
 def run_cycle(conn: sqlite3.Connection, *, client: Any = None, now: datetime | None = None,
               fetch: bool = True, backtest: bool = True) -> dict[str, Any]:
     ensure_schema(conn)
+    conn.commit()
     now = now or datetime.now(UTC)
     quotes = _quotes(conn, now)
     report: dict[str, Any] = {"quotes": len(quotes), "signals": {}, "opened": {}, "notes": {}}
     rows = history_rows(conn)
     if backtest:
-        bt = backtest_fav_longshot(rows)
+        bt = backtest_fav_longshot(rows)  # CPU-heavy: computed before any write opens a transaction
         _store_bt(conn, "fav_longshot", now, bt)
         for st, verdict in (("pm_arb", "forward_only_no_book_history"), ("news_latency", "forward_only"),
                             ("smart_money", "forward_only"), ("meme_catalyst", "forward_only")):
@@ -874,6 +904,7 @@ def run_cycle(conn: sqlite3.Connection, *, client: Any = None, now: datetime | N
     bt_row = conn.execute("SELECT detail_json FROM strategy_backtests WHERE strategy='fav_longshot'").fetchone()
     bt = json.loads(bt_row[0]) if bt_row else {}
     allocate(conn, now)
+    conn.commit()  # signal generation below is read-only CPU work; don't hold the write lock through it
     sigs = ladder_arbs(quotes) + cross_venue_gaps(quotes)
     try:
         from . import xv_match
@@ -895,6 +926,7 @@ def run_cycle(conn: sqlite3.Connection, *, client: Any = None, now: datetime | N
             if own:
                 c.close()
     report["notes"]["smart_money_scores"] = score_wallets(conn, now)
+    conn.commit()
     allocate(conn, now)
     sigs += smart_money_signals(conn, now)
     for s in sigs:
