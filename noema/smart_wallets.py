@@ -19,8 +19,10 @@ import json
 import os
 import random
 import sqlite3
+import sys
 import time
 from collections import defaultdict
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -60,67 +62,183 @@ def connect(path: str) -> sqlite3.Connection:
 
 # -- loading -------------------------------------------------------------------
 def load_trades(main_db: str, smart_db: str | None = None) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    """All trades (time-ordered, deduped by signature+wallet) and mint meta {created_at, creator}."""
-    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    """All trades (time-ordered, deduped by signature+wallet) and mint meta {created_at, creator}.
+
+    Materialises every trade in memory - fine for tests / small DBs. The live loop uses `scan()`, which streams the
+    same rows (same order, same dedupe) straight from SQLite instead."""
+    meta = load_meta(main_db)
+    return list(iter_trades(main_db, smart_db)), meta
+
+
+def load_meta(main_db: str) -> dict[str, dict[str, Any]]:
     meta: dict[str, dict[str, Any]] = {}
     m = sqlite3.connect(f"file:{main_db}?mode=ro", uri=True, timeout=30)
     try:
         for mint, at, creator in m.execute("SELECT mint, received_at, creator FROM launch_stream"):
-            meta[mint] = {"created_at": _ts(at), "creator": creator}
-        for sig, mint, at, side, sol, tok, trader, mc in m.execute(
-                "SELECT signature, mint, received_at, side, sol, tokens, trader, market_cap_sol FROM launch_trades "
-                "WHERE trader IS NOT NULL"):
-            rows[(sig, trader)] = {"sig": sig.split(":")[0], "wallet": trader, "mint": mint, "t": _ts(at), "side": side,
-                                   "sol": float(sol or 0), "tokens": float(tok or 0), "mcap": mc}
+            meta[sys.intern(mint)] = {"created_at": _ts(at), "creator": creator}
     finally:
         m.close()
+    return meta
+
+
+def _has_table(c: sqlite3.Connection, schema: str, table: str) -> bool:
+    return c.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+
+def _open_union(main_db: str, smart_db: str | None) -> tuple[sqlite3.Connection, str]:
+    """Read-only connection + SQL for the deduped trade union.
+
+    launch_trades rows win over wallet_trades rows with the same (signature, wallet); among wallet_trades duplicates the
+    first row (rowid order) wins - exactly the old dict/setdefault semantics."""
+    m = sqlite3.connect(f"file:{main_db}?mode=ro", uri=True, timeout=30)
+    m.execute("PRAGMA temp_store=FILE")  # big ORDER BY spills to disk, not RAM
+    sql = ("SELECT 0 AS src, l.rowid AS rid, l.signature AS signature, l.trader AS wallet, l.mint AS mint, "
+           "l.received_at AS at, l.side AS side, l.sol AS sol, l.tokens AS tokens, l.market_cap_sol AS mcap "
+           "FROM main.launch_trades l WHERE l.trader IS NOT NULL")
     if smart_db and os.path.isfile(smart_db):
-        s = sqlite3.connect(f"file:{smart_db}?mode=ro", uri=True, timeout=30)
-        try:
-            for sig, w, mint, at, side, sol, tok, mc in s.execute("SELECT * FROM wallet_trades"):
-                rows.setdefault((sig, w), {"sig": sig, "wallet": w, "mint": mint, "t": _ts(at), "side": side,
-                                           "sol": float(sol or 0), "tokens": float(tok or 0), "mcap": mc})
-        finally:
-            s.close()
-    return sorted(rows.values(), key=lambda r: r["t"]), meta
+        m.execute("ATTACH DATABASE ? AS sw", (f"file:{smart_db}?mode=ro",))
+        if _has_table(m, "sw", "wallet_trades"):
+            sql += (" UNION ALL SELECT 1, w.rowid, w.signature, w.wallet, w.mint, w.at, w.side, w.sol, w.tokens, "
+                    "w.market_cap_sol FROM sw.wallet_trades w "
+                    "WHERE NOT EXISTS (SELECT 1 FROM main.launch_trades l2 WHERE l2.signature = w.signature "
+                    "AND l2.trader = w.wallet) "
+                    "AND NOT EXISTS (SELECT 1 FROM sw.wallet_trades w2 WHERE w2.signature = w.signature "
+                    "AND w2.wallet = w.wallet AND w2.rowid < w.rowid)")
+    return m, sql
+
+
+def iter_trades(main_db: str, smart_db: str | None = None) -> Iterator[dict[str, Any]]:
+    """Stream deduped trades in time order (ties: launch_trades first, then insertion order) without holding them."""
+    m, sql = _open_union(main_db, smart_db)
+    intern = sys.intern
+    try:
+        cur = m.execute(f"SELECT src, signature, wallet, mint, at, side, sol, tokens, mcap FROM ({sql}) "
+                        "ORDER BY at, src, rid")
+        for src, sig, w, mint, at, side, sol, tok, mc in cur:
+            yield {"sig": sig.split(":")[0] if src == 0 else sig, "wallet": intern(w), "mint": intern(mint),
+                   "t": _ts(at), "side": side, "sol": float(sol or 0), "tokens": float(tok or 0), "mcap": mc}
+    finally:
+        m.close()
+
+
+def bundled_sigs(main_db: str, smart_db: str | None = None) -> set[str]:
+    """Buy signatures shared by >1 wallet (bundles), computed in SQLite instead of a per-signature Python map."""
+    m, sql = _open_union(main_db, smart_db)
+    try:
+        return {r[0] for r in m.execute(
+            "SELECT sig FROM (SELECT CASE WHEN src = 0 AND instr(signature, ':') > 0 "
+            "THEN substr(signature, 1, instr(signature, ':') - 1) ELSE signature END AS sig, wallet "
+            f"FROM ({sql}) WHERE side = 'buy') GROUP BY sig HAVING COUNT(DISTINCT wallet) > 1")}
+    finally:
+        m.close()
 
 
 # -- positions -----------------------------------------------------------------
-def build_positions(trades: list[dict[str, Any]], meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+class Pos:
+    """One wallet x mint position. Slotted (a dict per position was most of the old 2.5 GB); supports p["key"] and
+    p.get("key") so existing callers keep working. Unset optional fields (first_size_sol, pnl_sol, ...) read as
+    missing, like the old dict keys."""
+
+    __slots__ = (
+        "bought",
+        "bundled",
+        "close_at",
+        "cost",
+        "dev",
+        "entry_age_s",
+        "entry_at",
+        "entry_mcap",
+        "first_size_sol",
+        "hold_s",
+        "mint",
+        "n_sells",
+        "partial",
+        "pnl_sol",
+        "proceeds",
+        "ret",
+        "snipe",
+        "sold",
+        "wallet",
+    )
+
+    def __init__(self, wallet: str, mint: str, entry_at: float, entry_mcap: Any, entry_age_s: float | None,
+                 dev: bool, snipe: bool, bundled: bool) -> None:
+        self.wallet, self.mint, self.entry_at, self.entry_mcap = wallet, mint, entry_at, entry_mcap
+        self.entry_age_s, self.dev, self.snipe, self.bundled = entry_age_s, dev, snipe, bundled
+        self.cost = self.bought = self.proceeds = self.sold = 0.0
+        self.n_sells = 0
+        self.close_at: float | None = None
+
+    def __getitem__(self, k: str) -> Any:
+        try:
+            return getattr(self, k)
+        except AttributeError:
+            raise KeyError(k) from None
+
+    def __setitem__(self, k: str, v: Any) -> None:
+        setattr(self, k, v)
+
+    def __contains__(self, k: str) -> bool:
+        return hasattr(self, k)
+
+    def get(self, k: str, default: Any = None) -> Any:
+        return getattr(self, k, default)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in self.__slots__ if hasattr(self, k)}
+
+
+class PositionBook:
+    """Incremental position builder: feed trades in time order; positions/by_wallet are always 'as of the last trade'."""
+
+    def __init__(self, meta: dict[str, dict[str, Any]], is_bundled: Callable[[str], bool]) -> None:
+        self.meta, self.is_bundled = meta, is_bundled
+        self._pos: dict[tuple[str, str], Pos] = {}
+        self.positions: list[Pos] = []
+        self.by_wallet: dict[str, list[Pos]] = {}
+
+    def add(self, t: dict[str, Any]) -> None:
+        k = (t["wallet"], t["mint"])
+        p = self._pos.get(k)
+        if p is None:
+            if t["side"] != "buy":
+                return  # sells of a position opened before we saw it: unknown cost basis, skip
+            mm = self.meta.get(t["mint"]) or {}
+            age = t["t"] - mm["created_at"] if mm.get("created_at") else None
+            p = self._pos[k] = Pos(t["wallet"], t["mint"], t["t"], t["mcap"], age,
+                                   bool(mm.get("creator")) and mm.get("creator") == t["wallet"],
+                                   age is not None and age < SNIPE_S, self.is_bundled(t["sig"]))
+            self.positions.append(p)
+            self.by_wallet.setdefault(t["wallet"], []).append(p)
+        if p.close_at is not None:
+            return
+        if t["side"] == "buy":
+            p.cost += t["sol"] * (1 + FEE)
+            p.bought += t["tokens"]
+            if not hasattr(p, "first_size_sol"):
+                p.first_size_sol = t["sol"]
+        else:
+            p.proceeds += t["sol"] * (1 - FEE)
+            p.sold += t["tokens"]
+            p.n_sells += 1
+            if p.bought > 0 and p.sold >= 0.95 * p.bought:
+                p.close_at = t["t"]
+                p.pnl_sol = p.proceeds - p.cost
+                p.ret = p.pnl_sol / p.cost if p.cost else 0.0
+                p.hold_s = t["t"] - p.entry_at
+                p.partial = p.n_sells > 1
+
+
+def build_positions(trades: Iterable[dict[str, Any]], meta: dict[str, dict[str, Any]]) -> list[Pos]:
+    trades = trades if isinstance(trades, list) else list(trades)
     by_sig: dict[str, set[str]] = defaultdict(set)
     for t in trades:
         if t["side"] == "buy":
             by_sig[t["sig"]].add(t["wallet"])
-    pos: dict[tuple[str, str], dict[str, Any]] = {}
+    book = PositionBook(meta, lambda s: len(by_sig.get(s, ())) > 1)
     for t in trades:
-        k = (t["wallet"], t["mint"])
-        p = pos.get(k)
-        if p is None:
-            if t["side"] != "buy":
-                continue  # sells of a position opened before we saw it: unknown cost basis, skip
-            mm = meta.get(t["mint"]) or {}
-            age = t["t"] - mm["created_at"] if mm.get("created_at") else None
-            p = pos[k] = {"wallet": t["wallet"], "mint": t["mint"], "entry_at": t["t"], "entry_mcap": t["mcap"],
-                          "entry_age_s": age, "dev": bool(mm.get("creator")) and mm.get("creator") == t["wallet"],
-                          "snipe": age is not None and age < SNIPE_S, "bundled": len(by_sig[t["sig"]]) > 1,
-                          "cost": 0.0, "bought": 0.0, "proceeds": 0.0, "sold": 0.0, "n_sells": 0, "close_at": None}
-        if p["close_at"] is not None:
-            continue
-        if t["side"] == "buy":
-            p["cost"] += t["sol"] * (1 + FEE)
-            p["bought"] += t["tokens"]
-            p["first_size_sol"] = p.get("first_size_sol", t["sol"])
-        else:
-            p["proceeds"] += t["sol"] * (1 - FEE)
-            p["sold"] += t["tokens"]
-            p["n_sells"] += 1
-            if p["bought"] > 0 and p["sold"] >= 0.95 * p["bought"]:
-                p["close_at"] = t["t"]
-                p["pnl_sol"] = p["proceeds"] - p["cost"]
-                p["ret"] = p["pnl_sol"] / p["cost"] if p["cost"] else 0.0
-                p["hold_s"] = t["t"] - p["entry_at"]
-                p["partial"] = p["n_sells"] > 1
-    return list(pos.values())
+        book.add(t)
+    return book.positions
 
 
 def bootstrap_lo(xs: list[float], n: int = 1000, seed: int = 7) -> float:
@@ -130,28 +248,39 @@ def bootstrap_lo(xs: list[float], n: int = 1000, seed: int = 7) -> float:
     return means[int(0.025 * n)]
 
 
-def wallet_stats(positions: list[dict[str, Any]], asof: float) -> dict[str, dict[str, Any]]:
-    """Per-wallet stats using ONLY information available at `asof` (closes before asof, entries before asof)."""
-    by: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for p in positions:
-        if p["entry_at"] < asof:
-            by[p["wallet"]].append(p)
-    out = {}
-    for w, ps in by.items():
-        closed = [p for p in ps if p["close_at"] is not None and p["close_at"] < asof]
-        old = [p for p in ps if p["entry_at"] < asof - 7200]
-        old_open = [p for p in old if p["close_at"] is None or p["close_at"] >= asof]
-        pnl = [p["pnl_sol"] for p in closed]
-        st = {"n_entries": len(ps), "n_closed": len(closed), "win_rate": sum(x > 0 for x in pnl) / len(pnl) if pnl else None,
-              "pnl_sol": round(sum(pnl), 4), "pnl_ex_best": round(sum(pnl) - max(pnl), 4) if pnl else None,
-              "dev_share": sum(p["dev"] for p in ps) / len(ps), "snipe_share": sum(p["snipe"] for p in ps) / len(ps),
-              "bundle_share": sum(p["bundled"] for p in ps) / len(ps),
-              "open_ratio": len(old_open) / len(old) if old else 0.0, "ci_lo": None}
-        if len(pnl) >= MIN_N:
-            st["ci_lo"] = round(bootstrap_lo(pnl), 5)
+_CI_WHY = "bootstrap 95% lower bound <= 0"
+
+
+def _stat(ps: list[Pos], asof: float, lazy_ci: bool = False) -> dict[str, Any]:
+    """Stats of one wallet from its positions entered before `asof` (caller filters). With lazy_ci the bootstrap only
+    runs when every other vetting gate already passed - the outcome (vetted / why) is identical, ci_lo is just left
+    None for wallets the bootstrap could not change."""
+    closed = [p for p in ps if p.close_at is not None and p.close_at < asof]
+    old = [p for p in ps if p.entry_at < asof - 7200]
+    old_open = [p for p in old if p.close_at is None or p.close_at >= asof]
+    pnl = [p.pnl_sol for p in closed]
+    n = len(ps)
+    st = {"n_entries": n, "n_closed": len(closed), "win_rate": sum(x > 0 for x in pnl) / len(pnl) if pnl else None,
+          "pnl_sol": round(sum(pnl), 4), "pnl_ex_best": round(sum(pnl) - max(pnl), 4) if pnl else None,
+          "dev_share": sum(p.dev for p in ps) / n, "snipe_share": sum(p.snipe for p in ps) / n,
+          "bundle_share": sum(p.bundled for p in ps) / n,
+          "open_ratio": len(old_open) / len(old) if old else 0.0, "ci_lo": None}
+    if len(pnl) >= MIN_N and not lazy_ci:
+        st["ci_lo"] = round(bootstrap_lo(pnl), 5)
+    st["vetted"], st["why"] = _vet(st)
+    if lazy_ci and len(pnl) >= MIN_N and st["why"] == _CI_WHY:
+        st["ci_lo"] = round(bootstrap_lo(pnl), 5)
         st["vetted"], st["why"] = _vet(st)
-        out[w] = st
-    return out
+    return st
+
+
+def wallet_stats(positions: Iterable[Pos], asof: float, lazy_ci: bool = False) -> dict[str, dict[str, Any]]:
+    """Per-wallet stats using ONLY information available at `asof` (closes before asof, entries before asof)."""
+    by: dict[str, list[Pos]] = defaultdict(list)
+    for p in positions:
+        if p.entry_at < asof:
+            by[p.wallet].append(p)
+    return {w: _stat(ps, asof, lazy_ci) for w, ps in by.items()}
 
 
 def _vet(st: dict[str, Any]) -> tuple[bool, str]:
@@ -188,54 +317,96 @@ def patterns(positions: list[dict[str, Any]], wallets: set[str]) -> dict[str, An
 
 
 # -- SMART-FOLLOW paper eval (no look-ahead) --------------------------------------
-def follow_signals(trades: list[dict[str, Any]], positions: list[dict[str, Any]], meta: dict[str, dict[str, Any]],
-                   now: float) -> list[dict[str, Any]]:
-    by_mint: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for t in trades:
-        if t.get("mcap"):
-            by_mint[t["mint"]].append(t)
-    vet_cache: dict[int, dict[str, dict[str, Any]]] = {}
-    out, seen = [], set()
-    for t in trades:
-        if t["side"] != "buy" or t["mint"] in seen:
-            continue
-        mm = meta.get(t["mint"]) or {}
+class FollowEval:
+    """Online SMART-FOLLOW evaluator. Feed trades in time order *before* adding them to the PositionBook whose
+    `by_wallet` it reads; vetting uses the hour-boundary snapshot before each signal (memoised per wallet for the
+    current hour - positions entered/closed after the boundary never change that snapshot, so it is exact)."""
+
+    def __init__(self, by_wallet: dict[str, list[Pos]], meta: dict[str, dict[str, Any]], now: float,
+                 lazy_ci: bool = True) -> None:
+        self.by_wallet, self.meta, self.now, self.lazy_ci = by_wallet, meta, now, lazy_ci
+        self.seen: set[str] = set()
+        self.pending: dict[str, dict[str, Any]] = {}
+        self.done: list[tuple[int, dict[str, Any]]] = []
+        self.hour: int | None = None
+        self.memo: dict[str, dict[str, Any] | None] = {}
+        self.seq = 0
+
+    def _wallet(self, w: str, hour: int) -> dict[str, Any] | None:
+        if hour != self.hour:
+            self.hour, self.memo = hour, {}
+        if w not in self.memo:
+            asof = hour * 3600.0
+            ps = [p for p in self.by_wallet.get(w, ()) if p.entry_at < asof]
+            self.memo[w] = _stat(ps, asof, self.lazy_ci) if ps else None
+        return self.memo[w]
+
+    def on_trade(self, t: dict[str, Any]) -> None:
+        m = t["mint"]
+        pd = self.pending.get(m)
+        if pd is not None and t.get("mcap"):
+            self._feed(m, pd, t)
+        if t["side"] != "buy" or m in self.seen:
+            return
+        mm = self.meta.get(m) or {}
         if not mm.get("created_at") or t["t"] - mm["created_at"] > MAX_AGE_S or mm.get("creator") == t["wallet"]:
-            continue
-        hour = int(t["t"] // 3600)  # vetting snapshot at the hour boundary BEFORE the signal
-        if hour not in vet_cache:
-            vet_cache[hour] = wallet_stats(positions, hour * 3600.0)
-        st = vet_cache[hour].get(t["wallet"])
+            return
+        st = self._wallet(t["wallet"], int(t["t"] // 3600))
         if not st or not st["vetted"]:
-            continue
-        seen.add(t["mint"])
-        later = [x for x in by_mint[t["mint"]] if x["t"] >= t["t"] + LAT_S]
-        if not later:
-            continue
-        e = later[0]
-        if not (MCAP_MIN <= e["mcap"] <= MCAP_MAX):
-            continue
-        exit_px, why, exit_t = None, None, None
-        for x in later[1:]:
-            if x["t"] - e["t"] > MAX_HOLD_S:
-                break
-            r = x["mcap"] / e["mcap"] - 1
-            if r >= TP or r <= SL or (x["wallet"] == t["wallet"] and x["side"] == "sell"):
-                exit_px, exit_t = x["mcap"], x["t"]
-                why = "tp" if r >= TP else "sl" if r <= SL else "wallet_sold"
-                break
-        if exit_px is None:
-            if now - e["t"] < MAX_HOLD_S:
-                continue  # still open -> not scored yet
-            last = [x for x in later if x["t"] - e["t"] <= MAX_HOLD_S][-1]
-            exit_px, exit_t, why = last["mcap"], last["t"], "time"
-        ret = exit_px / e["mcap"] - 1 - 2 * COST_SIDE
-        out.append({"id": f"sf:{t['mint']}", "at": _iso(e["t"]), "wallet": t["wallet"], "mint": t["mint"],
-                    "entry_mcap": e["mcap"], "exit_mcap": exit_px, "exit": why, "hold_s": round(exit_t - e["t"], 1),
-                    "ret": round(ret, 4), "net": round(NOTIONAL_USD * ret, 4),
-                    "x": {"entry_age_s": round(t["t"] - mm["created_at"], 1), "entry_mcap": e["mcap"],
-                          "wallet_ci_lo": st["ci_lo"], "wallet_n": st["n_closed"]}})
-    return out
+            return
+        self.seen.add(m)
+        self.pending[m] = {"seq": self.seq, "t": t, "mm": mm, "st": st, "e": None, "last": None}
+        self.seq += 1
+
+    def _feed(self, m: str, pd: dict[str, Any], x: dict[str, Any]) -> None:
+        e = pd["e"]
+        if e is None:
+            if x["t"] < pd["t"]["t"] + LAT_S:
+                return
+            pd["e"] = pd["last"] = x
+            if not (MCAP_MIN <= x["mcap"] <= MCAP_MAX):
+                del self.pending[m]
+            return
+        if x["t"] - e["t"] > MAX_HOLD_S:
+            self._finish(m, pd, pd["last"], "time")
+            return
+        r = x["mcap"] / e["mcap"] - 1
+        if r >= TP or r <= SL or (x["wallet"] == pd["t"]["wallet"] and x["side"] == "sell"):
+            self._finish(m, pd, x, "tp" if r >= TP else "sl" if r <= SL else "wallet_sold")
+            return
+        pd["last"] = x
+
+    def _finish(self, m: str, pd: dict[str, Any], x: dict[str, Any], why: str) -> None:
+        del self.pending[m]
+        e, t, mm, st = pd["e"], pd["t"], pd["mm"], pd["st"]
+        if why == "time" and self.now - e["t"] < MAX_HOLD_S:
+            return  # still open -> not scored yet
+        ret = x["mcap"] / e["mcap"] - 1 - 2 * COST_SIDE
+        self.done.append((pd["seq"], {
+            "id": f"sf:{t['mint']}", "at": _iso(e["t"]), "wallet": t["wallet"], "mint": t["mint"],
+            "entry_mcap": e["mcap"], "exit_mcap": x["mcap"], "exit": why, "hold_s": round(x["t"] - e["t"], 1),
+            "ret": round(ret, 4), "net": round(NOTIONAL_USD * ret, 4),
+            "x": {"entry_age_s": round(t["t"] - mm["created_at"], 1), "entry_mcap": e["mcap"],
+                  "wallet_ci_lo": st["ci_lo"], "wallet_n": st["n_closed"]}}))
+
+    def finish(self) -> list[dict[str, Any]]:
+        for m, pd in list(self.pending.items()):
+            if pd["e"] is None:
+                del self.pending[m]
+            else:
+                self._finish(m, pd, pd["last"], "time")
+        return [r for _, r in sorted(self.done, key=lambda d: d[0])]
+
+
+def follow_signals(trades: Iterable[dict[str, Any]], positions: Iterable[Pos], meta: dict[str, dict[str, Any]],
+                   now: float) -> list[dict[str, Any]]:
+    by_wallet: dict[str, list[Pos]] = defaultdict(list)
+    for p in positions:
+        by_wallet[p.wallet].append(p)
+    fe = FollowEval(by_wallet, meta, now)
+    for t in trades:
+        fe.on_trade(t)
+    return fe.finish()
 
 
 def smart_features(positions: list[dict[str, Any]], mint: str, asof: float,
@@ -305,42 +476,66 @@ def backfill(c: sqlite3.Connection, wallets: list[str], max_tx: int = 400, per_w
     return n
 
 
-def candidates(positions: list[dict[str, Any]], k: int = WATCH_CAP) -> list[str]:
-    cnt: dict[str, set[str]] = defaultdict(set)
+def candidates(positions: Iterable[Pos], k: int = WATCH_CAP) -> list[str]:
+    # one position per (wallet, mint) -> position count == distinct mints
+    cnt: dict[str, int] = {}
     bad: set[str] = set()
     for p in positions:
-        cnt[p["wallet"]].add(p["mint"])
-        if p["dev"]:
-            bad.add(p["wallet"])
-    ranked = sorted((w for w in cnt if w not in bad and len(cnt[w]) >= 5), key=lambda w: -len(cnt[w]))
+        cnt[p.wallet] = cnt.get(p.wallet, 0) + 1
+        if p.dev:
+            bad.add(p.wallet)
+    ranked = sorted((w for w, n in cnt.items() if w not in bad and n >= 5), key=lambda w: -cnt[w])
     return ranked[:k]
 
 
 # -- cycle -----------------------------------------------------------------------
+class Scan:
+    """One streaming pass over all trades: positions, SMART-FOLLOW signals and the last 30 min of trades, without ever
+    holding the full trade list (the old load_trades + build_positions peaked at ~2.5 GB on a 2M-trade DB)."""
+
+    __slots__ = ("meta", "n_trades", "positions", "recent", "signals")
+
+    def __init__(self, main_db: str, smart_db: str | None, now: float, recent_s: float = 1800) -> None:
+        self.meta = load_meta(main_db)
+        bundled = bundled_sigs(main_db, smart_db)
+        book = PositionBook(self.meta, bundled.__contains__)
+        fe = FollowEval(book.by_wallet, self.meta, now)
+        self.recent: list[dict[str, Any]] = []
+        self.n_trades = 0
+        since = now - recent_s
+        for t in iter_trades(main_db, smart_db):
+            self.n_trades += 1
+            fe.on_trade(t)  # before book.add: the signal snapshot only uses positions entered before the hour mark
+            book.add(t)
+            if t["t"] >= since:
+                self.recent.append(t)
+        self.signals = fe.finish()
+        self.positions = book.positions
+
+
 def cycle(main_db: str, smart_db: str, avenues_db: str | None, *, do_backfill: bool = True) -> dict[str, Any]:
     now = time.time()
     c = connect(smart_db)
     try:
-        trades, meta = load_trades(main_db, smart_db)
-        pos = build_positions(trades, meta)
-        st = wallet_stats(pos, now)
+        sc = Scan(main_db, smart_db, now)
+        st = wallet_stats(sc.positions, now, lazy_ci=True)
         vetted = {w for w, s in st.items() if s["vetted"]}
-        cand = candidates(pos)
+        cand = candidates(sc.positions)
         if do_backfill and os.getenv("HELIUS_API_KEY"):
             day = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
             done = {r[0] for r in c.execute("SELECT wallet FROM backfilled WHERE at>=?", (day,))}
             todo = [w for w in cand if w not in done][:8]
             if todo:
                 backfill(c, todo)
-                trades, meta = load_trades(main_db, smart_db)
-                pos = build_positions(trades, meta)
-                st = wallet_stats(pos, now)
+                del sc, st  # free the first pass before rebuilding (never hold two copies)
+                sc = Scan(main_db, smart_db, now)
+                st = wallet_stats(sc.positions, now, lazy_ci=True)
                 vetted = {w for w, s in st.items() if s["vetted"]}
+        pos, sig = sc.positions, sc.signals
         watch = list(vetted) + [w for w in cand if w not in vetted]
         c.execute("DELETE FROM watch_wallets")
         c.executemany("INSERT INTO watch_wallets VALUES (?,?,?)",
                       [(w, "vetted" if w in vetted else "candidate", _iso(now)) for w in watch[:WATCH_CAP]])
-        sig = follow_signals(trades, pos, meta, now)
         if avenues_db:
             a = sqlite_connect(avenues_db)
             a.execute("CREATE TABLE IF NOT EXISTS paper_outcomes (kind TEXT, id TEXT, at TEXT, net REAL, x_json TEXT, "
@@ -350,9 +545,9 @@ def cycle(main_db: str, smart_db: str, avenues_db: str | None, *, do_backfill: b
             a.commit()
             a.close()
         rets = [s["net"] for s in sig]
-        closed_all = [p for p in pos if p["close_at"] is not None]
-        report = {"at": _iso(now), "mode": "paper/read-only", "trades": len(trades), "wallets": len(st),
-                  "positions": len(pos), "closed_positions": len(closed_all), "candidates": len(cand),
+        n_closed = sum(p.close_at is not None for p in pos)
+        report = {"at": _iso(now), "mode": "paper/read-only", "trades": sc.n_trades, "wallets": len(st),
+                  "positions": len(pos), "closed_positions": n_closed, "candidates": len(cand),
                   "vetted": sorted(({"wallet": w, **st[w]} for w in vetted), key=lambda r: -(r["ci_lo"] or 0))[:25],
                   "rejections": _rej_counts(st), "patterns_vetted": patterns(pos, vetted),
                   "patterns_all_closed": patterns(pos, set(st)),
@@ -360,7 +555,7 @@ def cycle(main_db: str, smart_db: str, avenues_db: str | None, *, do_backfill: b
                                    "ci95_lo_usd": round(bootstrap_lo(rets), 4) if len(rets) >= 5 else None,
                                    "win_rate": round(sum(r > 0 for r in rets) / len(rets), 3) if rets else None,
                                    "recent": sig[-10:]},
-                  "recent_moves": _recent_moves(trades, vetted | set(cand[:50]), now, vetted)}
+                  "recent_moves": _recent_moves(sc.recent, vetted | set(cand[:50]), now, vetted)}
         c.execute("INSERT INTO smart_reports (at, report_json) VALUES (?,?)", (report["at"], json.dumps(report)))
         c.execute("DELETE FROM smart_reports WHERE id NOT IN (SELECT id FROM smart_reports ORDER BY id DESC LIMIT 48)")
         c.commit()
