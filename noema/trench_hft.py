@@ -12,9 +12,12 @@ import os
 import random
 import sqlite3
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from itertools import pairwise
 from typing import Any
+
+from . import tape_quality as tq
 
 K = 30.0 * 1.073e9            # pump.fun virtual reserves constant (SOL * tokens)
 CURVE_SOL = 85.0              # real SOL to complete the curve (approx)
@@ -42,20 +45,54 @@ def sell_sol(mc: float, tokens: float) -> float:
     return (v - K / (t + tokens)) * (1 - FEE)
 
 
-def load(db: str, smart_path: str | None = None) -> tuple[dict[str, dict[str, Any]], float]:
-    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    coins: dict[str, dict[str, Any]] = {}
-    for mint, at, creator in c.execute("SELECT mint, received_at, creator FROM launch_stream WHERE mint LIKE '%pump'"):
-        coins[mint] = {"t0": _ts(at), "creator": creator, "tr": []}
+QUALITY = tq.Stats()  # the last load()'s exclusion counts by reason (tape_quality rules)
+
+
+def load_tape(c: sqlite3.Connection, where: str = "WHERE mint LIKE '%pump'", keep: Callable[[str], bool] | None = None
+              ) -> tuple[dict[str, list[tuple]], float]:
+    """Raw launch_trades rows per mint as tape_quality Row tuples (time-ordered) and the tape's last timestamp."""
+    raw: dict[str, list[tuple]] = defaultdict(list)
     end = 0.0
-    for mint, at, side, sol, trader, mc in c.execute(
-            "SELECT mint, received_at, side, sol, trader, market_cap_sol FROM launch_trades WHERE mint LIKE '%pump' "
-            "ORDER BY received_at"):
+    for mint, at, side, sol, tok, trader, mc, slot, q, _src in c.execute(tq.select_sql(c, where)):
         t = _ts(at)
         end = max(end, t)
-        if mint in coins and mc and mc > 0 and side in ("buy", "sell"):
-            coins[mint]["tr"].append((t, side == "buy", float(sol or 0), trader, float(mc)))
+        if keep is None or keep(mint):
+            raw[mint].append(tq.row(t, side, sol, tok, mc, slot, q, trader))
+    return raw, end
+
+
+def clean_tape(raw: dict[str, list[tuple]], create_mc: dict[str, float | None], stats: tq.Stats,
+               quality: bool = True) -> dict[str, tuple[list[tuple], set[str]]]:
+    """Apply the tape_quality rules per coin -> {mint: ([(t, is_buy, sol, trader, mc)], flags)}.
+    quality=False reproduces the old filter (mc > 0 and buy/sell) for before/after comparisons."""
+    out: dict[str, tuple[list[tuple], set[str]]] = {}
+    for mint, rows in raw.items():
+        if quality:
+            kept, _why, flags = tq.clean_coin(rows, create_mc.get(mint), stats)
+        else:
+            kept, flags = [r for r in rows if r[tq.MC] and r[tq.MC] > 0 and r[tq.SIDE] in ("buy", "sell")], set()
+        out[mint] = ([(r[tq.T], r[tq.SIDE] == "buy", float(r[tq.SOL] or 0), r[tq.TRADER], float(r[tq.MC]))
+                      for r in kept], flags)
+    return out
+
+
+def load(db: str, smart_path: str | None = None, quality: bool = True) -> tuple[dict[str, dict[str, Any]], float]:
+    """Coins with >= 3 clean trades. Rows/coins failing the tape_quality sanity rules (impossible mcaps, zero-SOL
+    non-SOL-quote curves, mayhem/non-standard curves, isolated price spikes, instant graduations) are excluded and
+    counted by reason in trench_hft.QUALITY. Coins that graduated within 60 s carry flags={'fast_grad'}."""
+    global QUALITY
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    coins: dict[str, dict[str, Any]] = {}
+    create_mc: dict[str, float | None] = {}
+    for mint, at, creator, ini, cmc in c.execute(
+            "SELECT mint, received_at, creator, initial_sol, market_cap_sol FROM launch_stream WHERE mint LIKE '%pump'"):
+        coins[mint] = {"t0": _ts(at), "creator": creator, "tr": [], "flags": set()}
+        create_mc[mint] = float(cmc) if cmc else tq.create_mc_from_initial_sol(ini) if ini else None
+    raw, end = load_tape(c, keep=coins.__contains__)
     c.close()
+    QUALITY = tq.Stats()
+    for mint, (tr, flags) in clean_tape(raw, create_mc, QUALITY, quality).items():
+        coins[mint]["tr"], coins[mint]["flags"] = tr, flags
     smart: set[str] = set()
     if smart_path and os.path.isfile(smart_path):
         try:
