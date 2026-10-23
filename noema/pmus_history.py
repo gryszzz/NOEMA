@@ -17,7 +17,15 @@ from typing import Any
 from .sqlite_util import connect as sqlite_connect
 
 BBO_HORIZON_H = 48
-BBO_CAP = int(os.getenv("NOEMA_PMUS_BBO_CAP", "120"))
+BBO_CAP = int(os.getenv("NOEMA_PMUS_BBO_CAP", "20"))
+# The public PM-US API is rate limited per IP (~5 requests / 15 s observed) and shared with the agent,
+# pm_watch, xv_match and fast_settle. Pace every call and stop a phase at the first rate-limit hit
+# instead of hammering through it (which starved every other PM-US reader on the box).
+PACE_S = float(os.getenv("NOEMA_PMUS_PACE_S", "6.0"))
+
+
+def _rate_limited(exc: BaseException) -> bool:
+    return type(exc).__name__ == "RateLimitError" or "429" in str(exc)[:200]
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pmus_markets (slug TEXT PRIMARY KEY, question TEXT, category TEXT, market_type TEXT,
   start_date TEXT, end_date TEXT, first_seen TEXT, last_seen TEXT, description TEXT);
@@ -76,7 +84,8 @@ def run(db: str, client: Any = None, now: datetime | None = None) -> dict[str, i
             n_m += 1
             p = yes_price(m)
             if p is not None:
-                c.execute("INSERT OR IGNORE INTO pmus_quotes VALUES (?,?,?,?,?,?,?,?,?)", (slug, iso, p, None, None, None, None, None, "list"))
+                c.execute("INSERT OR IGNORE INTO pmus_quotes VALUES (?,?,?,?,?,?,?,?,?)", (
+                    slug, iso, p, _f(m.get("bestBidQuote")), _f(m.get("bestAskQuote")), None, None, None, "list"))
                 n_q += 1
             try:
                 end = datetime.fromisoformat(m.get("endDate") or "")
@@ -84,32 +93,40 @@ def run(db: str, client: Any = None, now: datetime | None = None) -> dict[str, i
                 end = None
             if end and now <= end <= now + timedelta(hours=BBO_HORIZON_H):
                 soon.append(slug)
+        c.commit()  # one short txn per page: never hold pmus_history.db across the next HTTP page
         if len(ms) < 100:
             break
         off += 100
+        time.sleep(PACE_S)
     c.commit()
     for slug in soon[:BBO_CAP]:
         try:
             d = (client.markets.bbo(slug) or {}).get("marketData") or {}
-        except Exception:  # noqa: BLE001, S112 - a missing quote/settlement stays unknown
+        except Exception as exc:  # noqa: BLE001 - a missing quote/settlement stays unknown
+            if _rate_limited(exc):
+                break
             continue
         c.execute("INSERT OR IGNORE INTO pmus_quotes VALUES (?,?,?,?,?,?,?,?,?)", (
             slug, iso, _f(d.get("currentPx")), _f(d.get("bestBid")), _f(d.get("bestAsk")), _f(d.get("bidDepth")),
             _f(d.get("askDepth")), _f(d.get("lastTradePx")), "bbo"))
         n_b += 1
-        time.sleep(0.2)
+        c.commit()  # commit before sleeping / the next HTTP call
+        time.sleep(PACE_S)
     c.commit()
     due = [r[0] for r in c.execute("SELECT slug FROM pmus_markets WHERE end_date < ? AND slug NOT IN "
-                                   "(SELECT slug FROM pmus_settlements) LIMIT 300", (iso,))]
+                                   "(SELECT slug FROM pmus_settlements) LIMIT 60", (iso,))]
     for slug in due:
         try:
             st = client.markets.settlement(slug) or {}
-        except Exception:  # noqa: BLE001, S112 - a missing quote/settlement stays unknown
+        except Exception as exc:  # noqa: BLE001 - a missing quote/settlement stays unknown
+            if _rate_limited(exc):
+                break
             continue
         if st.get("settlement") is not None:
             c.execute("INSERT OR REPLACE INTO pmus_settlements VALUES (?,?,?)", (slug, _f(st["settlement"]), iso))
             n_s += 1
-        time.sleep(0.2)
+            c.commit()
+        time.sleep(PACE_S)
     c.commit()
     c.close()
     return {"markets": n_m, "list_quotes": n_q, "bbo_quotes": n_b, "settlements": n_s}

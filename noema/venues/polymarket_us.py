@@ -83,15 +83,21 @@ class PolymarketUSVenue(VenueAdapter):
                 raise TypeError("Polymarket US market response contains malformed data")
             if not market.get("slug") or market.get("closed") is True:
                 continue
-            try:
-                bbo_payload = await asyncio.to_thread(self.client.markets.bbo, str(market["slug"]))
-            except Exception as exc:
-                # Missing or rate-limited quotes stay unavailable; do not invent a price.
-                if type(exc).__name__ in {"RateLimitError", "NotFoundError"}:
-                    continue
-                raise
-            bbo = (bbo_payload.get("marketData")
-                   if isinstance(bbo_payload, dict) else None)
+            if "bestBidQuote" in market or "bestAskQuote" in market:
+                # The list response already carries top of book (identical to /bbo). Using it
+                # avoids one request per market against the shared per-IP public rate limit.
+                bbo = {"marketSlug": market["slug"], "bestBid": market.get("bestBidQuote"),
+                       "bestAsk": market.get("bestAskQuote")}
+            else:
+                try:
+                    bbo_payload = await asyncio.to_thread(self.client.markets.bbo, str(market["slug"]))
+                except Exception as exc:
+                    # Missing or rate-limited quotes stay unavailable; do not invent a price.
+                    if type(exc).__name__ in {"RateLimitError", "NotFoundError"}:
+                        continue
+                    raise
+                bbo = (bbo_payload.get("marketData")
+                       if isinstance(bbo_payload, dict) else None)
             if not isinstance(bbo, dict) or bbo.get("marketSlug") != market["slug"]:
                 continue
             bid = _price(bbo.get("bestBid"))

@@ -1480,3 +1480,10 @@ async def live_account() -> dict[str, Any]:
 async def prediction_venues(*, force: bool = False) -> dict[str, Any]:
     """Current official read-only status for supported prediction venues."""
     return await build_prediction_venue_status(force=force)
+
+
+# Added last so it is the outermost layer: traversal/smuggled paths are rejected before the auth
+# middleware, route matching or any static handler can interpret them.
+from .path_guard import PathGuardMiddleware
+
+app.add_middleware(PathGuardMiddleware)

@@ -196,6 +196,17 @@ def bootstrap_hosted_bill_budget(db_path: str) -> str | None:
         tracker.conn.close()
 
 
+HEALTH_CHECK_TIMEOUT_S = float(os.getenv("NOEMA_AGENT_HEALTH_TIMEOUT_S", "25"))
+
+
+async def _bounded_state(check: Awaitable[AgentConnectionState], name: str, timeout_s: float) -> AgentConnectionState:
+    try:
+        return await asyncio.wait_for(check, timeout=timeout_s)
+    except TimeoutError:
+        _log("agent_health_check_timeout", check=name, timeout_s=timeout_s)
+        return AgentConnectionState("degraded", f"{name} health check timed out after {timeout_s:.0f}s")
+
+
 async def _kalshi_state() -> AgentConnectionState:
     config = kalshi_production_read_only_config()
     _log("agent_kalshi_credential_diagnostic",
@@ -293,6 +304,15 @@ async def _evm_state(config: AgentConfig) -> AgentConnectionState:
 
 
 async def _trench_state(
+    db_path: str, *, quotas: CollectionQuotas | None = None,
+) -> AgentConnectionState:
+    # The health read is synchronous SQLite against the shared noema.db. Running it on the event
+    # loop blocked the concurrent Kalshi account check for whole lock waits, which surfaced as
+    # spurious httpx ConnectTimeouts. Keep it off the loop.
+    return await asyncio.to_thread(_trench_state_sync, db_path, quotas=quotas)
+
+
+def _trench_state_sync(
     db_path: str, *, quotas: CollectionQuotas | None = None,
 ) -> AgentConnectionState:
     del quotas  # Collection policy belongs to the independent forward sampler.
@@ -859,10 +879,13 @@ async def run_cycle(
             "connected", f"scanned={collection.scanned} valid={collection.valid}"
         )
 
+    # Health checks are observational and run between quote collection and the radar's
+    # freshness gate, so each is time-boxed: a slow account API or a locked DB used to hold this
+    # stage for minutes (max 321 s observed) and age every fresh quote past the 120 s gate.
     kalshi, evm, trench = await asyncio.gather(
-        _kalshi_state(),
-        _evm_state(config),
-        _trench_state(config.db_path, quotas=quotas),
+        _bounded_state(_kalshi_state(), "kalshi", HEALTH_CHECK_TIMEOUT_S),
+        _bounded_state(_evm_state(config), "evm", HEALTH_CHECK_TIMEOUT_S),
+        _bounded_state(_trench_state(config.db_path, quotas=quotas), "trench", HEALTH_CHECK_TIMEOUT_S),
     )
     radar = build_radar(config.db_path, limit=config.max_radar_rows)
     _log_cognition_gate_audit(radar, config.db_path)

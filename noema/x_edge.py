@@ -133,6 +133,8 @@ class Prices:
         if key in self.candles or not self.fetch:
             return self.candles.get(key, [])
         rows: list[tuple[float, float]] = []
+        if self.conn.in_transaction:
+            self.conn.commit()  # never hold the shared noema.db write lock across a price fetch
         try:
             import httpx
             with httpx.Client(timeout=8, headers={"accept": "application/json"}) as c:

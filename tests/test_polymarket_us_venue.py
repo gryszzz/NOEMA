@@ -83,3 +83,22 @@ def test_polymarket_l2_depth_requires_exact_market_and_sorted_positive_contract_
                 "offers": [{"px": {"value": "0.45"}, "qty": "1"},
                            {"px": {"value": "0.44"}, "qty": "2"}]}}
     assert _normalize_polymarket_depth(malformed, "fixed-market") is None
+
+
+def test_market_page_uses_list_top_of_book_without_bbo_call():
+    class ListQuoteMarkets(FakeMarkets):
+        def list(self, params):
+            payload = super().list(params)
+            payload["markets"][0].update(bestBidQuote={"value": "0.30", "currency": "USD"},
+                                         bestAskQuote={"value": "0.33", "currency": "USD"})
+            return payload
+
+        def bbo(self, slug):  # pragma: no cover - must not be called
+            raise AssertionError("per-market BBO call should be skipped")
+
+    class Client:
+        markets = ListQuoteMarkets()
+        def close(self): pass
+
+    markets, _ = asyncio.run(PolymarketUSVenue(Client()).market_page(limit=1))
+    assert markets[0].yes_bid == .30 and markets[0].yes_ask == .33
