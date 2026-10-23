@@ -357,3 +357,28 @@ def test_panel_has_no_post_text_or_banned_words():
         assert g in js
     readme = pi.README.lower()
     assert " arb" not in readme and "seed" not in readme and '"kind": "pair"' in readme
+
+
+def test_voids_close_picks_without_deleting(tmp_path):
+    inbox, main = tmp_path / "inbox", _main_db(tmp_path)
+    _drop(inbox, "a.json", _post())
+    db = pi.default_db(main)
+    pi.ingest(db, inbox, main_db=main, now=NOW)
+    before = pi.room_view(db)["stats"]
+    void = {"schema": pi.SCHEMA_ID, "id": "pb-void-1", "author": pi.AUTHOR, "title": "void", "summary": "s",
+            "posted_at": NOW.isoformat(), "voids": [{"post_id": _post()["id"], "idx": 0, "reason": "withdrawn"},
+                                                    {"post_id": "pb-nope"}]}
+    _drop(inbox, "b.json", void)
+    st = pi.ingest(db, inbox, main_db=main, now=NOW)
+    assert st["accepted"] == 1 and st["voided"] == 1 and "b.json" in st["reasons"]
+    after = pi.room_view(db)["stats"]
+    assert after["open"] == before["open"] - 1 and after["voided"] == 1
+    import sqlite3
+    with sqlite3.connect(db) as c:
+        assert c.execute("SELECT COUNT(*), SUM(status='void') FROM prediction_picks").fetchone() == (2, 1)
+    for bad in ([{"post_id": "pb-void-1"}], [{"post_id": "x", "idx": -1}], [{"post_id": "x", "pick": 1}], []):
+        with pytest.raises(pi.Reject):
+            pi.validate_post({**void, "voids": bad}, NOW)
+    readme_void = next(b.split("```")[0] for b in pi.README.split("```json") if '"voids"' in b.split("```")[0])
+    import json
+    assert pi.validate_post(json.loads(readme_void), NOW)["voids"]

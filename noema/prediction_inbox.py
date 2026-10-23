@@ -57,7 +57,9 @@ VENUES = {"kalshi": ("kalshi:production",), "polymarket": ("polymarket-us",)}
 SIDES = ("YES", "NO")
 CONFIDENCE = ("low", "medium", "high")
 URL_HOSTS = ("kalshi.com", "polymarket.com")
-TOP_KEYS = {"schema", "id", "posted_at", "author", "title", "summary", "picks", "report_path"}
+TOP_KEYS = {"schema", "id", "posted_at", "author", "title", "summary", "picks", "report_path", "voids"}
+VOID_KEYS = {"post_id", "idx", "reason"}
+MAX_VOIDS = 25
 PICK_KEYS = {"venue", "market", "market_id", "url", "side", "price", "fair", "confidence", "resolves", "note",
              "capacity_usd", "stake_usd", "kind", "legs", "rules_match"}
 LEG_KEYS = {"venue", "market", "market_id", "side", "price", "url"}
@@ -158,6 +160,19 @@ Rules (anything else is rejected and moved to `rejected/YYYYMMDD/`):
     kalshi.com / polymarket.com).
 - Corrections: post again with the same market + side (or the same pair / parlay legs). The panel shows only
   the latest version; the earlier one stays stored. Post titles, summaries and notes are stored, not shown.
+- Voids: top-level `voids` (optional, 1-25 items) closes earlier picks with no result. Each item:
+  `post_id` (an earlier post's `id`), `idx` (optional 0-based pick index in that post; omit it to void
+  every open pick of that post), `reason` (optional, <= 400 chars, stored, not shown). Voided picks keep
+  their rows (status `void`) but leave the open list, P&L, hit rate and the risk budget. Only open or
+  planned picks can be voided. A post may carry only `voids` (then `picks` may be empty or omitted):
+
+```json
+{{"schema": "{SCHEMA_ID}", "id": "pb-20261022-void-01", "author": "{AUTHOR}",
+ "posted_at": "2026-10-22T23:10:00-04:00",
+ "title": "Void Maine/Collins", "summary": "Withdrawn.",
+ "voids": [{{"post_id": "pb-20261022-collins-fix", "idx": 0, "reason": "withdrawn"}},
+           {{"post_id": "pb-20261022-report", "idx": 3, "reason": "withdrawn"}}]}}
+```
 - No other keys. All text is treated as untrusted plain text (rendered escaped, no HTML/markdown).
 
 Paper tracking: entry = `price`; marked to NOEMA's own stored venue quote when it has that market, else
@@ -213,7 +228,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE prediction_picks ADD COLUMN quote_market_id TEXT")
     for col, typ in (("kind", "TEXT NOT NULL DEFAULT 'single'"), ("stake_usd", "REAL"), ("legs_json", "TEXT"),
                      ("legs_mark_json", "TEXT"), ("rules_match", "INTEGER"),
-                     ("hidden", "INTEGER NOT NULL DEFAULT 0")):
+                     ("hidden", "INTEGER NOT NULL DEFAULT 0"), ("voided_at", "TEXT"), ("voided_by", "TEXT"),
+                     ("void_reason", "TEXT")):
         if col not in cols:
             conn.execute(f"ALTER TABLE prediction_picks ADD COLUMN {col} {typ}")
     from .paper_risk import MOVES_SCHEMA
@@ -429,13 +445,50 @@ def validate_post(doc: Any, now: datetime | None = None) -> dict[str, Any]:
     pid = doc.get("id")
     if not isinstance(pid, str) or not _ID.match(pid):
         raise Reject("id: invalid")
-    picks = doc.get("picks")
-    if not isinstance(picks, list) or not 1 <= len(picks) <= MAX_PICKS:
-        raise Reject(f"picks: need 1-{MAX_PICKS}")
+    voids = validate_voids(doc.get("voids"), pid)
+    picks = doc.get("picks", [])
+    if not isinstance(picks, list) or not (1 if not voids else 0) <= len(picks) <= MAX_PICKS:
+        raise Reject(f"picks: need 1-{MAX_PICKS} (0 allowed when the post only has voids)")
     return {"id": pid, "posted_at": _posted_at(doc.get("posted_at"), now), "author": AUTHOR,
             "title": _text(doc.get("title"), "title"), "summary": _text(doc.get("summary"), "summary"),
             "report_path": _text(doc.get("report_path"), "report_path", required=False),
-            "picks": [validate_pick(p, i) for i, p in enumerate(picks)]}
+            "picks": [validate_pick(p, i) for i, p in enumerate(picks)], "voids": voids}
+
+
+def validate_voids(v: Any, post_id: str) -> list[dict[str, Any]]:
+    """``voids``: close earlier picks without a result. Each item names an earlier post id and optionally the
+    0-based pick index in it (omit idx to void every open pick of that post), plus an optional reason."""
+    if v is None:
+        return []
+    if not isinstance(v, list) or not 1 <= len(v) <= MAX_VOIDS:
+        raise Reject(f"voids: need 1-{MAX_VOIDS} items")
+    out = []
+    for i, item in enumerate(v):
+        f = f"voids[{i}]"
+        if not isinstance(item, dict) or set(item) - VOID_KEYS:
+            raise Reject(f"{f}: object with keys {sorted(VOID_KEYS)}")
+        ref = item.get("post_id")
+        if not isinstance(ref, str) or not _ID.match(ref) or ref == post_id:
+            raise Reject(f"{f}.post_id: an earlier post id")
+        idx = item.get("idx")
+        if idx is not None and (isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < MAX_PICKS):
+            raise Reject(f"{f}.idx: 0-{MAX_PICKS - 1}")
+        out.append({"post_id": ref, "idx": idx, "reason": _text(item.get("reason"), "note", required=False)})
+    return out
+
+
+def apply_voids(conn: sqlite3.Connection, post_id: str, voids: list[dict[str, Any]], at: str) -> tuple[int, int]:
+    """Mark referenced open/planned picks status='void' (rows kept). Returns (voided, unmatched references)."""
+    done = missed = 0
+    for v in voids:
+        q, args = "post_id=?", [v["post_id"]]
+        if v["idx"] is not None:
+            q, args = q + " AND idx=?", [*args, v["idx"]]
+        n = conn.execute(f"UPDATE prediction_picks SET status='void', voided_at=?, voided_by=?, void_reason=? "
+                         f"WHERE {q} AND status IN ('open','planned')", (at, post_id, v["reason"], *args)).rowcount
+        done += n
+        missed += n == 0
+    return done, missed
 
 
 def read_post_file(path: Path, now: datetime | None = None) -> tuple[dict[str, Any], str]:
@@ -694,7 +747,7 @@ def ingest(db_path: str | None = None, inbox: Path | str | None = None, *, main_
     db_path = db_path or default_db(main_db)
     day = now.strftime("%Y%m%d")
     stats: dict[str, Any] = {"files": 0, "accepted": 0, "rejected": 0, "duplicates": 0, "marked": 0,
-                             "settled": 0, "reasons": {}}
+                             "settled": 0, "voided": 0, "reasons": {}}
     moves: list[tuple[Path, Path]] = []
     conn = sqlite_connect(db_path)
     try:
@@ -727,6 +780,11 @@ def ingest(db_path: str | None = None, inbox: Path | str | None = None, *, main_
                               p.get("kind", "single"), json.dumps(p["legs"]) if p.get("legs") else None,
                               "planned" if p.get("kind") == "scaled" else "open",
                               None if p.get("rules_match") is None else int(p["rules_match"])))
+            if post["voids"]:
+                n, missed = apply_voids(conn, post["id"], post["voids"], post["posted_at"].isoformat())
+                stats["voided"] += n
+                if missed:
+                    stats["reasons"][f.name[:80]] = f"{missed} void reference(s) matched no open pick"
             stats["accepted"] += 1
             moves.append((f, inbox_p / "archive" / day))
         conn.commit()  # picks are durable before any (rate-limited) public quote call
@@ -817,7 +875,9 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
         sel = ", ".join(c if c in cols else f"NULL AS {c}" for c in PICK_COLS)
         raw = [dict(zip(PICK_COLS, r)) for r in conn.execute(
             f"SELECT {sel} FROM prediction_picks ORDER BY opened_at DESC, idx")]
-        visible = paper_risk.latest_picks([r for r in raw if not r["hidden"]])
+        latest = paper_risk.latest_picks([r for r in raw if not r["hidden"]])
+        voided = [r for r in latest if r["status"] == "void"]
+        visible = [r for r in latest if r["status"] != "void"]  # a voided latest version hides the market
         order = {pid: i for i, pid in enumerate(r[0] for r in conn.execute(
             "SELECT post_id FROM prediction_posts ORDER BY posted_at DESC"))}
         visible.sort(key=lambda r: (order.get(r["post_id"], 1 << 30), r["pick_id"]))
@@ -872,7 +932,8 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
                     "marked_open": sum(d["current"] is not None for d in opn),
                     "in_the_money_open": sum((d["pnl"] or 0) > 0 for d in opn),
                     "paper_pnl_per_contract": round(sum(d["pnl"] or 0 for d in live), 4),
-                    "planned": len(rows) - len(live), "superseded_or_hidden": len(raw) - len(rows)}
+                    "planned": len(rows) - len(live), "voided": len(voided),
+                    "superseded_or_hidden": len(raw) - len(rows) - len(voided)}
     return out
     try:
         run = conn.execute("SELECT at, files, accepted, rejected FROM prediction_ingest_runs ORDER BY id DESC "

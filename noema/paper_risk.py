@@ -532,7 +532,7 @@ def prediction_positions(pred_db: str | None, budget: Budget) -> list[Position]:
         sel = ", ".join(n if n in cols else f"NULL AS {n}" for n in names)
         hid = " AND hidden=0" if "hidden" in cols else ""
         rows = [dict(zip(names, r)) for r in _rows(
-            k, f"SELECT {sel} FROM prediction_picks WHERE status IN ('open','settled','planned'){hid}")]
+            k, f"SELECT {sel} FROM prediction_picks WHERE status IN ('open','settled','planned','void'){hid}")]
         k2 = latest_picks(rows)
         open_ids = {r[0] for r in _rows(k, "SELECT pick_id FROM prediction_picks WHERE status='open'")}
         for r in k2:
