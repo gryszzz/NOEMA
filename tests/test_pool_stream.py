@@ -195,3 +195,99 @@ def test_helius_url_never_in_status(tmp_path, monkeypatch):
     with open(p) as fh:
         assert "SECRETKEY123" not in fh.read()
     assert os.stat(p).st_mode & 0o777 == 0o644
+
+
+def test_hot_pool_duty_cycle():
+    now = 1_000.0
+    v = {"w0": now - 30, "wb": int(ps.HOT_MB_MIN * 1e6 / 2 * 4)}      # 4x the rate over 30 s
+    off = ps.hot_off_s(v, now)
+    assert abs(off - ps.HOT_ON_S * 3) < 1e-6 and v["hot"] and v["wb"] == 0
+    v = {"w0": now - 30, "wb": int(ps.HOT_MB_MIN * 1e6 * 100)}       # way over -> capped
+    assert ps.hot_off_s(v, now) == ps.HOT_MAX_OFF_S
+    quiet = {"w0": now - 61, "wb": 1000}
+    assert ps.hot_off_s(quiet, now) == 0 and quiet["wb"] == 0 and quiet["w0"] == now
+    young = {"w0": now - 5, "wb": 10**9}                              # not measured long enough yet
+    assert ps.hot_off_s(young, now) == 0
+    st = ps.State()
+    st.pools["P"] = {"at": now - 10, "quote_mint": WSOL, "off_until": now + 50}
+    assert st.desired(5, now=now) == [] and st.desired(5, now=now + 51) == ["P"]
+
+
+def test_sample_evenly_and_tail_selection():
+    assert ps.sample_evenly([1, 2, 3], 8) == [1, 2, 3]
+    s = ps.sample_evenly(list(range(100)), 5)
+    assert s[0] == 0 and s[-1] == 99 and len(s) == 5
+    st = ps.State()
+    now = 1_000_000.0
+    st.pools = {"live": {"at": now - 60, "quote_mint": WSOL}, "tail": {"at": now - 7200, "quote_mint": WSOL},
+                "old": {"at": now - ps.TAIL_S - 700, "quote_mint": WSOL},
+                "usdc": {"at": now - 7200, "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"}}
+    assert st.tail_pools(now) == ["tail"]
+    assert not st.tail_active("tail", now)                            # no trade for 2 h -> dead cadence
+    st.pools["tail"]["last_trade"] = now - 60
+    assert st.tail_active("tail", now)
+    st.prune(now)
+    assert "tail" in st.pools and "old" not in st.pools
+
+
+def test_tail_budget_pacing():
+    day = ["2026-10-23"]
+    b = ps.Budget(day_fn=lambda: day[0])
+    midnight = 1_792_713_600.0                       # 2026-10-23 00:00 UTC
+    assert midnight % 86400 == 0
+    b.add("tail", http=int(ps.TAIL_HTTP_DAY * 0.03), msgs=0)
+    assert b.tail_paced(midnight)                    # 30 min slack = 2.1% of the day; 3% is ahead of pace
+    assert not b.tail_paced(midnight + 3600)         # 1.5 h in -> 6.25% allowed
+    b.add("tail", http=ps.TAIL_HTTP_DAY, msgs=0)
+    assert not b.tail_ok()
+
+
+class FakeHttp:
+    def __init__(self, sigs, txs):
+        self.sigs, self.txs, self.calls = sigs, txs, []
+
+    async def call(self, method, params):
+        self.calls.append((method, params))
+        return self.sigs if method == "getSignaturesForAddress" else self.txs.get(params[0])
+
+
+def test_tail_poll_skips_failed_and_writes_rows():
+    import asyncio
+    st, w = ps.State(), W()
+    pool = b58(K[1])
+    st.pools[pool] = {"mint": "M", "at": 1_000.0, "quote_mint": WSOL, "last_sig": "cur", "last_slot": 5}
+    sigs = [{"signature": "s3", "slot": 9, "err": None, "blockTime": 5_000},
+            {"signature": "s2", "slot": 8, "err": {"InstructionError": [3, {"Custom": 6004}]}, "blockTime": 4_990},
+            {"signature": "s1", "slot": 7, "err": None, "blockTime": 4_980}]
+    txs = {s: {"slot": sl, "meta": {"err": None, "logMessages": logs(swap_ev())}} for s, sl in (("s1", 7), ("s3", 9))}
+    http = FakeHttp(sigs, txs)
+    n = asyncio.run(ps.tail_poll(http, w, st, pool, now=5_010.0))
+    assert n == 2
+    assert http.calls[0][1][1]["until"] == "cur"
+    assert [c[1][0] for c in http.calls[1:]] == ["s1", "s3"]          # failed s2 never fetched
+    rows = [a for s, a in w.rows if s == ps.INSERT_TRADE]
+    assert {r[0] for r in rows} == {"s1", "s3"} and all(r[18] == "tail_poll" for r in rows)
+    cov = [a for s, a in w.rows if s == ps.INSERT_COV]
+    assert cov == [(pool, 1_000.0 + ps.FOLLOW_S, 5_010.0, "tail_poll", 1, 2, 2)]
+    p = st.pools[pool]
+    assert p["last_sig"] == "s3" and p["last_trade"] == 1_792_722_900 and p["tail_next"] == 5_010.0 + ps.TAIL_ACTIVE_S
+
+
+def test_load_state_resumes_tail_cursor(tmp_path):
+    db = str(tmp_path / "pt.db")
+    c = ps.connect(db)
+    now = time.time()
+    c.execute(ps.INSERT_MIG, ("P", "M", "ms", 1, int(now - 5 * 3600), ps._now(), "free_ws", ps.PUMP_AMM, WSOL,
+                              1.0, 85.0, None, None, None))
+    row = list(ps.trade_row(ps.decode_swap(swap_ev(pool=b58d("11111111111111111111111111111112"))), "lastsig", 0,
+                            "M", 77, "free_ws"))
+    row[1] = "P"
+    c.execute(ps.INSERT_TRADE, row)
+    c.execute(ps.INSERT_COV, ("P", now - 4 * 3600 - 60, now - 4 * 3600, "free_ws", 1, None, None))
+    c.commit()
+    c.close()
+    st = ps.State()
+    ps.load_state(db, st)
+    v = st.pools["P"]
+    assert v["last_sig"] == "lastsig" and v["last_slot"] == 77 and abs(v["tail_from"] - (now - 4 * 3600)) < 1
+    assert st.tail_pools() == ["P"]

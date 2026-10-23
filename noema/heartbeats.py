@@ -291,6 +291,10 @@ def _pool_trades(main: str) -> dict[str, Any]:
               f"({int(st.get('follow_s') or 0) // 60}m) | free {f.get('mb')}/{f.get('mb_budget')} MB, "
               f"http {f.get('http_calls')}/{f.get('http_budget')} | helius {h.get('credits')}/"
               f"{h.get('credits_budget')} cr | last trade {age}")
+    t = st.get("tail") or {}
+    if t.get("enabled"):
+        detail += (f" | tail {t.get('pools')} pools ({t.get('active')} active), http {t.get('http_calls')}/"
+                   f"{t.get('http_budget')}, hot {st.get('hot_pools', 0)}")
     stopped = st.get("stopped") or ""
     if stopped and "free" not in stopped:
         detail += f" | {stopped} (fallback only)"
