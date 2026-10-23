@@ -145,7 +145,7 @@ Rules (anything else is rejected and moved to `rejected/YYYYMMDD/`):
     settle identically. Missing or false -> shown as UNVERIFIED and the profit is never called locked.
     Top-level `price` may be omitted (it is the sum of the leg prices; if given it must match within 1c);
     `fair` defaults to 1.0 (the $1 payout); `market` defaults to the first leg's market; `confidence`
-    defaults to low. NOEMA shows combined cost = sum(leg price + venue fee), profit per $ =
+    defaults to low. NOEMA shows combined cost = sum(leg price + leg taker fee), profit per $ =
     (1 - cost) / cost and the annualized return over the days left to `resolves`. Marked leg by leg
     (value = sum of leg marks); settles when both legs resolve.
   - `parlay`: `legs` REQUIRED, 2-10 objects, each `venue` kalshi|polymarket, `market` <= 200 chars,
@@ -158,6 +158,10 @@ Rules (anything else is rejected and moved to `rejected/YYYYMMDD/`):
   - `legs` on any kind other than `pair` / `parlay` is rejected; `rules_match` only on `pair`.
   - Leg keys: `venue`, `market`, `market_id` optional, `side`, `price`, `url` optional (https on
     kalshi.com / polymarket.com).
+- Fees (per $1 contract, taker): Kalshi 0.07*p*(1-p). Polymarket (international) uses each market's own
+  Gamma `feeSchedule` (rate * p*(1-p); many markets, e.g. `feeType: zero_fees`, are free), so give the
+  Gamma numeric `market_id` (or the market slug) on every polymarket pick and leg. Without it, or until
+  NOEMA has read the market's schedule, the flat 0.0695*p*(1-p) is assumed and the pick shows `fee assumed`.
 - Corrections: post again with the same market + side (or the same pair / parlay legs). The panel shows only
   the latest version; the earlier one stays stored. Post titles, summaries and notes are stored, not shown.
 - Voids: top-level `voids` (optional, 1-25 items) closes earlier picks with no result. Each item:
@@ -821,8 +825,9 @@ def pair_metrics(legs: list[dict[str, Any]], resolves: str | None, rules_match: 
                  today: date | None = None) -> dict[str, Any]:
     """Hedged pair economics per $1 payout: cost = sum(leg price + venue fee); locked profit per $ =
     (1 - cost) / cost; annualized over the days left to `resolves`. Only 'locked' when rules_match is true."""
-    from .paper_risk import fee
-    cost = sum(float(x["price"]) + fee(x["venue"], float(x["price"])) for x in legs)
+    from .paper_risk import legs_fee
+    fees, assumed = legs_fee(legs)
+    cost = sum(float(x["price"]) for x in legs) + fees
     per = (1 - cost) / cost if cost > 0 else None
     days = None
     if resolves:
@@ -835,7 +840,8 @@ def pair_metrics(legs: list[dict[str, Any]], resolves: str | None, rules_match: 
     return {"combined_cost": round(cost, 4), "profit_per_usd": None if per is None else round(per, 4),
             "annualized": None if ann is None else round(ann, 4), "days_to_resolve": days,
             "rules_match": verified, "verification": "rules match" if verified else "unverified",
-            "locked": bool(verified and per is not None and per > 0)}
+            "locked": bool(verified and per is not None and per > 0), "fees": round(fees, 4),
+            "fee_assumed": assumed}
 
 
 PICK_COLS = ("pick_id", "post_id", "opened_at", "venue", "market", "market_id", "url", "side", "entry_price", "fair",
@@ -888,13 +894,18 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
                 m = marks[j] if j < len(marks) else {}
                 leg.update(current=m.get("price"), result=m.get("result"), current_source=m.get("source"))
             d["legs"] = legs
+            fmid = r["quote_market_id"] or r["market_id"]
+            f, d["fee_assumed"] = paper_risk.pick_fee(d["venue"], d["price"], fmid, r["legs_json"], d["kind"])
+            d["fee"] = None if f is None else round(f, 4)
+            d["pnl_net"] = None if r["pnl"] is None or f is None else round(r["pnl"] - f, 4)
             if d["kind"] == "pair" and len(legs) == 2:
                 d["pair"] = pair_metrics(legs, r["resolves"], r["rules_match"])
                 d["stake_usd"] = round(max(min(r["stake_usd"] or 1.0, r["capacity_usd"] or float("inf"),
                                                paper_risk.cap_pct() * paper_risk.bankroll()), 1.0), 2)
             else:
                 d["stake_usd"] = paper_risk.pick_stake(d["venue"], d["fair"], d["price"], d["capacity_usd"],
-                                                       stake_usd=d["posted_stake_usd"])
+                                                       stake_usd=d["posted_stake_usd"], market_id=fmid,
+                                                       legs_json=r["legs_json"], kind=d["kind"])
             d["moves"] = _moves(conn, r["pick_id"])
             rows.append(d)
         out["picks"] = rows
@@ -924,6 +935,8 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
                     "marked_open": sum(d["current"] is not None for d in opn),
                     "in_the_money_open": sum((d["pnl"] or 0) > 0 for d in opn),
                     "paper_pnl_per_contract": round(sum(d["pnl"] or 0 for d in live), 4),
+                    "paper_pnl_net_of_fees_per_contract": round(sum(d["pnl_net"] or 0 for d in live), 4),
+                    "fee_assumed": sum(bool(d["fee_assumed"]) for d in rows),
                     "planned": len(rows) - len(live), "voided": len(voided),
                     "superseded_or_hidden": len(raw) - len(rows) - len(voided)}
     return out
@@ -983,6 +996,34 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
     return out
 
 
+def fee_market_ids(db_path: str | None = None) -> list[str]:
+    """Polymarket international market ids (and slugs) of open / planned picks and their legs."""
+    conn = _ro(db_path or default_db())
+    if conn is None:
+        return []
+    ids: list[str] = []
+    try:
+        for venue, mid, qmid, legs_json in conn.execute(
+                "SELECT venue, market_id, quote_market_id, legs_json FROM prediction_picks "
+                "WHERE status IN ('open','planned')"):
+            if venue == "polymarket":
+                ids += [x for x in (qmid, mid) if x]
+            for leg in json.loads(legs_json) if legs_json else []:
+                if isinstance(leg, dict) and leg.get("venue") == "polymarket" and leg.get("market_id"):
+                    ids.append(str(leg["market_id"]))
+    except (sqlite3.Error, ValueError):
+        pass
+    finally:
+        conn.close()
+    return list(dict.fromkeys(ids))
+
+
+def refresh_fees(db_path: str | None = None, fetcher: Any = None) -> dict[str, int]:
+    """Refresh cached Gamma fee schedules for the markets in play (read-only HTTP, bounded per cycle)."""
+    from . import pm_fees
+    return pm_fees.refresh(fee_market_ids(db_path), fetcher=fetcher)
+
+
 def run_loop(interval: float = 120, db_path: str | None = None) -> None:
     init_inbox()
     while True:
@@ -993,8 +1034,10 @@ def run_loop(interval: float = 120, db_path: str | None = None) -> None:
                 q = shared()
                 q.new_cycle()
             s = ingest(db_path, quotes=q)
+            if os.getenv("NOEMA_PM_FEE_FETCH", "1") != "0":
+                s["fees"] = refresh_fees(db_path)
             heartbeats.beat(HEARTBEAT, True, cadence_s=CADENCE_S)
-            if s["files"] or s["settled"]:
+            if s["files"] or s["settled"] or s.get("fees", {}).get("due"):
                 print(json.dumps({"at": datetime.now(UTC).isoformat(), **s}), flush=True)
         except Exception as exc:  # noqa: BLE001 - keep the loop alive; the heartbeat shows the failure
             heartbeats.beat(HEARTBEAT, False, f"{type(exc).__name__}: {exc}", cadence_s=CADENCE_S)

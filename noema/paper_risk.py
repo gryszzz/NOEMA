@@ -6,7 +6,9 @@ written atomically, mode 0644: every bot may read it, only NOEMA writes it).
 
 Sizing (every NOEMA binary paper bet):
 
-* Entry gate: ``fair - (price + fee + slippage) > NOEMA_ENTRY_BUFFER`` (default 1c), side-relative.
+* Entry gate: ``fair - (price + fee + slippage) > NOEMA_ENTRY_BUFFER`` (default 1c), side-relative. Fee:
+  Kalshi 0.07*p*(1-p); Polymarket US 0.0695*p*(1-p) exchange-wide; Polymarket international per market from
+  Gamma's feeSchedule (``pm_fees``), flat 0.0695 only when unknown ("fee assumed").
 * Stake = quarter-Kelly of the shared bankroll: ``0.25 * (fair - c) / (1 - c) * bankroll`` with c the all-in cost.
 * Hard caps: 5% of the bankroll per bet and per correlated group (all Fed markets, all BTC strikes, one
   election event ...); until a category has a held-out record (>= NOEMA_HELDOUT_MIN_N settled forward bets
@@ -239,32 +241,83 @@ def classify(venue: str, market_id: str | None, title: str | None = "") -> tuple
 
 # ------------------------------------------------------------------ edge & Kelly
 
-def fee(venue: str, price: float) -> float:
+def is_pm_international(venue: str | None) -> bool:
+    v = (venue or "").lower()
+    return v.startswith("polymarket") and v not in ("polymarket-us", "polymarket_us", "pmus")
+
+
+def fee_info(venue: str, price: float, market_id: str | None = None) -> tuple[float, bool]:
+    """(taker fee per $1 contract, assumed?). Kalshi 0.07*p*(1-p); Polymarket US one exchange-wide 0.0695*p*(1-p);
+    Polymarket international per market from Gamma's feeSchedule (often 0). An international market whose
+    schedule is unknown falls back to the flat 0.0695 rate and is flagged as assumed."""
     from .edge_strategies import kalshi_fee, pmus_fee
-    return kalshi_fee(price) if (venue or "").lower().startswith("kalshi") else pmus_fee(price)
+    v = (venue or "").lower()
+    if v.startswith("kalshi"):
+        return kalshi_fee(price), False
+    if not is_pm_international(v):
+        return pmus_fee(price), False
+    from . import pm_fees
+    sched = pm_fees.lookup(market_id)
+    if sched is None:
+        return pmus_fee(price), True
+    return pm_fees.fee(sched, price), False
 
 
-def all_in_cost(venue: str, price: float) -> float:
-    return price + fee(venue, price) + slippage()
+def fee(venue: str, price: float, market_id: str | None = None) -> float:
+    return fee_info(venue, price, market_id)[0]
 
 
-def net_edge(venue: str, fair: float, price: float) -> float:
+def all_in_cost(venue: str, price: float, market_id: str | None = None) -> float:
+    return price + fee(venue, price, market_id) + slippage()
+
+
+def net_edge(venue: str, fair: float, price: float, market_id: str | None = None) -> float:
     """Side-relative expected gain per $1 contract after fee and slippage."""
-    return fair - all_in_cost(venue, price)
+    return fair - all_in_cost(venue, price, market_id)
 
 
-def passes_gate(venue: str, fair: float | None, price: float | None) -> bool:
+def passes_gate(venue: str, fair: float | None, price: float | None, market_id: str | None = None) -> bool:
     from .edge_strategies import entry_buffer
     if fair is None or price is None or not (0 < price < 1):
         return False
-    return net_edge(venue, fair, price) > entry_buffer()
+    return net_edge(venue, fair, price, market_id) > entry_buffer()
 
 
-def kelly_stake(venue: str, fair: float, price: float, bank: float) -> float:
-    c = all_in_cost(venue, price)
+def kelly_stake(venue: str, fair: float, price: float, bank: float, market_id: str | None = None) -> float:
+    c = all_in_cost(venue, price, market_id)
     if c >= 1 or fair <= c:
         return 0.0
     return kelly_fraction() * (fair - c) / (1 - c) * bank
+
+
+def legs_fee(legs: list[dict[str, Any]]) -> tuple[float, bool]:
+    """Sum of per-leg entry fees (pair / parlay legs, each bought at its own price); assumed if any leg is."""
+    tot, assumed = 0.0, False
+    for x in legs:
+        f, a = fee_info(str(x.get("venue") or ""), float(x["price"]), x.get("market_id"))
+        tot, assumed = tot + f, assumed or a
+    return tot, assumed
+
+
+def _legs(legs_json: Any) -> list[dict[str, Any]]:
+    try:
+        legs = json.loads(legs_json) if isinstance(legs_json, str) else (legs_json or [])
+        return [x for x in legs if isinstance(x, dict) and x.get("price") is not None]
+    except (TypeError, ValueError):
+        return []
+
+
+def pick_fee(venue: str | None, price: float | None, market_id: str | None = None,
+             legs_json: Any = None, kind: str | None = None) -> tuple[float | None, bool]:
+    """Entry fee per contract for one Prediction Bot pick: a single at its market's rate; a pair / parlay as
+    the sum of its legs' fees. (None, False) when there is no price."""
+    legs = _legs(legs_json) if kind in ("pair", "parlay") else []
+    if legs:
+        return legs_fee(legs)
+    if price is None or not (0 < float(price) < 1):
+        return None, False
+    v = "kalshi" if (venue or "").startswith("kalshi") else "polymarket"
+    return fee_info(v, float(price), market_id)
 
 
 # ------------------------------------------------------------------ positions & budget
@@ -344,10 +397,10 @@ class Budget:
         cat, grp = classify(venue, market_id, title)
         if fair is None or price is None or not (0 < price < 1):
             return Decision(0.0, "no_measured_edge", cat, grp)
-        edge = net_edge(venue, fair, price)
-        if not passes_gate(venue, fair, price):
+        edge = net_edge(venue, fair, price, market_id)
+        if not passes_gate(venue, fair, price, market_id):
             return Decision(0.0, "below_fee_slippage_buffer", cat, grp, edge)
-        k = kelly_stake(venue, fair, price, self.bank)
+        k = kelly_stake(venue, fair, price, self.bank, market_id)
         cap = self.per_bet_cap(cat)
         if step_cap:
             cap = min(cap, self.strategy_cap(desk))
@@ -427,6 +480,8 @@ class Budget:
                       "unproven_bet_cap_usd": unproven_cap_usd(), "heldout_min_n": heldout_min_n(),
                       "entry_buffer": entry_buffer(), "slippage": slippage(),
                       "gate": "fair - (price + fee + slippage) > entry_buffer",
+                      "fees": "kalshi 0.07*p*(1-p); polymarket-us 0.0695*p*(1-p); polymarket international per-market "
+                              "Gamma feeSchedule rate*p*(1-p), flat 0.0695 when unknown (fee assumed)",
                       "prediction_bot_stake": "min(quarter-Kelly, pick stake_usd, pick capacity_usd, 5% group cap),"
                                               " never below one $1 contract; planned (scaled) picks excluded"},
             "bots": bots, "groups": glist, "categories": cats, "strategies": strategies,
@@ -478,14 +533,20 @@ def noema_positions(conn: sqlite3.Connection) -> list[Position]:
 
 
 def pick_stake(venue: str, fair: float | None, price: float | None, capacity_usd: float | None,
-               bank: float | None = None, stake_usd: float | None = None) -> float:
+               bank: float | None = None, stake_usd: float | None = None, market_id: str | None = None,
+               legs_json: Any = None, kind: str | None = None) -> float:
     """Exposure counted for one Prediction Bot pick: min(quarter-Kelly, posted stake_usd, capacity_usd,
     5% group cap), never below one $1 contract (the entry price)."""
     bank = bank if bank is not None else bankroll()
     if fair is None or price is None:
         return 0.0
-    v = "kalshi" if (venue or "").startswith("kalshi") else "polymarket"
-    k = kelly_stake(v, fair, price, bank) if passes_gate(v, fair, price) else 0.0
+    k = 0.0
+    if 0 < price < 1:
+        f, _ = pick_fee(venue, price, market_id, legs_json, kind)
+        c = price + (f or 0.0) + slippage()  # parlay legs: sum of leg fees on the combined price
+        from .edge_strategies import entry_buffer
+        if fair - c > entry_buffer() and c < 1:
+            k = kelly_fraction() * (fair - c) / (1 - c) * bank
     usd = min(k, cap_pct() * bank, capacity_usd or float("inf"), stake_usd or float("inf"))
     return round(max(usd, float(price)), 2)
 
@@ -567,7 +628,8 @@ def prediction_positions(pred_db: str | None, budget: Budget) -> list[Position]:
                 usd = min(r["stake_usd"] or 1.0, r["capacity_usd"] or float("inf"), cap_pct() * budget.bank)
                 stake = round(max(usd, 1.0), 2)
             else:
-                stake = pick_stake(v, r["fair"], r["entry_price"], r["capacity_usd"], budget.bank, r["stake_usd"])
+                stake = pick_stake(v, r["fair"], r["entry_price"], r["capacity_usd"], budget.bank, r["stake_usd"],
+                                   r["quote_market_id"] or r["market_id"], r["legs_json"], r["kind"])
             out.append(Position("prediction_bot", "picks", gv, gmid, gtitle, stake))
     finally:
         k.close()

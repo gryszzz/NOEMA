@@ -23,15 +23,18 @@ function mkCell(text,url){const td=el("td","mk");const u=safeUrl(url);
 function venueTag(v){return el("span",v==="kalshi"?"vk":"vp",v==="kalshi"?"K":"PM")}
 function px(v){return v==null||!isFinite(v)?"—":v>1?"$"+(Math.round(v*1000)/1000):c(v)}
 function pf(price,fair){return px(price)+"→"+px(fair)}
+function feeCell(text,assumed){const td=el("td",assumed?"fa":null,text+(assumed?"*":""));
+ if(assumed)td.title="fee assumed: flat 0.0695·p(1−p), market fee schedule not known yet";return td}
 function pickRow(p,showNow){const kind=p.kind||"single";const tr=el("tr","k-"+kind);const planned=p.status==="planned";const combo=kind==="pair"||kind==="parlay";
  const sd=kind==="parlay"?(p.legs||[]).length+"-leg":kind==="pair"?"pair":p.side;
  const st=p.posted_stake_usd!=null?p.posted_stake_usd:p.stake_usd;
  const vn=el("td","vn");if(!combo)vn.append(venueTag(p.venue));
  tr.append(vn,mkCell(p.market,p.url),el("td",combo?"sd-PAR":"sd-"+(p.side==="YES"?"YES":"NO"),sd),
-  el("td",null,pf(p.price,p.fair)),el("td",null,money(st)),el("td","rs",p.resolves?p.resolves.slice(5,10):"—"));
+  feeCell(pf(p.price,p.fair),p.fee_assumed),el("td",null,money(st)),el("td","rs",p.resolves?p.resolves.slice(5,10):"—"));
  if(showNow){const done=p.status==="settled";
   const now=el("td",done?(p.outcome==="won"?"won":"lost"):null,done?(p.outcome==="won"?"WON":"LOST"):px(p.current));
-  const pl=planned?el("td","flat","planned"):el("td",p.pnl==null?"flat":p.pnl>0?"won":p.pnl<0?"lost":"flat",p.pnl==null?"—":pp(p.pnl));
+  const pn=p.pnl_net!=null?p.pnl_net:p.pnl;
+  const pl=planned?el("td","flat","planned"):el("td",pn==null?"flat":pn>0?"won":pn<0?"lost":"flat",pn==null?"—":pp(pn));
   tr.append(now,pl)}
  const rows=[tr];
  if(combo)for(const g of p.legs||[]){const lr=el("tr","leg");const vn2=el("td","vn");vn2.append(venueTag(g.venue));
@@ -39,7 +42,7 @@ function pickRow(p,showNow){const kind=p.kind||"single";const tr=el("tr","k-"+ki
   if(showNow)lr.append(el("td",g.result?(g.result==="won"?"won":"lost"):null,g.result?(g.result==="won"?"WON":"LOST"):c(g.current)),el("td"));
   rows.push(lr)}
  if(kind==="pair"&&p.pair){const m=p.pair;const lr=el("tr","leg pm");lr.append(el("td"));
-  const td=el("td","mk "+(m.locked?"won":"flat"),`cost ${px(m.combined_cost)} · ${m.locked?"locked ":""}${pct(m.profit_per_usd)}/$ · ${pct(m.annualized)} ann · ${m.rules_match?"rules match":"unverified"}`);
+  const td=el("td","mk "+(m.locked?"won":"flat"),`cost ${px(m.combined_cost)} · ${m.locked?"locked ":""}${pct(m.profit_per_usd)}/$ · ${pct(m.annualized)} ann · ${m.rules_match?"rules match":"unverified"}${m.fee_assumed?" · fee assumed":""}`);
   td.colSpan=showNow?7:5;lr.append(td);rows.push(lr)}
  return rows}
 function table(picks,showNow){const tb=el("table");const cg=el("colgroup");
