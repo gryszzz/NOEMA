@@ -67,6 +67,21 @@ HELIUS_ON = os.getenv("NOEMA_STREAM_HELIUS", "1") == "1"
 HELIUS_CREDITS_DAY = float(os.getenv("NOEMA_STREAM_HELIUS_CREDITS_DAY", "10000"))
 HELIUS_SESSION_S = float(os.getenv("NOEMA_STREAM_HELIUS_SESSION_S", "300"))  # then retry the free endpoints
 SILENT_S = 60.0  # a subscription that delivers nothing for this long counts as a failed endpoint
+# ---- throughput watchdog ------------------------------------------------------------------------------
+# A socket can stay open and keep delivering *some* notifications (e.g. only the LaunchLab subscription) while
+# the pump.fun logsSubscribe silently dies - recv() never times out and no error is raised (Oct 23 2026:
+# 46 min at ~0 pump.fun trades). The watchdog force-closes the session when no pump.fun TradeEvent has been
+# PARSED (follow filter or not) for WD_SILENCE_S, or when the parsed-trade rate over WD_WINDOW_S stays below
+# WD_MIN_RATIO x its rolling baseline for WD_LOW_WINDOWS consecutive windows. A trip counts as a failed
+# endpoint, so the normal free-node rotation -> capped Helius fallback path takes over.
+WD_SILENCE_S = float(os.getenv("NOEMA_STREAM_WD_SILENCE_S", "105"))
+WD_WINDOW_S = float(os.getenv("NOEMA_STREAM_WD_WINDOW_S", "30"))
+WD_MIN_RATIO = float(os.getenv("NOEMA_STREAM_WD_MIN_RATIO", "0.1"))
+WD_LOW_WINDOWS = int(os.getenv("NOEMA_STREAM_WD_LOW_WINDOWS", "3"))
+WD_MIN_BASELINE = float(os.getenv("NOEMA_STREAM_WD_MIN_BASELINE", "100"))  # trades/window before the ratio applies
+WD_WARMUP = int(os.getenv("NOEMA_STREAM_WD_WARMUP", "4"))  # healthy windows before the baseline is trusted
+WD_ALPHA = float(os.getenv("NOEMA_STREAM_WD_ALPHA", "0.05"))  # EWMA per window (~10 min half-life at 30 s)
+PARSED = {"pump_trades": 0}  # every decoded pump.fun TradeEvent, followed or not (watchdog input)
 
 
 def b58(b: bytes) -> str:
@@ -298,6 +313,8 @@ def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], fol
             continue
         if not ev:
             continue
+        if ev["kind"] == "trade":
+            PARSED["pump_trades"] += 1
         if ev["kind"] == "create":
             follow.setdefault(ev["mint"], now)
         elif sig and (now - follow.get(ev["mint"], -1e18) <= TRADE_FOLLOW_S or ev["trader"] in WATCH
@@ -513,6 +530,56 @@ class Budget:
         return HELIUS_ON and self.credits("helius") < HELIUS_CREDITS_DAY
 
 
+def _clock() -> float:
+    return time.monotonic()
+
+
+class StreamStalled(RuntimeError):
+    """The watchdog force-closed a websocket that stayed open but stopped delivering pump.fun trades."""
+
+
+class Watchdog:
+    """Pump.fun trade-throughput watchdog for one logsSubscribe session. check() returns a reason string when
+    the session must be force-closed, else None. The rate baseline (EWMA of parsed trades per window) lives on
+    the Transport so it survives reconnects; windows below the trip ratio never feed it."""
+
+    def __init__(self, tr: Transport, now: float, parsed: int) -> None:
+        self.tr, self.start, self.last_trade = tr, now, now
+        self.parsed, self.win_start, self.win_n, self.low = parsed, now, 0, 0
+        self.healthy = False  # one full healthy silence window -> the endpoint counts as working again
+        self.last_recv = now
+
+    def check(self, now: float, parsed: int) -> str | None:
+        d = parsed - self.parsed
+        self.parsed = parsed
+        if d > 0:
+            self.last_trade = now
+            self.win_n += d
+            self.tr.watchdog["last_trade_at"] = _now()
+        quiet = now - self.last_trade
+        if quiet >= WD_SILENCE_S:
+            return f"no pump.fun trade parsed for {quiet:.0f}s (limit {WD_SILENCE_S:.0f}s)"
+        if now - self.win_start >= WD_WINDOW_S:
+            n, base = self.win_n, self.tr.watchdog.get("baseline")
+            self.win_start, self.win_n = now, 0
+            trusted = base is not None and self.tr.watchdog.get("windows", 0) >= WD_WARMUP and base >= WD_MIN_BASELINE
+            if trusted and n < WD_MIN_RATIO * base:
+                self.low += 1
+                self.tr.watchdog["low_windows"] = self.low
+                if self.low >= WD_LOW_WINDOWS:
+                    return (f"pump.fun trade rate {n}/{WD_WINDOW_S:.0f}s < {WD_MIN_RATIO:.0%} of baseline "
+                            f"{base:.0f} for {self.low} windows")
+            else:
+                self.low = 0
+                self.tr.watchdog["low_windows"] = 0
+                self.tr.watchdog["baseline"] = n if base is None else (1 - WD_ALPHA) * base + WD_ALPHA * n
+                self.tr.watchdog["windows"] = self.tr.watchdog.get("windows", 0) + 1
+                self.tr.watchdog["last_window_trades"] = n
+        if not self.healthy and now - self.start >= WD_SILENCE_S:
+            self.healthy = True
+        return None
+
+
 class Transport:
     """Which websocket the logsSubscribe tape is on, consecutive free failures, and the day's usage."""
 
@@ -520,6 +587,13 @@ class Transport:
         self.budget = budget or Budget()
         self.mode, self.free_fail, self.stopped = "starting", 0, None
         self.switches: dict[str, int] = {"free": 0, "helius": 0}
+        self.watchdog: dict[str, Any] = {"trips": 0, "last_reason": None, "last_trip_at": None,
+                                         "last_trip_src": None, "last_trade_at": None, "baseline": None,
+                                         "windows": 0, "low_windows": 0}
+
+    def trip(self, src: str, reason: str) -> None:
+        self.watchdog.update(trips=self.watchdog["trips"] + 1, last_reason=reason, last_trip_at=_now(),
+                             last_trip_src=src, low_windows=0)
 
     def use_helius(self) -> bool:
         return self.free_fail >= 2 * max(1, len(FREE_WS)) and bool(helius_ws_url()) and self.budget.helius_ok()
@@ -566,7 +640,11 @@ def write_status(path: str, tr: Transport | None = None) -> dict[str, Any]:
          "free": {"msgs": f["msgs"], "mb": round(f["bytes"] / 1e6, 1), "http_calls": f["http"]},
          "helius": {"enabled": bool(helius_ws_url()), "msgs": h["msgs"], "mb": round(h["bytes"] / 1e6, 2),
                     "http_calls": h["http"], "credits": round(tr.budget.credits("helius"), 1),
-                    "credits_budget": HELIUS_CREDITS_DAY}}
+                    "credits_budget": HELIUS_CREDITS_DAY},
+         "watchdog": {**tr.watchdog, "baseline": None if tr.watchdog.get("baseline") is None
+                      else round(tr.watchdog["baseline"], 1),
+                      "silence_s": WD_SILENCE_S, "window_s": WD_WINDOW_S, "min_ratio": WD_MIN_RATIO,
+                      "low_windows_to_trip": WD_LOW_WINDOWS}}
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".lss")
     with os.fdopen(fd, "w") as fh:
         json.dump(s, fh)
@@ -679,6 +757,16 @@ async def run_pumpportal(c: sqlite3.Connection, stop: asyncio.Event) -> None:
             backoff = min(60.0, backoff * 2)
 
 
+def _feed_beat(reason: str) -> None:
+    """Explicit failed attempt on feed:helius so the dashboard's last_error says WHY the tape stalled
+    (cleared automatically by heartbeats.snapshot once a newer trade row lands)."""
+    try:
+        from .heartbeats import beat
+        beat("feed:helius", False, f"watchdog: {reason}", cadence_s=30)
+    except Exception:  # noqa: BLE001, S110 - heartbeat must never break the stream
+        pass
+
+
 def handle_rpc_message(c: Any, m: dict[str, Any], subs: dict[int, str], llq: asyncio.Queue | None = None) -> None:
     """One logsSubscribe notification (either transport)."""
     p = (m.get("params") or {})
@@ -731,11 +819,25 @@ async def rpc_session(url: str, src: str, c: Any, stop: asyncio.Event, llq: asyn
         tr.mode = src
         tr.switches[src] = tr.switches.get(src, 0) + 1
         print(_now(), "rpc connected", src, flush=True)
-        last_commit, first = time.time(), True
+        last_commit = time.time()
+        wd = Watchdog(tr, _clock(), PARSED["pump_trades"])
         while not stop.is_set():
             if until and time.time() > until:
                 return
-            raw = await asyncio.wait_for(ws.recv(), timeout=SILENT_S)
+            reason = wd.check(_clock(), PARSED["pump_trades"])
+            if reason:
+                if "pump.fun" not in subs.values():
+                    reason += "; pump.fun logsSubscribe never confirmed"
+                raise StreamStalled(reason)
+            if wd.healthy and src == "free" and tr.free_fail:
+                tr.free_fail = 0  # this endpoint really streams pump.fun trades
+            try:  # wake at least every few seconds so the watchdog runs even on a trickle / dead socket
+                raw = await asyncio.wait_for(ws.recv(), timeout=min(SILENT_S, 5.0))
+            except TimeoutError:
+                if _clock() - wd.last_recv >= SILENT_S:
+                    raise
+                continue
+            wd.last_recv = _clock()
             tr.budget.add(src, len(raw))
             if src == "helius" and not tr.budget.helius_ok():
                 tr.stopped = f"helius daily budget reached ({HELIUS_CREDITS_DAY:.0f} credits)"
@@ -748,10 +850,6 @@ async def rpc_session(url: str, src: str, c: Any, stop: asyncio.Event, llq: asyn
                 continue
             if "error" in m:
                 raise RuntimeError(f"subscribe error {str(m['error'])[:80]}")
-            if first:  # a notification arrived: this endpoint really streams
-                first = False
-                if src == "free":
-                    tr.free_fail = 0
             handle_rpc_message(c, m, subs, llq)
             if time.time() - last_commit > COMMIT_S:
                 safe_commit(c)
@@ -777,8 +875,14 @@ async def run_rpc(c: Any, stop: asyncio.Event, llq: asyncio.Queue | None = None,
                 await rpc_session(FREE_WS[i % len(FREE_WS)], "free", c, stop, llq, tr)
             backoff = 1.0
         except Exception as exc:  # noqa: BLE001 - reconnect; never print a Helius URL / error (may hold a key)
+            stalled = isinstance(exc, StreamStalled)
+            if stalled:  # our own message, never contains a URL/key
+                tr.trip("helius" if use_helius else "free", str(exc))
+                _feed_beat(str(exc))
             print(_now(), "rpc", "helius" if use_helius else f"free#{i % len(FREE_WS)}", type(exc).__name__,
-                  "" if use_helius else str(exc)[:80], flush=True)
+                  str(exc)[:160] if stalled or not use_helius else "", flush=True)
+            if stalled:
+                print(_now(), "watchdog: force-closed stalled logsSubscribe, reconnecting", flush=True)
             safe_commit(c)
             if not use_helius:
                 tr.free_fail += 1

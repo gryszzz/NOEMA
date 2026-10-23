@@ -325,3 +325,144 @@ def test_heartbeat_shows_transport(tmp_path):
     tr.mode = "free"
     ls.write_status(ls.status_path(db), tr)
     assert "free public node" in hb._launch_transport(db)
+
+
+def test_watchdog_trips_on_pump_fun_silence(monkeypatch):
+    monkeypatch.setattr(ls, "WD_SILENCE_S", 100.0)
+    tr = ls.Transport(ls.Budget())
+    wd = ls.Watchdog(tr, now=0.0, parsed=0)
+    assert wd.check(50.0, 500) is None and tr.watchdog["last_trade_at"]
+    assert wd.check(120.0, 500) is None  # 70 s quiet: still fine
+    r = wd.check(151.0, 500)  # 101 s without a parsed pump.fun trade (a LaunchLab trickle does not count)
+    assert r and "no pump.fun trade parsed for 101s" in r
+
+
+def test_watchdog_trips_on_rate_collapse_vs_baseline(monkeypatch):
+    monkeypatch.setattr(ls, "WD_SILENCE_S", 1e9)
+    monkeypatch.setattr(ls, "WD_WINDOW_S", 30.0)
+    monkeypatch.setattr(ls, "WD_MIN_RATIO", 0.1)
+    monkeypatch.setattr(ls, "WD_LOW_WINDOWS", 3)
+    monkeypatch.setattr(ls, "WD_WARMUP", 4)
+    monkeypatch.setattr(ls, "WD_MIN_BASELINE", 100.0)
+    tr = ls.Transport(ls.Budget())
+    wd = ls.Watchdog(tr, now=0.0, parsed=0)
+    t, n = 0.0, 0
+    for _ in range(6):  # healthy: ~4,700 trades / 30 s
+        t, n = t + 30, n + 4700
+        assert wd.check(t, n) is None
+    assert tr.watchdog["windows"] == 6 and round(tr.watchdog["baseline"]) == 4700
+    for k in range(2):  # trickle of 20 / 30 s: low, not yet tripped
+        t, n = t + 30, n + 20
+        assert wd.check(t, n) is None and tr.watchdog["low_windows"] == k + 1
+    assert round(tr.watchdog["baseline"]) == 4700  # low windows never drag the baseline down
+    t, n = t + 30, n + 20
+    r = wd.check(t, n)
+    assert r and "20/30s" in r and "baseline 4700" in r
+    # a recovered window resets the low streak
+    wd2 = ls.Watchdog(tr, now=t, parsed=n)
+    assert wd2.check(t + 30, n + 20) is None and wd2.check(t + 60, n + 5000) is None
+    assert tr.watchdog["low_windows"] == 0
+
+
+def test_watchdog_needs_warm_baseline(monkeypatch):
+    monkeypatch.setattr(ls, "WD_SILENCE_S", 1e9)
+    monkeypatch.setattr(ls, "WD_WARMUP", 4)
+    tr = ls.Transport(ls.Budget())
+    wd = ls.Watchdog(tr, now=0.0, parsed=0)
+    t, n = 0.0, 0
+    for _ in range(10):  # a quiet market with a tiny baseline (< WD_MIN_BASELINE) never trips on ratio
+        t, n = t + ls.WD_WINDOW_S, n + 5
+        assert wd.check(t, n) is None
+
+
+def test_rpc_session_watchdog_force_closes_trickle(monkeypatch, tmp_path):
+    """Oct 23 incident: socket open, only LaunchLab notifications arrive, pump.fun trades stop. The session must
+    raise StreamStalled; run_rpc records the reason, counts a free failure and rotates the endpoint."""
+    import asyncio
+    import json
+    import sys
+    import types
+
+    monkeypatch.setattr(ls, "WD_SILENCE_S", 0.3)
+    monkeypatch.setenv("NOEMA_HEARTBEAT_DIR", str(tmp_path / "hb"))
+    clock = [1000.0]
+    monkeypatch.setattr(ls, "_clock", lambda: clock[0])
+
+    class FakeWS:
+        def __init__(self):
+            self.n = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def send(self, _m):
+            return None
+
+        async def recv(self):
+            self.n += 1
+            clock[0] += 0.1
+            if self.n == 1:
+                return json.dumps({"jsonrpc": "2.0", "id": 2, "result": 77})  # only LaunchLab confirmed
+            return json.dumps({"method": "logsNotification", "params": {"subscription": 77, "result": {
+                "context": {"slot": 1}, "value": {"signature": f"L{self.n}", "err": None, "logs": ["Program log: x"]}}}})
+
+    monkeypatch.setitem(sys.modules, "websockets", types.SimpleNamespace(connect=lambda *a, **k: FakeWS()))
+
+    class W:
+        def execute(self, *a):
+            return ls._Queued()
+
+        def commit(self):
+            pass
+    tr = ls.Transport(ls.Budget())
+    try:
+        asyncio.run(ls.rpc_session("wss://free", "free", W(), asyncio.Event(), None, tr))
+        raise AssertionError("expected StreamStalled")
+    except ls.StreamStalled as exc:
+        assert "no pump.fun trade parsed" in str(exc) and "never confirmed" in str(exc)
+
+    stop = asyncio.Event()
+    calls = []
+
+    async def stalled_session(url, src, c, stop_, llq=None, tr=None, until=None):
+        calls.append((url, src))
+        if len(calls) >= 2:
+            stop_.set()
+        raise ls.StreamStalled("no pump.fun trade parsed for 105s (limit 105s)")
+
+    async def nosleep(_s):
+        return None
+    monkeypatch.setattr(ls, "rpc_session", stalled_session)
+    monkeypatch.setattr(ls.asyncio, "sleep", nosleep)
+    monkeypatch.setattr(ls, "FREE_WS", ["wss://a", "wss://b"])
+    tr = ls.Transport(ls.Budget())
+    asyncio.run(ls.run_rpc(W(), stop, None, tr))
+    assert [u for u, _ in calls] == ["wss://a", "wss://b"]  # rotated to the next free node
+    assert tr.free_fail == 2 and tr.watchdog["trips"] == 2 and "105s" in tr.watchdog["last_reason"]
+    s = ls.write_status(str(tmp_path / "launch_stream_status.json"), tr)
+    assert s["watchdog"]["last_reason"].startswith("no pump.fun trade") and s["watchdog"]["silence_s"] == 0.3
+    from noema import heartbeats as hb
+    assert "watchdog reconnects 2" in hb._launch_transport(str(tmp_path / "noema.db"))
+
+
+def test_heartbeat_error_shows_watchdog_reason_until_trades_resume(tmp_path, monkeypatch):
+    import time as _t
+
+    from noema import heartbeats as hb
+    monkeypatch.setenv("NOEMA_HEARTBEAT_DIR", str(tmp_path / "hb"))
+    db = str(tmp_path / "noema.db")
+    c = ls.connect(db)
+    old = ls.datetime.fromtimestamp(_t.time() - 300, ls.UTC).isoformat()
+    c.execute("INSERT INTO launch_trades (signature, mint, received_at, source) VALUES ('S0','M',?, 'helius')", (old,))
+    c.commit()
+    ls._feed_beat("no pump.fun trade parsed for 105s (limit 105s)")
+    r = next(x for x in hb.snapshot(db)["connections"] if x["name"] == "feed:helius")
+    assert "watchdog: no pump.fun trade parsed" in (r["last_error"] or "")
+    c.execute("INSERT INTO launch_trades (signature, mint, received_at, source) VALUES ('S1','M',?, 'helius')",
+              (ls._now(),))
+    c.commit()
+    r = next(x for x in hb.snapshot(db)["connections"] if x["name"] == "feed:helius")
+    assert r["last_error"] is None and r["status"] == "fresh"

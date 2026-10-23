@@ -213,6 +213,9 @@ def _launch_transport(main: str) -> str:
     h = st.get("helius") or {}
     mode = {"free": "free public node", "helius": "HELIUS FALLBACK"}.get(st.get("mode"), str(st.get("mode")))
     out = f" ({mode} | helius fallback {h.get('credits')}/{h.get('credits_budget')} cr today"
+    wd = st.get("watchdog") or {}
+    if wd.get("trips"):
+        out += f" | watchdog reconnects {wd['trips']}, last {str(wd.get('last_trip_at'))[11:19]}Z"
     return out + (f" | {st['stopped']})" if st.get("stopped") else ")")
 
 
