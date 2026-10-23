@@ -1,6 +1,6 @@
 # Trench edge research — 2026-10-22 (paper, no lookahead)
 
-**Result: none of the five ideas passes, and no paper desk was wired.**
+**Result: none of the six ideas passes, and no paper desk was wired.** Numbers below are from the gap-guarded rerun (see Data quality).
 The tool is `python -m noema.trench_edges report --db data/noema.db [--include-rpc] [--lat 3.0] [--out f.json]`. The raw results are the JSON files next to this one.
 
 ## Protocol
@@ -25,27 +25,50 @@ The tool is `python -m noema.trench_edges report --db data/noema.db [--include-r
 - **The 600 s horizons in PR #187 were partly marking frozen prices**, so those long-horizon numbers are unreliable.
 - Migration events and PumpSwap prices are not stored at all.
 
-## Results
-Returns are net per trade. The 95% CI is a bootstrap of the mean, and p is one-sided for mean > 0. Means are dominated by outliers, so also look at the median and the mean excluding the top trade (in the JSON).
+## Data quality: capture outages = frozen prices (same failure class as META)
+META's marks froze: 150 of 176 META closes were exactly −2.00% with no price movement. Our marks are the market cap printed by each recorded trade, so a mark can only look frozen when no trades were recorded. That happens either because the coin was dead (real) or because capture was down (fake).
+- Across all coins there are **248 tape-wide silences longer than 10 s**, totalling about **112 min of a 442-min tape**. 124 of them are longer than 20 s. The largest were 354 s at 23:59 UTC, 239 s at 22:29 and 179 s at 22:51. They line up with the red `launch_stream` heartbeat, the RPC timeouts and the 66–140 s SQLite lock holds.
+- **The first version of this study (PR #234) did not guard against this.** Some of its exit windows spanned outages and were marked at frozen prices. PR #234's conclusion (no pass) is unchanged, but its numbers are superseded by the ones below.
+- **Fix:** `apply_gap_guard` treats a silence across all coins longer than 10 s as an outage. It cuts each coin's usable coverage at the first outage after its create, and drops coins created during an outage.
+- **After the guard:** 0–2 windows have a flat mark despite trades, and 14–16% of 60 s windows have no trades at all. That 14–16% is dead coins (genuine, not capture loss).
+- The cost is a much smaller usable sample. For example, the primary all-coin 15 s entries fell from 1,890 to 461 in discovery.
+
+## Results (gap-guarded; primary = launches with a create row, 1.5 s latency unless noted)
+Returns are net per trade. The CI is a 95% bootstrap of the mean, and p is one-sided for mean > 0. The medians and the mean with the top trade removed are in the JSON. Most positive means vanish once the top trade is removed.
 
 | # | Idea (best discovery variant) | Discovery n / mean / p (Bonf) | Held-out n / mean / CI / p | Verdict |
 |---|---|---|---|---|
-| 1 | Copy proven wallets, primary (min_n 5, t ≥ 1, ladder15/40+trail15, sl15, 60 s) | 335 / +6.9% (median −8.1%) / 0.20 (1.0) | 203 / **−7.6%** / [−10.7, −4.4] / 1.00 | FAIL |
-| 1 | Copy wallets, rpc (min_n 20, t ≥ 1, time60) | 423 / +25% (median −58%) / 0.23 (1.0) | 94 / +29% / [−24, +99] / 0.18; median −51% | FAIL |
-| 1 | Copy wallets, rpc, **3 s latency** | 106 / +15% / 0.30 (1.0) | 62 / **−16%** / [−41, +17] / 0.85 | FAIL |
-| 2 | Exits, all coins entered at 15 s (best of 26: time10) | 1,890 / −4.4% / 1.0 | 458 / −2.3% / [−8.2, +6.0] / 0.74 | FAIL; **all 26 exits negative** |
-| 2 | Exits on fresh-filter entries (tp20/sl10/120 s) | 53 / +3.1% / 0.27 (1.0) | 8 / +2.0% / — | FAIL (n too small) |
-| 3 | Graduation: cross 100 SOL mcap, exit after 30 s | 309 / +124% (median −6%, ex-top1 −6.7%) / 0.17 (1.0) | 52 / **−5.9%** / [−31, +24] / 0.67 | FAIL |
-| 3 | Graduation, 3 s latency (cross 350 SOL, trail20) | 70 / +44% / 0.03 (Bonf 1.0) | 9 / −12% | FAIL |
-| 4 | X mention velocity (349 pump mints mentioned) | — | only 4–5 signals priceable, mean ≈ +1% | UNTESTABLE |
-| 5 | Avoid-side filters (15 filters; baseline is all coins at 15 s with a 60 s time stop, disc. −8.3%) | best is bundle_cluster > 0.5: kept −4.7% vs removed −9.7%, p = 0.19 (Bonf 1.0) | kept +12.8% (n 193, p 0.29) vs removed −9.6%, p = 0.17 | FAIL |
+| 1 | Copy proven wallets (min_n 5, t ≥ 1, trail20/60 s) | 84 / +15% (median −15%, ex-top1 −0.7%) / 0.23 (1.0) | 57 / **−12.1%** / [−17, −6.5] / 1.00 | FAIL |
+| 1 | Copy wallets, with RPC-only coins (min_n 20, trail20/60 s) | 79 / +8.9% / 0.31 (1.0) | 79 / −7.8% / [−19, +7.2] / 0.88 | FAIL |
+| 1 | Copy wallets, RPC-only coins, 3 s latency | 98 / +7.2% / 0.32 (1.0) | 56 / +3.8% / [−12, +23] / 0.34 | FAIL |
+| 2 | Exits, all coins at 15 s (best of 26: tp20/sl35/120 s) | 461 / −3.0% / 0.85 | 225 / −10.3% / [−14, −7.1] / 1.00 | FAIL |
+| 2 | Exits, all coins at 15 s, RPC-only coins included (time20) | 3,098 / −2.6% / 0.96 | 997 / −3.4% / [−8.1, +2.3] / 0.90 | FAIL |
+| 2 | Exits on fresh-filter entries (time90) | 13 / +0.4% / 0.49 | 2 / −63% | FAIL (n too small) |
+| 3 | Graduation (cross 250 SOL, tp20/sl10/120 s) | 24 / +54% (ex-top1 +0.2%) / 0.16 (1.0) | 6 / +33% / p 0.09 | FAIL (n too small) |
+| 4 | X mention velocity (349 pump mints mentioned) | — | 2 signals priceable | UNTESTABLE |
+| 5 | Avoid filters (15; baseline is all coins at 15 s with a 60 s stop: disc. −7.9%) | best is few_buyers < 5: kept −6.3% vs removed −12.8%, p 0.18 (Bonf 1.0) | kept −12.6% (n 187) vs removed +43%, p 0.91 | FAIL |
+| 6 | **Creator track-record veto** (see below) | veto lift p 0.004 (**Bonf 0.097**); kept −1.4% | lift p 0.53; kept 182 / −10.1% / [−13.6, −6.8] | FAIL |
 
-Notes:
-- **Copy wallets is the only lead.** It flips sign between runs and turns negative at 3 s latency. It is high variance and latency-bound, and not tradable on this evidence.
-- **Avoid filters:** "risky-looking" coins (top-3 holder share > 0.5/0.7, dev sold, heavy 1 s sniping) did **not** do worse than the coins we kept. In several cases they did better.
-- **Graduation** means come from one or two moonshots. The medians are negative.
+### 6. Creator track-record veto (added on request)
+- **Rule:** for each new coin, look only at that creator's earlier coins whose 1 h outcome (curve ≥ 50%) was already known at entry, meaning the prior coin was created ≥ 1 h before entry.
+- **Variants (24 in total, Bonferroni m = 24):**
+  - Bases: FRESH-filter entries and all coins at 15 s.
+  - Rules: veto when all known priors died (≥1 prior, or ≥2 priors), or keep only creators with a prior runner.
+  - Exits: time30, time60, tp20/sl10/120 s and the fresh-g1 exit.
+  - The selected variant is the one whose vetoed trades looked most clearly worse in discovery.
+- **The label effect is real and reproduces** on our coins. P(reach half the curve) is 3.4% when all priors died (n = 653), 8.9% with a prior runner (n = 247) and 7.0% for first-time creators (n = 2,177). The other analysis found 3.9%, 8.3% and 6.8%.
+- **It does not convert into tradable returns at 15 s:**
+  - Best variant: all coins, veto when ≥2 priors all died, tp20/sl10/120 s.
+  - Discovery: vetoed −12.3% (n 78) vs kept −1.4% (n 383). One-sided p 0.004, Bonferroni 0.097, which misses 0.05.
+  - Held-out: vetoed −9.9% (n 43) vs kept −10.1% (n 182), p 0.53. **No lift out of sample, and the kept trades still lose money.**
+  - With RPC-only coins added: discovery p 0.003 (Bonf 0.075), held-out p 0.52.
+  - At 3 s latency the best variant has no discovery lift at all (p 0.36).
+- **On FRESH entries the veto almost never fires:** in discovery it vetoes 0–2 entries in total, because the FRESH pre-filter already excludes most serial-deployer launches. Adding it to the fresh desk would change almost nothing.
+- **Caveat:** we record only about 180 s of trades per coin, so a prior coin's "1 h outcome" is in practice its outcome in the first 3 minutes.
+- **Verdict:** FAIL as an edge and FAIL as a veto. It is worth re-testing as a cheap avoid-side prior once trade coverage is extended and there are more days of data.
 
 ## What would let us test properly (data collection, not trading)
+0. Fix capture outages first: about 25% of the tape was lost to >10 s feed or DB-lock gaps. Move trade writes off the noema.db hot lock, or into a separate DB, and add a gap metric to the heartbeat.
 1. Extend trade coverage past 180 s, at least for a random sample of coins (unbiased) and for every coin that crosses about 100 SOL mcap.
 2. Store PumpPortal migration events and post-migration PumpSwap prices.
 3. Start following the price path of any mint when it is first mentioned on X.
