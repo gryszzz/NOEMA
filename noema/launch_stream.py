@@ -15,8 +15,11 @@ import base64
 import hashlib
 import json
 import os
+import queue
 import sqlite3
+import threading
 import time
+from concurrent.futures import Future
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,7 +30,10 @@ PUMPPORTAL = "wss://pumpportal.fun/api/data"
 PROGRAMS = {"pump.fun": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
             "raydium_launchlab": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"}
 CREATE_MARKERS = ("Instruction: Create", "Instruction: InitializeV2", "Instruction: Initialize")
-TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "180"))
+# Per-coin tape window. Helius logsSubscribe already delivers every pump.fun trade (flat cost), so a longer
+# window only costs disk; 15 min covers the post-launch decision horizon (was 180 s).
+TRADE_FOLLOW_S = int(os.getenv("NOEMA_STREAM_TRADE_FOLLOW_S", "900"))
+KEEP_H = float(os.getenv("NOEMA_STREAM_KEEP_H", "96"))  # prune horizon: >= 72 h of continuous tape + margin
 ALIVE_S = float(os.getenv("NOEMA_STREAM_ALIVE_S", "30"))  # log heartbeat cadence (agent:launch_stream is 60s)
 COMMIT_S = float(os.getenv("NOEMA_STREAM_COMMIT_S", "0.5"))  # short write txns: noema.db has many writers
 MAX_FOLLOW = int(os.getenv("NOEMA_STREAM_MAX_FOLLOW", "150"))
@@ -104,6 +110,97 @@ def reload_open_positions(path: str | None = None, now: float | None = None) -> 
     return len(mints)
 
 
+class _Queued:
+    rowcount = 1  # optimistic: INSERT OR IGNORE dedupe happens in the writer thread
+
+
+class QueuedWriter:
+    """Every stream write goes through ONE background thread with its own connection. The websocket tasks only
+    enqueue (and stamp received_at at arrival), so a busy noema.db (another process holding the write lock,
+    an agent restart's migrations, ...) can delay the commit but can never stall the event loop - which used
+    to freeze recv(), trip the 60 s timeouts and leave >10 s holes in the tape across ALL coins.
+    Batches are INSERT OR IGNORE, so a busy rollback is simply retried; nothing is dropped."""
+
+    in_transaction = False
+
+    def __init__(self, path: str, every: float | None = None, max_batch: int = 5000) -> None:
+        self.path, self.every, self.max_batch = path, COMMIT_S if every is None else every, max_batch
+        self.q: queue.SimpleQueue = queue.SimpleQueue()
+        self.written = self.retries = self.dropped = 0
+        self.max_lag_s = 0.0
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, name="stream-writer", daemon=True)
+
+    def start(self) -> QueuedWriter:
+        self._t.start()
+        return self
+
+    def execute(self, sql: str, params: tuple = ()) -> _Queued:
+        self.q.put(("sql", sql, params, time.monotonic()))
+        return _Queued()
+
+    def commit(self) -> None:  # writes commit on the writer's own clock
+        return None
+
+    def submit(self, fn: Any) -> Future:
+        """Run fn(conn) on the writer thread (between batches), e.g. pruning."""
+        f: Future = Future()
+        self.q.put(("fn", fn, f, time.monotonic()))
+        return f
+
+    def close(self, timeout: float = 30) -> None:
+        self._stop.set()
+        self._t.join(timeout)
+
+    def stats(self) -> str:
+        return f"queued={self.q.qsize()} written={self.written} retries={self.retries} max_lag_s={self.max_lag_s:.1f}"
+
+    def _flush(self, conn: sqlite3.Connection, batch: list) -> None:
+        while batch:
+            try:
+                for _k, sql, params, _t in batch:
+                    conn.execute(sql, params)
+                conn.commit()
+                self.written += len(batch)
+                self.max_lag_s = max(self.max_lag_s, time.monotonic() - batch[0][3])
+                return
+            except sqlite3.OperationalError as exc:
+                conn.rollback()
+                if not is_busy(exc):
+                    self.dropped += len(batch)
+                    print(_now(), "writer dropped batch", type(exc).__name__, str(exc)[:120], flush=True)
+                    return
+                self.retries += 1
+                time.sleep(0.25)
+
+    def _run(self) -> None:
+        conn = connect(self.path)
+        batch: list = []
+        try:
+            while not (self._stop.is_set() and self.q.empty()):
+                deadline = time.monotonic() + self.every
+                while len(batch) < self.max_batch:
+                    try:
+                        item = self.q.get(timeout=max(0.0, deadline - time.monotonic()))
+                    except queue.Empty:
+                        break
+                    if item[0] == "fn":
+                        self._flush(conn, batch)
+                        batch = []
+                        fut = item[2]
+                        try:
+                            fut.set_result(item[1](conn))
+                        except Exception as exc:  # noqa: BLE001 - surfaced to the awaiting task
+                            conn.rollback()
+                            fut.set_exception(exc)
+                        continue
+                    batch.append(item)
+                self._flush(conn, batch)
+                batch = []
+        finally:
+            conn.close()
+
+
 def safe_commit(c: sqlite3.Connection) -> bool:
     """Commit, but never let a busy/locked noema.db kill the stream: the txn stays open and the next commit retries."""
     try:
@@ -128,7 +225,7 @@ async def committer(c: sqlite3.Connection, stop: asyncio.Event, every: float | N
             safe_commit(c)
         if time.monotonic() - last_alive >= ALIVE_S:     # agent:launch_stream heartbeat = log mtime;
             last_alive = time.monotonic()                # a healthy-but-quiet stream used to read red
-            print(_now(), "alive", flush=True)
+            print(_now(), "alive", c.stats() if isinstance(c, QueuedWriter) else "", flush=True)
 
 
 def reload_watch(path: str = "data/smart_wallets.db") -> int:
@@ -143,7 +240,7 @@ def reload_watch(path: str = "data/smart_wallets.db") -> int:
 
 
 def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], follow: dict[str, float] | None = None,
-                    now: float | None = None) -> int:
+                    now: float | None = None, slot: int | None = None) -> int:
     """Insert decoded trades for followed (recently created) mints; returns trades inserted."""
     follow = FOLLOW if follow is None else follow
     now = now or time.time()
@@ -165,7 +262,7 @@ def handle_rpc_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], fol
                 EXTEND[ev["mint"]] = now + WATCH_FOLLOW_S  # price the watched wallet's exit (smart-wallet study)
             key = sig if n == 0 else f"{sig}:{n}"
             n += insert_trade(c, key, ev["mint"], ev["side"], ev["sol"], ev["tokens"], ev["trader"],
-                              ev["market_cap_sol"], "helius")
+                              ev["market_cap_sol"], "helius", slot)
     return n
 
 
@@ -185,7 +282,7 @@ def decode_launchlab(data: bytes) -> dict[str, Any] | None:
 
 
 def handle_launchlab_logs(c: sqlite3.Connection, sig: str | None, logs: list[str], pools: dict | None = None,
-                          now: float | None = None) -> tuple[int, list[str]]:
+                          now: float | None = None, slot: int | None = None) -> tuple[int, list[str]]:
     """Returns (trades inserted, new pool_states needing a mint lookup)."""
     pools = LL_POOLS if pools is None else pools
     now = now or time.time()
@@ -207,7 +304,7 @@ def handle_launchlab_logs(c: sqlite3.Connection, sig: str | None, logs: list[str
         p = pools.get(ev["pool"])
         if sig and p and p.get("mint") and now - p["at"] <= TRADE_FOLLOW_S:
             n += insert_trade(c, sig if n == 0 else f"{sig}:{n}", p["mint"], ev["side"], ev["sol"], ev["tokens"],
-                              None, ev["market_cap_sol"], "helius_launchlab")
+                              None, ev["market_cap_sol"], "helius_launchlab", slot)
     return n, new
 
 
@@ -287,8 +384,12 @@ def connect(path: str) -> sqlite3.Connection:
     c = sqlite_connect(path)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
-    if "source" not in {r[1] for r in c.execute("PRAGMA table_info(launch_trades)")}:
+    cols = {r[1] for r in c.execute("PRAGMA table_info(launch_trades)")}
+    if "source" not in cols:
         c.execute("ALTER TABLE launch_trades ADD COLUMN source TEXT")
+    if "slot" not in cols:  # Solana slot of the trade (Helius context.slot); NULL for PumpPortal / older rows
+        c.execute("ALTER TABLE launch_trades ADD COLUMN slot INTEGER")
+    c.commit()
     return c
 
 
@@ -303,13 +404,13 @@ def rpc_http_url() -> str | None:
 
 
 def insert_trade(c: sqlite3.Connection, sig: str, mint: str, side: str | None, sol: Any, tokens: Any, trader: Any,
-                 mcap: Any, source: str) -> int:
+                 mcap: Any, source: str, slot: int | None = None) -> int:
     """Dedupe by signature across sources; launch_trade_seen records every source's arrival for overlap/latency."""
     now = _now()
     c.execute("INSERT OR IGNORE INTO launch_trade_seen VALUES (?,?,?)", (sig.split(":")[0], source, now))
     return c.execute("INSERT OR IGNORE INTO launch_trades (signature, mint, received_at, side, sol, tokens, trader,"
-                     " market_cap_sol, source) VALUES (?,?,?,?,?,?,?,?,?)",
-                     (sig, mint, now, side, sol, tokens, trader, mcap, source)).rowcount
+                     " market_cap_sol, source, slot) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                     (sig, mint, now, side, sol, tokens, trader, mcap, source, slot)).rowcount
 
 
 def _now() -> str:
@@ -424,18 +525,18 @@ async def run_rpc(c: sqlite3.Connection, stop: asyncio.Event, llq: asyncio.Queue
                     p = (m.get("params") or {})
                     v = ((p.get("result") or {}).get("value") or {})
                     logs = v.get("logs") or []
+                    slot = ((p.get("result") or {}).get("context") or {}).get("slot")
                     if v.get("err") is None and any(any(k in ln for k in CREATE_MARKERS) for ln in logs):
                         c.execute("INSERT OR IGNORE INTO launch_rpc_events VALUES (?,?,?,?)", (
-                            v.get("signature"), subs.get(p.get("subscription"), "?"), _now(),
-                            ((p.get("result") or {}).get("context") or {}).get("slot")))
+                            v.get("signature"), subs.get(p.get("subscription"), "?"), _now(), slot))
                     if RPC_TRADES and v.get("err") is None:
                         if subs.get(p.get("subscription")) == "raydium_launchlab":
-                            _n, new_pools = handle_launchlab_logs(c, v.get("signature"), logs)
+                            _n, new_pools = handle_launchlab_logs(c, v.get("signature"), logs, slot=slot)
                             for pool in new_pools:
                                 if llq is not None and llq.qsize() < 50:
                                     llq.put_nowait(pool)
                         else:
-                            handle_rpc_logs(c, v.get("signature"), logs)
+                            handle_rpc_logs(c, v.get("signature"), logs, slot=slot)
                     if time.time() - last_commit > COMMIT_S:
                         safe_commit(c)
                         prune_follow(FOLLOW)
@@ -503,6 +604,22 @@ def prune_batch(c: sqlite3.Connection, table: str, cut: str, batch: int = 5000) 
     return n
 
 
+def prune_sync(c: sqlite3.Connection, keep_h: float | None = None, batch: int = 5000) -> int:
+    """prune() for the writer thread (QueuedWriter.submit)."""
+    c.commit()
+    keep_h = KEEP_H if keep_h is None else keep_h
+    cut = datetime.fromtimestamp(time.time() - keep_h * 3600, UTC).isoformat()
+    total = 0
+    for t in PRUNE_TABLES:
+        while True:
+            n = prune_batch(c, t, cut, batch)
+            total += n
+            if n < batch:
+                break
+            time.sleep(0.05)  # let other noema.db writers in between batches
+    return total
+
+
 async def prune(c: sqlite3.Connection, keep_h: float = 72, batch: int = 5000) -> int:
     """Delete old rows on the stream's OWN connection in short batches. The old version opened a second
     connection while the shared one held a write txn -> it waited on itself for busy_timeout, raised
@@ -533,13 +650,14 @@ def backfill_legacy_source(c: sqlite3.Connection) -> int:
 async def _main(db: str) -> None:
     stop = asyncio.Event()
 
-    c = connect(db)  # one connection shared by all tasks (single thread); never open a second writer here
+    connect(db).close()  # schema / migrations up front
+    c = QueuedWriter(db).start()  # all writes on one background thread; the event loop never waits on a lock
 
     async def housekeeping() -> None:
         while True:
             await asyncio.sleep(3600)
             try:  # housekeeping must never take the stream down
-                print(_now(), "pruned", await prune(c), flush=True)
+                print(_now(), "pruned", await asyncio.wrap_future(c.submit(prune_sync)), flush=True)
                 print(_now(), json.dumps(await asyncio.to_thread(latency_report, db, 1)), flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(_now(), "housekeeping", type(exc).__name__, str(exc)[:120], flush=True)
