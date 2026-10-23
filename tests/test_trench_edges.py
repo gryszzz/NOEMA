@@ -55,3 +55,22 @@ def test_verdict_requires_heldout():
     d = {"n": 100, "mean": 0.1, "p": 0.0001}
     assert not e.verdict(d, 10, {"n": 10, "mean": 0.5, "p": 0.01})["PASS"]
     assert e.verdict(d, 10, {"n": 40, "mean": 0.05, "p": 0.01})["PASS"]
+
+
+def test_gap_guard_cuts_coverage_and_drops_coins_born_in_outage():
+    def coin(t0, ts):
+        return {"t0": t0, "tr": [(t, True, 0.1, "w", 30.0) for t in ts], "T": list(ts), "cov": t0 + 170}
+    coins = {"a": coin(0, [0, 1, 2, 3, 4, 5]), "b": coin(5, [5, 6]), "c": coin(40, [40, 41, 42])}
+    # global tape: 0..6 then silence until 40 -> outage (6, 40); c created at 40 (gap end), a/b cut at 6
+    out = e.apply_gap_guard(coins, gap_s=10)
+    assert out["a"]["cov"] == 6 and out["b"]["cov"] == 6
+    assert "c" in out
+    coins["d"] = coin(20, [])
+    assert "d" not in e.apply_gap_guard(coins, gap_s=10)
+
+
+def test_creator_state_uses_only_known_outcomes():
+    hist = [(0.0, 3600.0, False), (100.0, 3700.0, True)]
+    assert e.creator_state(hist, 50.0) == (0, 0)
+    assert e.creator_state(hist, 3650.0) == (1, 0)
+    assert e.creator_state(hist, 3700.0) == (2, 1)

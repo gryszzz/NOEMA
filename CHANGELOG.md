@@ -5,6 +5,7 @@
 ### Trench edge research (paper)
 
 - Added `noema/trench_edges.py`, a walk-forward, no-lookahead test of 5 trench ideas: copy-wallet, exits, graduation, X velocity and avoid filters. It uses curve-math costs, a held-out fold and Bonferroni correction. None passed. Results and the 180 s coverage caveat are in docs/research/trench-edges-2026-10-22.md.
+- Trench edge study: added a creator track-record veto test (it failed out of sample) and a capture-outage guard. Tape-wide silences longer than 10 s now cut coverage, because they produced frozen marks. All numbers were rerun.
 
 ### Culture radar and alpha discovery (paper)
 

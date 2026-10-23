@@ -24,6 +24,7 @@ import re
 import sqlite3
 from bisect import bisect_right
 from collections import defaultdict
+from itertools import pairwise
 from typing import Any
 
 from . import trench_hft as hft
@@ -55,7 +56,31 @@ def load(db: str, since: str | None = None, include_rpc: bool = False) -> tuple[
         v["T"] = [x[0] for x in v["tr"]]
         v["cov"] = v["t0"] + (RPC_COVER_S if v.get("rpc_only") else COVER_S)
         out[m] = v
-    return out, end
+    return apply_gap_guard(out), end
+
+
+GAP_S = 10.0  # a >10 s silence across ALL coins is a capture outage (feed/RPC drop or DB lock), not a quiet market
+
+
+def capture_gaps(coins: dict[str, dict[str, Any]], gap_s: float = GAP_S) -> list[tuple[float, float]]:
+    ts = sorted(t for c in coins.values() for t in c["T"])
+    return [(a, b) for a, b in pairwise(ts) if b - a > gap_s]
+
+
+def apply_gap_guard(coins: dict[str, dict[str, Any]], gap_s: float = GAP_S) -> dict[str, dict[str, Any]]:
+    """Prices inside a capture outage look frozen (the META bug). Cut each coin's usable coverage at the first
+    outage after its create, and drop coins created during an outage (their early tape is missing)."""
+    gaps = capture_gaps(coins, gap_s)
+    starts = [a for a, _b in gaps]
+    out = {}
+    for m, c in coins.items():
+        i = bisect_right(starts, c["t0"]) - 1
+        if i >= 0 and gaps[i][1] > c["t0"]:
+            continue  # created inside an outage
+        if i + 1 < len(gaps):
+            c["cov"] = min(c["cov"], gaps[i + 1][0])
+        out[m] = c
+    return out
 
 
 def _rpc_only(db: str, known: set[str]) -> dict[str, dict[str, Any]]:
@@ -446,6 +471,115 @@ def avoid_filters(coins, edges, cost, creators) -> dict[str, Any]:
             "best_single_filter": best, "filters": table}
 
 
+# ---------------------------------------------------------------- idea 6: creator track-record veto
+def creator_outcomes(allcoins: dict[str, dict[str, Any]], horizon: float = 3600.0, thr: float = 0.5
+                     ) -> dict[str, list[tuple[float, float, bool]]]:
+    """creator -> [(t0, known_at, reached_thr)] for every recorded launch. Outcome = max bonding-curve progress
+    over recorded trades within `horizon` of create; it only counts as known at t0 + horizon (no lookahead).
+    Note: trades are recorded ~180 s per coin, so 'within 1 h' is in practice mostly 'within the first 3 min'."""
+    out: dict[str, list[tuple[float, float, bool]]] = defaultdict(list)
+    for c in allcoins.values():
+        if not c.get("creator"):
+            continue
+        mcs = [x[4] for x in c["tr"] if x[0] <= c["t0"] + horizon]
+        prog = (hft.v_from_mc(max(mcs)) - 30) / hft.CURVE_SOL if mcs else 0.0
+        out[c["creator"]].append((c["t0"], c["t0"] + horizon, prog >= thr))
+    return out
+
+
+def creator_state(hist: list[tuple[float, float, bool]], t: float) -> tuple[int, int]:
+    """(prior coins with a known outcome at time t, how many of them reached the threshold)."""
+    known = [ok for t0, ka, ok in hist if ka <= t and t0 < t]
+    return len(known), sum(known)
+
+
+VETO_RULES = {
+    "veto_all_dead": lambda k, w: k >= 1 and w == 0,
+    "veto_all_dead_ge2": lambda k, w: k >= 2 and w == 0,
+    "only_prior_runner": lambda k, w: w == 0,
+}
+VETO_EXITS = ("time30", "time60", "tp20_sl10_t120", "fresh_g1_tp30_sl7.9_t120")
+
+
+def creator_veto(coins, edges, cost, allcoins) -> dict[str, Any]:
+    hist = creator_outcomes(allcoins)
+    # in-sample label check (same definition as the other analysis), restricted to our coins
+    lab: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for c in coins.values():
+        if not c.get("creator"):
+            continue
+        k, w = creator_state(hist[c["creator"]], c["t0"])
+        own = [ok for t0, _ka, ok in hist[c["creator"]] if t0 == c["t0"]]
+        key = "no_prior" if k == 0 else ("prior_runner" if w else "prior_all_dead")
+        lab[key][0] += 1
+        lab[key][1] += int(bool(own and own[0]))
+    label_check = {k: {"n": n, "p_reach_half_curve": round(s / n, 4) if n else None} for k, (n, s) in lab.items()}
+    bases = {"fresh": baseline_entries(coins, "fresh"), "all15": baseline_entries(coins, "all15")}
+    res = {}
+    for bname, entries in bases.items():
+        for rname, rule_fn in VETO_RULES.items():
+            for ename in VETO_EXITS:
+                buck = {"dk": [], "dv": [], "hk": [], "hv": []}
+                for t, m in entries:
+                    c = coins[m]
+                    if not c.get("creator"):
+                        continue
+                    v = sim(c, t, rule=EXITS[ename], **cost)
+                    if v is None:
+                        continue
+                    k, w = creator_state(hist[c["creator"]], t)
+                    side = "h" if fold_of(c["t0"], edges) == FOLDS - 1 else "d"
+                    buck[side + ("v" if rule_fn(k, w) else "k")].append(v)
+                res[f"{bname}|{rname}|{ename}"] = buck
+    m = len(res)
+
+    def score(b):  # the hypothesis is the veto: pick the variant whose vetoed trades are most clearly worse
+        return welch_p_less(b["dv"], b["dk"]) if len(b["dk"]) >= 20 and len(b["dv"]) >= 20 else 1.0
+
+    best = min(res, key=lambda k: score(res[k]))
+    b = res[best]
+    ds, hs = stats(b["dk"]), stats(b["hk"])
+    lift_d, lift_h = welch_p_less(b["dv"], b["dk"]), welch_p_less(b["hv"], b["hk"])
+    hk3 = sorted(b["hk"])[:-3] if len(b["hk"]) > 3 else []
+    table = {k: {"disc_kept": stats(v["dk"]), "disc_vetoed_mean": stats(v["dv"])["mean"], "disc_vetoed_n": len(v["dv"]),
+                 "held_kept_mean": stats(v["hk"])["mean"], "held_kept_n": len(v["hk"])} for k, v in res.items()}
+    return {"label_check_reach_half_curve": label_check, "selected": best,
+            "discovery": ds, "discovery_vetoed": stats(b["dv"]), "discovery_p_vetoed_worse": round(lift_d, 4),
+            "discovery_lift_p_bonf": round(min(1.0, lift_d * m), 4),
+            "heldout": hs, "heldout_vetoed": stats(b["hv"]), "heldout_p_vetoed_worse": round(lift_h, 4),
+            "heldout_kept_ex_top3": stats(hk3),
+            "veto_lift_PASS": min(1.0, lift_d * m) < 0.05 and lift_h < 0.05,
+            **verdict(ds, m, hs), "variants_table": table}
+
+
+# ---------------------------------------------------------------- data check: frozen prices / capture gaps
+def frozen_check(coins, cost) -> dict[str, Any]:
+    """META's marks froze (exits at exactly -cost with zero price moves). Our marks are the market cap printed by
+    each recorded trade, so a 'frozen' mark can only come from (a) no trades in the window or (b) capture gaps.
+    Report both, plus global capture gaps across all coins."""
+    n = flat = notr = 0
+    for c in coins.values():
+        if not hft.features(c, 15):
+            continue
+        te = c["t0"] + 15 + cost["lat"]
+        if te + 60 + cost["lat"] > c["cov"]:
+            continue
+        i, j = bisect_right(c["T"], te), bisect_right(c["T"], te + 60)
+        n += 1
+        if j <= i:
+            notr += 1
+        elif len({x[4] for x in c["tr"][max(0, i - 1):j]}) == 1:
+            flat += 1
+    ts = sorted(t for c in coins.values() for t in c["T"])
+    gaps = sorted(((b - a), a) for a, b in pairwise(ts) if b - a > 20)
+    from datetime import UTC, datetime
+    return {"entries_checked_15s_to_75s": n, "no_trades_in_60s_window": notr, "flat_mark_with_trades": flat,
+            "share_flat_or_no_trades": round((flat + notr) / max(1, n), 4),
+            "global_capture_gaps_gt20s": len(gaps),
+            "largest_gaps": [(round(g, 1), datetime.fromtimestamp(a, UTC).isoformat(timespec="seconds"))
+                             for g, a in gaps[-5:]]}
+
+
 # ---------------------------------------------------------------- report
 def report(db: str, inbox: str, lat: float, usd: float, sol_usd: float, prio: float,
            include_rpc: bool = False) -> dict[str, Any]:
@@ -466,6 +600,8 @@ def report(db: str, inbox: str, lat: float, usd: float, sol_usd: float, prio: fl
     out["3_graduation"] = graduation(coins, edges, cost)
     out["4_x_velocity"] = x_velocity(db, inbox, coins, edges, cost)
     out["5_avoid"] = avoid_filters(coins, edges, cost, creator_history(db))
+    out["6_creator_veto"] = creator_veto(coins, edges, cost, hft.load(db, None)[0])
+    out["data_frozen_check"] = frozen_check(coins, cost)
     return out
 
 
