@@ -65,9 +65,10 @@ UA = {"Content-Type": "application/json", "User-Agent": "noema-pool-stream/1 (pa
 
 _D = lambda n: hashlib.sha256(f"event:{n}".encode()).digest()[:8]
 CREATE_POOL, BUY, SELL = _D("CreatePoolEvent"), _D("BuyEvent"), _D("SellEvent")
-# Execution vs constant-product quote from the event's own (pre-trade) reserves. Graduated PumpSwap pools fill a
-# structural 0-20% above raw x*y=k (fee tiers / reserve accounting), so this only catches decode garbage.
-OFF_RESERVES_TOL = 0.5
+# Execution vs constant-product quote from the event's own (pre-trade) reserves. Graduated PumpSwap pools fill
+# above raw x*y=k on BOTH sides, as if ~15-18 SOL of extra quote sat in the curve (premium ~7% at 260 SOL, ~50% at
+# 35 SOL). So this is only a decode-garbage guard: flag when exec / expected falls outside [1/2, 4].
+OFF_RESERVES_BAND = (0.5, 4.0)
 MIG_QUOTE_SOL = (50.0, 200.0)  # a standard pump.fun graduation seeds ~85 SOL; outside this -> "nonstandard"
 CHECK_MIN_SOL = 0.001        # tiny trades: integer rounding dominates, skip the reserve check
 LOW_LIQ_SOL = 1.0            # pool quote reserve below this -> prices are not meaningful
@@ -126,7 +127,7 @@ def migration_from_logs(logs: list[str]) -> list[dict[str, Any]]:
 
 def quality(ev: dict[str, Any], quote_mint: str | None = WSOL) -> str | None:
     """Ingest sanity flags (kept, flagged - loaders exclude), in the spirit of tape_quality.row_reason:
-    zero_sol, non_sol_quote, off_reserves (execution vs the event's own constant-product reserves > 5%),
+    zero_sol, non_sol_quote, off_reserves (execution vs the event's own constant-product reserves outside [1/2, 4]),
     low_liq (pool quote reserve < 1 SOL)."""
     r = []
     if quote_mint not in SOL_QUOTES:
@@ -137,7 +138,7 @@ def quality(ev: dict[str, Any], quote_mint: str | None = WSOL) -> str | None:
     elif q / 1e9 >= CHECK_MIN_SOL and B > 0 and Q > 0:
         denom = B - b if ev["side"] == "buy" else B + b
         exp = Q * b / denom if denom > 0 else float("inf")
-        if exp <= 0 or abs(q / exp - 1) > OFF_RESERVES_TOL:
+        if exp <= 0 or not OFF_RESERVES_BAND[0] <= q / exp <= OFF_RESERVES_BAND[1]:
             r.append("off_reserves")
     if Q / 1e9 < LOW_LIQ_SOL:
         r.append("low_liq")
