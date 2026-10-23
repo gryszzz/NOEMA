@@ -844,17 +844,9 @@ PICK_COLS = ("pick_id", "post_id", "opened_at", "venue", "market", "market_id", 
              "hidden")
 
 
-_NOTE_STAKE = re.compile(r"stake \$([0-9,.]+)", re.IGNORECASE)
-
-
 def note_stake(note: str | None) -> float | None:
-    """Older posts carry the stake only in the note text ("stake $4.78, cap $184")."""
-    m = _NOTE_STAKE.search(note or "")
-    try:
-        v = float(m.group(1).replace(",", "").rstrip(".")) if m else None
-    except ValueError:
-        return None
-    return v if v is not None and v > 0 else None
+    from .paper_risk import note_stake as _ns
+    return _ns(note)
 
 
 def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, Any]:
@@ -888,7 +880,7 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
                  "fair": r["fair"], "confidence": r["confidence"], "resolves": r["resolves"], "status": r["status"],
                  "current": r["mark_price"], "current_at": r["mark_at"], "current_source": r["mark_source"],
                  "outcome": r["outcome"], "pnl": r["pnl"], "capacity_usd": r["capacity_usd"],
-                 "posted_stake_usd": r["stake_usd"] if r["stake_usd"] is not None else note_stake(r["note"]),
+                 "posted_stake_usd": r["stake_usd"] if r["stake_usd"] is not None else paper_risk.note_stake(r["note"]),
                  "kind": r["kind"] or "single"}
             legs = json.loads(r["legs_json"]) if r["legs_json"] else []
             marks = json.loads(r["legs_mark_json"]) if r["legs_mark_json"] else []
@@ -902,7 +894,7 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
                                                paper_risk.cap_pct() * paper_risk.bankroll()), 1.0), 2)
             else:
                 d["stake_usd"] = paper_risk.pick_stake(d["venue"], d["fair"], d["price"], d["capacity_usd"],
-                                                       stake_usd=r["stake_usd"])
+                                                       stake_usd=d["posted_stake_usd"])
             d["moves"] = _moves(conn, r["pick_id"])
             rows.append(d)
         out["picks"] = rows
