@@ -94,7 +94,7 @@ TEV is NOEMA's private, **read-only** war room served by `noema-dashboard` (port
 The dashboard ships as an installable app:
 
 - **PWA** — `/manifest.webmanifest`, `/favicon.ico`, `/apple-touch-icon.png` and `noema/static/brand/tev/` icons. In Safari use **File › Add to Dock**; in Chrome use **Install TEV**.
-- **TEV.app** — `apps/macos/` holds a tiny macOS bundle (`Info.plist`, `icon.icns`, launcher). It opens the room in a chromeless window via Chrome / Brave / Edge `--app=` mode, falling back to Safari. Set the URL in `TEV.app/Contents/Resources/tev-url.txt` or `~/.tev-url`. Build the zip with `apps/macos/build.sh` (needs `cairosvg` + `Pillow` to re-render icons). It is unsigned: right-click › **Open** on first launch.
+- **TEV.app** — `apps/macos/` holds a small native macOS app (`src/main.swift`: one WKWebView window, ~1600×1000, no browser chrome, read-only view). It reads the URL from `~/.tev-url`, then `TEV.app/Contents/Resources/tev-url.txt` (placeholder in the repo; a dialog explains if unset), and asks for the dashboard login once (kept in the keychain). Build on a Mac with `apps/macos/build.sh` (swiftc, universal arm64+x86_64, ad-hoc signed → `TEV-mac.zip`); on Linux the compile is skipped. CI workflow **TEV macOS app** builds the same zip as the `TEV-mac` artifact. Right-click › **Open** on first launch.
 
 The logo source is a single vector file: [`noema/static/brand/tev/tev-logo.svg`](noema/static/brand/tev/tev-logo.svg).
 
@@ -363,7 +363,7 @@ See [Meridian ↔ NOEMA contract](docs/meridian-noema-contract.md).
 | --- | --- |
 | `noema/` | Python runtime: research, venues, trench desks, news crawler, economics, gateway, persistence |
 | `noema/static/` | TEV trading rooms, Ops Console, brand assets (`brand/tev/`) |
-| `apps/macos/` | TEV.app bundle source + `build.sh` |
+| `apps/macos/` | Native TEV.app source (Swift/WKWebView) + `build.sh` |
 | `site/` | Static public experience and local report explorer |
 | `docs/` | Architecture, operating contracts, evidence/economic boundaries, setup |
 | `tests/` | Python + Node regression and truth-contract tests |
