@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Trench edge research (paper)
+
+- Added `noema/trench_edges.py`, a walk-forward, no-lookahead test of 5 trench ideas: copy-wallet, exits, graduation, X velocity and avoid filters. It uses curve-math costs, a held-out fold and Bonferroni correction. None passed. Results and the 180 s coverage caveat are in docs/research/trench-edges-2026-10-22.md.
+
 ### Culture radar and alpha discovery (paper)
 
 - A new read-only culture crawler covers crypto, stocks and prediction markets: DexScreener, Jupiter, pump.fun, ApeWisdom (Reddit), StockTwits, Kalshi movers, and Polymarket volume, new markets and leaderboard. It respects robots.txt and rate limits, and treats every input as untrusted. Each entity gets a culture signal (buzz velocity, sentiment, novelty), and the `culture` agent's forecasts go into the accuracy ledger.
