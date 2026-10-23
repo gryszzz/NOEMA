@@ -31,6 +31,7 @@ import logging
 import math
 import os
 import random
+import re
 import sqlite3
 import statistics
 import time
@@ -54,6 +55,7 @@ ZERO = "0x0000000000000000000000000000000000000000"
 KYBER_ROUTER = "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"
 # Relay needs *some* user for a quote; a burn address keeps NOEMA's wallet out of every request.
 QUOTE_USER = "0x000000000000000000000000000000000000dEaD"
+KYBER_NO_ROUTE = re.compile(r'"code":\s*40(08|10|11)\b|route not found|token not found', re.IGNORECASE)
 UA = {"User-Agent": "noema-paper-scanner/1.0", "x-client-id": "noema-paper"}
 
 
@@ -268,6 +270,7 @@ class Scanner:
         self.vet_q: deque[tuple[str, str]] = deque()
         self.errors: dict[str, str] = {}
         self.last_ok: dict[str, float] = {}
+        self.passes = 0
         self.sha = preregister(self.c)
 
     async def get(self, lim: str, url: str, **kw: Any) -> Any:
@@ -451,8 +454,16 @@ class Scanner:
 
     # -- vetting --
     async def kyber(self, chain: Chain, t_in: str, t_out: str, amount: int) -> dict[str, Any] | None:
-        d = await self.get("kyber", f"{KYBER}/{chain.kyber}/api/v1/routes",
-                           params={"tokenIn": t_in, "tokenOut": t_out, "amountIn": str(amount)})
+        await self.lim["kyber"].wait()
+        r = await self.http.get(f"{KYBER}/{chain.kyber}/api/v1/routes",
+                                params={"tokenIn": t_in, "tokenOut": t_out, "amountIn": str(amount)})
+        if r.status_code == 429:
+            self.lim["kyber"].backoff(30 + random.random() * 10)
+            raise RuntimeError("kyber HTTP 429")
+        if r.status_code == 400 and KYBER_NO_ROUTE.search(r.text or ""):
+            return None   # Kyber answers 400 "route not found" / unknown token: not buyable, not an error
+        r.raise_for_status()
+        d = r.json()
         if d.get("code") != 0 or not d.get("data"):
             return None
         return d["data"]
@@ -635,6 +646,11 @@ class Scanner:
             fresh = [k for k in ("geckoterminal", "follow") if now - self.last_ok.get(k, 0) < 180]
             ok = "geckoterminal" in fresh
             beat(HEARTBEAT, ok, None if ok else (self.errors.get("geckoterminal") or "no fresh discovery"), cadence_s=60)
+            self.passes += 1
+            if self.passes % 2 == 1:   # ~once a minute: keeps the loop heartbeat's log activity honest
+                f = dict(self.c.execute("SELECT stage, count(*) FROM oc_pairs GROUP BY 1").fetchall())
+                log.info("funnel %s · queue %d · discovery %s", json.dumps(f, sort_keys=True), len(self.vet_q),
+                         "ok" if ok else "STALE")
             self.c.execute("DELETE FROM oc_snaps WHERE at < ?", (now - SNAP_RETENTION_DAYS * 86400,))
             self.c.execute("DELETE FROM oc_polls WHERE at < ?", (now - 3 * 86400,))
             self.c.commit()

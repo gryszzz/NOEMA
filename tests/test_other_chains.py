@@ -162,3 +162,33 @@ def test_preregister_idempotent_and_board(tmp_path):
     assert all(x["verdict"]["verdict"] == "collecting" for x in out["chains"])
     with pytest.raises(sqlite3.OperationalError):  # board is read-only
         sqlite3.connect(f"file:{db}?mode=ro", uri=True).execute("CREATE TABLE x(a)")
+
+
+def test_kyber_route_not_found_is_unroutable_not_error(tmp_path):
+    import asyncio
+
+    class R:
+        def __init__(self, code, text):
+            self.status_code, self.text = code, text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+        def json(self):
+            import json
+            return json.loads(self.text)
+
+    class C:
+        def __init__(self, resp):
+            self.resp = resp
+
+        async def get(self, *a, **k):
+            return self.resp
+
+    sc = oc.Scanner(str(tmp_path / "oc.db"), str(tmp_path / "m.db"),
+                    client=C(R(400, '{"code":4008,"message":"route not found"}')))
+    assert asyncio.run(sc.kyber(oc.CHAINS["base"], oc.NATIVE, "0xt", 1)) is None
+    sc.http = C(R(500, "boom"))
+    with pytest.raises(RuntimeError):
+        asyncio.run(sc.kyber(oc.CHAINS["base"], oc.NATIVE, "0xt", 1))
