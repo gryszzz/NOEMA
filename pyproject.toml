@@ -15,7 +15,7 @@ dependencies = [
   "eth-account>=0.13,<0.14",
   "embit>=0.8,<0.9",
   "polymarket-us>=2.4.1,<3",
-  "pyarrow>=20,<23",
+  "pyarrow>=23.0.1,<24",
 ]
 
 [project.optional-dependencies]
