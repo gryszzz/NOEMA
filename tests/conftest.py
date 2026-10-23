@@ -49,3 +49,10 @@ def _isolated_risk_budget(tmp_path_factory: pytest.TempPathFactory, monkeypatch:
     from noema import pm_fees
 
     pm_fees._memo.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_suspends(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never read the box's real suspends.csv from tests (tests opt in with their own file)."""
+    d = tmp_path_factory.mktemp("suspends")
+    monkeypatch.setenv("NOEMA_SUSPENDS_CSV", str(d / "suspends.csv"))

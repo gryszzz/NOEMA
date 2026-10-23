@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import suspend_guard
+
 # round-trip costs per price kind (fraction for ratio kinds, probability points for markets)
 COSTS = {"market": 0.03, "token": 0.012, "culture_ratio": 0.004}
 
@@ -87,15 +89,16 @@ def bucket_scores(feed_path: str) -> dict[str, dict[str, Any]]:
     except sqlite3.Error:
         return {}
     try:
-        rows = c.execute("SELECT source, reason, price_kind, ref_price, last_price, payload_json, status "
-                         "FROM opp_items").fetchall()
+        rows = c.execute("SELECT source, reason, price_kind, ref_price, last_price, payload_json, status, "
+                         "first_seen, expired_at FROM opp_items").fetchall()
     except sqlite3.Error:
         rows = []
     finally:
         c.close()
     rets: dict[str, list[float]] = {}
     seen: dict[str, int] = {}
-    for source, reason, kind, ref, last, payload, status in rows:
+    voided: dict[str, int] = {}
+    for source, reason, kind, ref, last, payload, status, first_seen, expired_at in rows:
         key = reason_type(source, reason)
         seen[key] = seen.get(key, 0) + 1
         side = None
@@ -104,6 +107,9 @@ def bucket_scores(feed_path: str) -> dict[str, dict[str, Any]]:
             side = m.group(1) if m else None
         if status != "expired":
             continue  # only finished observations count
+        if suspend_guard.straddle(first_seen, expired_at or first_seen):
+            voided[key] = voided.get(key, 0) + 1  # frozen clock across a box suspend: no evidence
+            continue
         r = item_return(kind, ref, last, side)
         if r is not None:
             rets.setdefault(key, []).append(r)
@@ -112,6 +118,7 @@ def bucket_scores(feed_path: str) -> dict[str, dict[str, Any]]:
     for key, count in seen.items():
         s = summarize(rets.get(key, []))
         s["seen"] = count
+        s["voided_suspend"] = voided.get(key, 0)
         s["proven"] = bool(s["n"] >= min_n and s["lower"] is not None and s["lower"] > 0)
         s["source"] = key.split(":", 1)[0]
         out[key] = s

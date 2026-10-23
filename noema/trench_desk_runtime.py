@@ -308,6 +308,9 @@ async def run_desk_cycle(
                         break
             if engine.fire_if_needed(desk["desk_id"], marks):
                 fired += 1
+        voided = engine.void_suspended()
+        if voided:
+            summary["voided_suspend"] = voided
         store.event(None, "desk_cycle", **{k: v for k, v in summary.items()
                                            if k != "provider_failures"},
                     entries=entries, fired=fired, picks=[j.mint for j in picks])

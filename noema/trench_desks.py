@@ -13,10 +13,11 @@ import os
 import random
 import sqlite3
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import suspend_guard
 from .solana_live_gate import DeskSwapRejected
 from .sqlite_util import connect as sqlite_connect
 
@@ -171,6 +172,7 @@ SCHEMA = (
         bounce_cost_usd REAL NOT NULL DEFAULT 0, bounce_entry_price REAL,
         bounce_budget_usd REAL NOT NULL DEFAULT 0, last_exit_price REAL,
         last_mark_price REAL, last_mark_at TEXT, closed_at TEXT,
+        void_reason TEXT, scored_as TEXT,
         PRIMARY KEY (desk_id, mint, opened_at)
     )""",
     """CREATE TABLE IF NOT EXISTS trench_desk_trades (
@@ -268,6 +270,11 @@ def _migrate_desk_schema(conn: sqlite3.Connection) -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(trench_desks)")}
         if "swap_seq" not in columns:
             conn.execute("ALTER TABLE trench_desks ADD COLUMN swap_seq INTEGER NOT NULL DEFAULT 0")
+    if "trench_desk_positions" in tables:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(trench_desk_positions)")}
+        for column in ("void_reason", "scored_as"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE trench_desk_positions ADD COLUMN {column} TEXT")
     if "trench_desk_trades" in tables:
         sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='trench_desk_trades'"
@@ -393,13 +400,32 @@ class PaperDeskEngine:
             (fill.notional_usd, fill.fee_usd, fill.slippage_usd, pnl, desk["desk_id"]))
         return pnl
 
-    def _score_position(self, desk_id: str, mint: str, opened_at: str) -> float:
-        """Record one win or loss for a fully closed position from all its sell legs."""
+    def _position_pnl(self, desk_id: str, mint: str, opened_at: str) -> float:
         row = self.store.conn.execute(
             """SELECT COALESCE(SUM(realized_pnl_usd), 0) FROM trench_desk_trades
                WHERE desk_id=? AND mint=? AND side='sell' AND ts>=?""",
             (desk_id, mint, opened_at)).fetchone()
-        pnl = float(row[0] or 0.0)
+        return float(row[0] or 0.0)
+
+    def _score_position(self, desk_id: str, mint: str, opened_at: str,
+                        closed_at: str | None = None) -> float:
+        """Record one win or loss for a fully closed position from all its sell legs.
+
+        A position that was open across a box-suspend window (``suspend_guard``) is voided
+        instead: no win, no loss, no streak change, so it can't count toward a size-up or a fire.
+        """
+        pnl = self._position_pnl(desk_id, mint, opened_at)
+        reason = suspend_guard.void_reason(opened_at, closed_at)
+        if reason:
+            self.store.conn.execute(
+                """UPDATE trench_desk_positions SET void_reason=?, scored_as='void'
+                   WHERE desk_id=? AND mint=? AND opened_at=?""", (reason, desk_id, mint, opened_at))
+            self.store.event(desk_id, "paper_trade_voided_suspend", mint=mint, opened_at=opened_at,
+                             closed_at=closed_at, pnl_usd=round(pnl, 6), reason=reason)
+            return pnl
+        self.store.conn.execute(
+            "UPDATE trench_desk_positions SET scored_as=? WHERE desk_id=? AND mint=? AND opened_at=?",
+            ("win" if pnl > 0 else "loss", desk_id, mint, opened_at))
         self.store.conn.execute(
             f"""UPDATE trench_desks SET {'wins=wins+1, consecutive_losses=0' if pnl > 0 else
                 'losses=losses+1, consecutive_losses=consecutive_losses+1'} WHERE desk_id=?""",
@@ -438,12 +464,13 @@ class PaperDeskEngine:
         if core_failed:
             return
         unused = pos["bounce_budget_usd"] if pos["bounce_qty"] == 0 else 0.0
+        closed_at = _now()
         self.store.conn.execute(
             """UPDATE trench_desk_positions SET status='closed', closed_at=?, core_qty=0,
                bounce_qty=0, bounce_budget_usd=0, last_mark_price=?, last_mark_at=?
                WHERE desk_id=? AND mint=? AND opened_at=?""",
-            (_now(), mark.price_usd, _now(), desk_id, pos["mint"], pos["opened_at"]))
-        self._score_position(desk_id, pos["mint"], pos["opened_at"])
+            (closed_at, mark.price_usd, closed_at, desk_id, pos["mint"], pos["opened_at"]))
+        self._score_position(desk_id, pos["mint"], pos["opened_at"], closed_at)
         if unused:
             self.store.conn.execute(
                 "UPDATE trench_desks SET cash_usd=cash_usd+? WHERE desk_id=?", (unused, desk_id))
@@ -586,6 +613,36 @@ class PaperDeskEngine:
         )
         return successor
 
+    def void_suspended(self, *, lookback_days: float = 7.0) -> int:
+        """Retro-void closed positions whose interval overlaps a suspend window that GOMD logged
+        after the close (``retro_logs`` rows land late). Reverses the win/loss already counted."""
+        cutoff = (datetime.now(UTC) - timedelta(days=lookback_days)).isoformat()
+        rows = self.store.conn.execute(
+            """SELECT desk_id, mint, opened_at, closed_at, scored_as FROM trench_desk_positions
+               WHERE status='closed' AND void_reason IS NULL AND closed_at>=?""", (cutoff,)).fetchall()
+        voided = 0
+        for row in rows:
+            reason = suspend_guard.void_reason(row["opened_at"], row["closed_at"])
+            if not reason:
+                continue
+            self.store.conn.execute(
+                """UPDATE trench_desk_positions SET void_reason=?, scored_as='void'
+                   WHERE desk_id=? AND mint=? AND opened_at=?""",
+                (reason, row["desk_id"], row["mint"], row["opened_at"]))
+            if row["scored_as"] == "win":
+                self.store.conn.execute(
+                    "UPDATE trench_desks SET wins=MAX(wins-1, 0) WHERE desk_id=?", (row["desk_id"],))
+            elif row["scored_as"] == "loss":
+                self.store.conn.execute(
+                    """UPDATE trench_desks SET losses=MAX(losses-1, 0),
+                       consecutive_losses=MAX(consecutive_losses-1, 0) WHERE desk_id=?""",
+                    (row["desk_id"],))
+            self.store.event(row["desk_id"], "paper_trade_voided_suspend", mint=row["mint"],
+                             opened_at=row["opened_at"], closed_at=row["closed_at"],
+                             retro=True, previously=row["scored_as"], reason=reason)
+            voided += 1
+        return voided
+
     def commit(self) -> None:
         self.store.conn.commit()
 
@@ -609,6 +666,14 @@ def desk_overview(db_path: str) -> dict[str, Any]:
     store = TrenchDeskStore(db_path)
     try:
         desks = []
+        void_rows = store.conn.execute(
+            """SELECT p.desk_id, COUNT(*) AS n, COALESCE(SUM((
+                   SELECT SUM(t.realized_pnl_usd) FROM trench_desk_trades t
+                   WHERE t.desk_id=p.desk_id AND t.mint=p.mint AND t.side='sell'
+                     AND t.ts>=p.opened_at AND t.ts<=COALESCE(p.closed_at, t.ts))), 0) AS pnl
+               FROM trench_desk_positions p WHERE p.void_reason IS NOT NULL GROUP BY p.desk_id"""
+        ).fetchall()
+        voids = {r["desk_id"]: (int(r["n"]), float(r["pnl"] or 0.0)) for r in void_rows}
         for row in store.all_desks():
             positions = store.open_positions(row["desk_id"])
             mtm = sum(p["core_qty"] * (p["last_mark_price"] or 0)
@@ -624,6 +689,8 @@ def desk_overview(db_path: str) -> dict[str, Any]:
                 "realized_pnl_usd": round(row["realized_pnl_usd"], 2),
                 "fees_usd": round(row["fees_usd"], 4), "slippage_usd": round(row["slippage_usd"], 4),
                 "wins": row["wins"], "losses": row["losses"],
+                "voided_suspend": voids.get(row["desk_id"], (0, 0.0))[0],
+                "voided_pnl_usd": round(voids.get(row["desk_id"], (0, 0.0))[1], 2),
                 "consecutive_losses": row["consecutive_losses"],
                 "open_positions": len(positions), "fired_reason": row["fired_reason"],
                 "parent_desk_id": row["parent_desk_id"],
@@ -642,6 +709,7 @@ def desk_overview(db_path: str) -> dict[str, Any]:
         "recent_trades": trades,
         "recent_events": events,
         "fired": [d for d in desks if d["status"] == "fired"],
+        "suspend_guard": suspend_guard.status(),
         "total_pnl_after_costs_usd": round(sum(
             d["pnl_after_costs_usd"] for d in desks if d["status"] == "active"
         ) + sum(d["pnl_after_costs_usd"] for d in desks if d["status"] == "fired"), 2),
