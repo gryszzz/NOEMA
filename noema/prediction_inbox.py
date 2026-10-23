@@ -58,7 +58,13 @@ SIDES = ("YES", "NO")
 CONFIDENCE = ("low", "medium", "high")
 URL_HOSTS = ("kalshi.com", "polymarket.com")
 TOP_KEYS = {"schema", "id", "posted_at", "author", "title", "summary", "picks", "report_path"}
-PICK_KEYS = {"venue", "market", "market_id", "url", "side", "price", "fair", "confidence", "resolves", "note"}
+PICK_KEYS = {"venue", "market", "market_id", "url", "side", "price", "fair", "confidence", "resolves", "note",
+             "capacity_usd", "stake_usd", "kind", "legs", "rules_match"}
+LEG_KEYS = {"venue", "market", "market_id", "side", "price", "url"}
+KINDS = ("single", "pair", "parlay", "scaled")
+PAIR_PRICE_TOL = 0.01
+MIN_LEGS, MAX_LEGS = 2, 10
+MAX_CAPACITY_USD = 1_000_000.0
 TEXT_LIMITS = {"title": 160, "summary": 800, "market": 200, "note": 400, "report_path": 300}
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 _MID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
@@ -72,7 +78,7 @@ CREATE TABLE IF NOT EXISTS prediction_picks (pick_id TEXT PRIMARY KEY, post_id T
     venue TEXT NOT NULL, market TEXT NOT NULL, market_id TEXT, url TEXT, side TEXT NOT NULL, entry_price REAL NOT NULL,
     fair REAL NOT NULL, confidence TEXT NOT NULL, resolves TEXT, note TEXT, opened_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open', mark_price REAL, mark_at TEXT, mark_source TEXT,
-    settled_at TEXT, outcome TEXT, settle_price REAL, pnl REAL);
+    settled_at TEXT, outcome TEXT, settle_price REAL, pnl REAL, capacity_usd REAL);
 CREATE INDEX IF NOT EXISTS prediction_picks_post ON prediction_picks(post_id, idx);
 CREATE TABLE IF NOT EXISTS prediction_ingest_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
     files INTEGER, accepted INTEGER, rejected INTEGER, duplicates INTEGER, marked INTEGER, settled INTEGER,
@@ -99,7 +105,23 @@ Write atomically: write `name.json.tmp` first, then rename to `name.json` (only 
   "picks": [
     {{"venue": "kalshi", "market": "Texas governor: Hinojosa (D)", "market_id": "GOVPARTYTX-26-D",
       "url": "https://kalshi.com/markets/govpartytx", "side": "NO", "price": 0.67, "fair": 0.70,
-      "confidence": "low", "resolves": "2026-11-03", "note": "optional"}}
+      "confidence": "low", "resolves": "2026-11-03", "note": "optional", "capacity_usd": 250, "stake_usd": 25}},
+    {{"kind": "pair", "market": "Texas governor 2026: Hinojosa (Dem) wins", "resolves": "2026-11-03",
+      "stake_usd": 20, "capacity_usd": 150, "rules_match": true, "confidence": "medium",
+      "legs": [{{"venue": "kalshi", "market": "Texas governor: Hinojosa (D)", "market_id": "GOVPARTYTX-26-D",
+                "side": "NO", "price": 0.67, "url": "https://kalshi.com/markets/govpartytx"}},
+               {{"venue": "polymarket", "market": "Texas governor 2026: Democrats win",
+                "side": "YES", "price": 0.30, "url": "https://polymarket.com/event/texas-governor-winner-2026"}}]}},
+    {{"kind": "parlay", "market": "TX gov NO + Maine Senate GOP", "price": 0.22, "fair": 0.26,
+      "confidence": "low", "stake_usd": 5, "capacity_usd": 40,
+      "legs": [{{"venue": "kalshi", "market": "Texas governor: Hinojosa (D)", "market_id": "GOVPARTYTX-26-D",
+                "side": "NO", "price": 0.67}},
+               {{"venue": "polymarket", "market": "Maine Senate 2026: Republicans win",
+                "market_id": "will-the-republicans-win-the-maine-senate-race-in-2026", "side": "YES",
+                "price": 0.33}}]}},
+    {{"kind": "scaled", "venue": "kalshi", "market": "Next James Bond actor: Jack Lowden",
+      "market_id": "KXBOND-30-JAC", "side": "NO", "price": 0.40, "fair": 0.45, "confidence": "low",
+      "stake_usd": 10, "capacity_usd": 120}}
   ]
 }}
 ```
@@ -111,11 +133,70 @@ Rules (anything else is rejected and moved to `rejected/YYYYMMDD/`):
 - `picks`: 1-{MAX_PICKS} objects. `venue` kalshi|polymarket; `market` <= 200 chars; `market_id` optional
   (Kalshi ticker / Polymarket slug); `url` optional, https on kalshi.com or polymarket.com only;
   `side` YES|NO; `price` and `fair` are numbers strictly between 0 and 1 for the side picked;
-  `confidence` low|medium|high; `resolves` optional YYYY-MM-DD; `note` optional <= 400 chars.
+  `confidence` low|medium|high; `resolves` optional YYYY-MM-DD; `note` optional <= 400 chars;
+  `capacity_usd` optional finite number > 0 = the most size (USD) the edge survives (omit if unknown);
+  `stake_usd` optional finite number > 0 = the stake you intend (USD).
+- `kind` optional: `single` (default) | `pair` | `parlay` | `scaled`.
+  - `pair`: a hedged cross-venue position. `legs` REQUIRED, exactly 2: one kalshi leg and one polymarket
+    leg on OPPOSITE outcomes of the same question (e.g. Kalshi NO + Polymarket YES). `resolves` REQUIRED;
+    `stake_usd` recommended; `rules_match` (true|false) = you checked both venues' resolution rules and they
+    settle identically. Missing or false -> shown as UNVERIFIED and the profit is never called locked.
+    Top-level `price` may be omitted (it is the sum of the leg prices; if given it must match within 1c);
+    `fair` defaults to 1.0 (the $1 payout); `market` defaults to the first leg's market; `confidence`
+    defaults to low. NOEMA shows combined cost = sum(leg price + venue fee), profit per $ =
+    (1 - cost) / cost and the annualized return over the days left to `resolves`. Marked leg by leg
+    (value = sum of leg marks); settles when both legs resolve.
+  - `parlay`: `legs` REQUIRED, 2-10 objects, each `venue` kalshi|polymarket, `market` <= 200 chars,
+    `market_id` optional, `side` YES|NO, `price` strictly between 0 and 1 (that leg's side price).
+    The pick's `price` and `fair` are the COMBINED parlay price and fair. Top-level `venue`, `market_id`
+    and `side` may be omitted (side, if given, must be YES). Marked leg by leg (combined = product of leg
+    marks); settles only when every leg has resolved, and any losing leg loses the parlay at once.
+  - `scaled`: an upcoming scaled bet. Shown as PLANNED (marked for reference, never settled, no P&L,
+    not counted as open exposure).
+  - `legs` on any kind other than `pair` / `parlay` is rejected; `rules_match` only on `pair`.
+  - Leg keys: `venue`, `market`, `market_id` optional, `side`, `price`, `url` optional (https on
+    kalshi.com / polymarket.com).
+- Corrections: post again with the same market + side (or the same pair / parlay legs). The panel shows only
+  the latest version; the earlier one stays stored. Post titles, summaries and notes are stored, not shown.
 - No other keys. All text is treated as untrusted plain text (rendered escaped, no HTML/markdown).
 
-Paper tracking: entry = `price`; marked to NOEMA's own stored venue quote when it has that market;
-settled when NOEMA sees the resolution. Hit rate = won / settled.
+Paper tracking: entry = `price`; marked to NOEMA's own stored venue quote when it has that market, else
+to a read-only PUBLIC quote (Kalshi public market endpoint; Polymarket international Gamma API - a pick
+without a usable slug is matched by its `market` text, strictly). Settled at 1/0 when NOEMA or the public
+venue API shows the official resolution. The price move after each pick is logged at +1h, +1d and +1w.
+Hit rate = won / settled. Calibration and prereg stay with Prediction Bot; NOEMA does not score them.
+
+Shared paper risk budget (owned and written only by NOEMA, readable by every bot):
+`/workspace/noema-run/risk_budget.json`, schema `tev.risk_budget.v1`, rewritten every cycle: bankroll,
+open exposure per bot and per correlated group (all Fed markets, all BTC strikes, one election event...),
+5% cap per bet and per group, per-category held-out record, and a `strategies` map
+(`measured_capacity_usd`, `current_step_size_usd`, `cap_usd`). Each open pick counts as
+min(quarter-Kelly off your fair, `stake_usd`, `capacity_usd`, 5% group cap), never below one $1 contract
+(a parlay counts once, in its first leg's group; planned scaled picks count nothing).
+
+Strategy capacity (owned and written by MQGB from scale tests; NOEMA only reads it, every cycle):
+`/workspace/mqgb/capacity/strategy_capacity.json`, write atomically (tmp + rename), <= 64 KB.
+Missing or invalid file = every strategy unmeasured (minimum step). Format:
+
+```json
+{{"schema": "tev.strategy_capacity.v1", "updated_at": "2026-10-22T23:00:00-04:00", "author": "MQGB",
+  "strategies": {{"fast_settle": {{"measured_capacity_usd": 40, "step_size_usd": 10,
+                                  "measured_at": "2026-10-22T22:50:00-04:00", "source": "MQGB scale test",
+                                  "note": "edge/$ halves near $40"}},
+                 "fav_longshot": {{"measured_capacity_usd": null}}}}}}
+```
+
+- Top-level keys: `schema`, `updated_at`, `author`, `strategies` only (anything else rejects the file).
+- Per strategy (name: lowercase letters, digits, `_:.-`): `measured_capacity_usd` (finite > 0 = the size
+  where edge per dollar halves, or null = not measured), `step_size_usd` optional finite > 0,
+  `measured_at`/`source`/`note` optional strings <= 200. Unknown keys reject that entry.
+- NOEMA sizes every bet at min(quarter-Kelly, measured_capacity_usd, current step, 5% group cap);
+  unmeasured strategies stay at the minimum step (ladder $1, 2.5, 5, 10, 25, 50).
+
+Every strategy in `risk_budget.json` `strategies` (and on the dashboard scoreboard) carries its lineage:
+`strategy_id` (`noema:<name>`), `parent_id` (null for originals), `generation` (0 = original),
+`born_at` (first paper activity), `status` active | scaling (measured capacity, step above the minimum) |
+retired (benched). `families` sums the combined paper P&L of each family tree.
 """
 
 
@@ -125,6 +206,18 @@ class Reject(ValueError):
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(prediction_picks)")}
+    if "capacity_usd" not in cols:  # v1 files without the optional field stay valid
+        conn.execute("ALTER TABLE prediction_picks ADD COLUMN capacity_usd REAL")
+    if "quote_market_id" not in cols:  # public market the read-only quote resolved to (slug / ticker)
+        conn.execute("ALTER TABLE prediction_picks ADD COLUMN quote_market_id TEXT")
+    for col, typ in (("kind", "TEXT NOT NULL DEFAULT 'single'"), ("stake_usd", "REAL"), ("legs_json", "TEXT"),
+                     ("legs_mark_json", "TEXT"), ("rules_match", "INTEGER"),
+                     ("hidden", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE prediction_picks ADD COLUMN {col} {typ}")
+    from .paper_risk import MOVES_SCHEMA
+    conn.executescript(MOVES_SCHEMA)
 
 
 def inbox_dir() -> Path:
@@ -196,6 +289,47 @@ def _url(v: Any) -> str | None:
     return v
 
 
+def _usd(v: Any, field: str) -> float | None:
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) \
+            or not 0 < float(v) <= MAX_CAPACITY_USD:
+        raise Reject(f"{field}: must be a finite number > 0 (USD)")
+    return round(float(v), 2)
+
+
+def _market_id(v: Any, field: str) -> str | None:
+    if v is not None and (not isinstance(v, str) or not _MID.match(v)):
+        raise Reject(f"{field}: invalid")
+    return v
+
+
+def validate_leg(leg: Any, field: str) -> dict[str, Any]:
+    if not isinstance(leg, dict):
+        raise Reject(f"{field}: not an object")
+    extra = set(leg) - LEG_KEYS
+    if extra:
+        raise Reject(f"{field}: unknown keys {sorted(extra)[:5]}")
+    if leg.get("venue") not in VENUES:
+        raise Reject(f"{field}.venue: must be kalshi or polymarket")
+    if leg.get("side") not in SIDES:
+        raise Reject(f"{field}.side: must be YES or NO")
+    try:
+        market = _text(leg.get("market"), "market")
+    except Reject as exc:
+        raise Reject(f"{field}.{exc}") from exc
+    try:
+        url = _url(leg.get("url"))
+    except Reject as exc:
+        raise Reject(f"{field}.{exc}") from exc
+    out = {"venue": leg["venue"], "market": market, "market_id": _market_id(leg.get("market_id"),
+                                                                            f"{field}.market_id"),
+           "side": leg["side"], "price": _prob(leg.get("price"), f"{field}.price")}
+    if url:
+        out["url"] = url
+    return out
+
+
 def validate_pick(p: Any, i: int) -> dict[str, Any]:
     f = f"picks[{i}]"
     if not isinstance(p, dict):
@@ -203,15 +337,54 @@ def validate_pick(p: Any, i: int) -> dict[str, Any]:
     extra = set(p) - PICK_KEYS
     if extra:
         raise Reject(f"{f}: unknown keys {sorted(extra)[:5]}")
-    if p.get("venue") not in VENUES:
-        raise Reject(f"{f}.venue: must be kalshi or polymarket")
-    if p.get("side") not in SIDES:
-        raise Reject(f"{f}.side: must be YES or NO")
+    kind = p.get("kind", "single")
+    if kind not in KINDS:
+        raise Reject(f"{f}.kind: must be single, pair, parlay or scaled")
+    if "rules_match" in p and kind != "pair":
+        raise Reject(f"{f}.rules_match: only allowed when kind is pair")
+    legs, rules_match = None, None
+    if kind in ("parlay", "pair"):
+        raw = p.get("legs")
+        lo, hi = (2, 2) if kind == "pair" else (MIN_LEGS, MAX_LEGS)
+        if not isinstance(raw, list) or not lo <= len(raw) <= hi:
+            raise Reject(f"{f}.legs: a {kind} needs {lo if lo == hi else f'{lo}-{hi}'} legs")
+        legs = [validate_leg(x, f"{f}.legs[{j}]") for j, x in enumerate(raw)]
+        venues = {x["venue"] for x in legs}
+        if p.get("venue") is not None and p.get("venue") not in VENUES:
+            raise Reject(f"{f}.venue: must be kalshi or polymarket")
+        if p.get("side", "YES") != "YES":
+            raise Reject(f"{f}.side: omit it (each leg carries its own side)")
+        venue = p.get("venue") or (venues.pop() if len(venues) == 1 else "mixed")
+        side = "YES"
+        if kind == "pair":
+            if {x["venue"] for x in legs} != {"kalshi", "polymarket"} or legs[0]["side"] == legs[1]["side"]:
+                raise Reject(f"{f}.legs: a pair is one kalshi leg and one polymarket leg on opposite outcomes")
+            rm = p.get("rules_match")
+            if rm is not None and not isinstance(rm, bool):
+                raise Reject(f"{f}.rules_match: must be true or false")
+            rules_match = rm
+            venue = "mixed"
+    else:
+        if "legs" in p:
+            raise Reject(f"{f}.legs: only allowed when kind is pair or parlay")
+        if p.get("venue") not in VENUES:
+            raise Reject(f"{f}.venue: must be kalshi or polymarket")
+        if p.get("side") not in SIDES:
+            raise Reject(f"{f}.side: must be YES or NO")
+        venue, side = p["venue"], p["side"]
+    if kind == "pair":  # combined price = sum of leg prices; fair defaults to the $1 payout
+        combo = round(sum(x["price"] for x in legs), 4)
+        if p.get("price") is not None:
+            given = p["price"]
+            if isinstance(given, bool) or not isinstance(given, (int, float)) or abs(given - combo) > PAIR_PRICE_TOL:
+                raise Reject(f"{f}.price: a pair's price is the sum of its leg prices ({combo})")
+        p = {**p, "price": combo, "market": p.get("market") or legs[0]["market"],
+             "confidence": p.get("confidence", "low")}
+        if not p.get("resolves"):
+            raise Reject(f"{f}.resolves: required on a pair (YYYY-MM-DD)")
     if p.get("confidence") not in CONFIDENCE:
         raise Reject(f"{f}.confidence: must be low, medium or high")
-    mid = p.get("market_id")
-    if mid is not None and (not isinstance(mid, str) or not _MID.match(mid)):
-        raise Reject(f"{f}.market_id: invalid")
+    mid = _market_id(p.get("market_id"), f"{f}.market_id")
     res = p.get("resolves")
     if res is not None:
         if not isinstance(res, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", res):
@@ -220,15 +393,26 @@ def validate_pick(p: Any, i: int) -> dict[str, Any]:
             date.fromisoformat(res)
         except ValueError as exc:
             raise Reject(f"{f}.resolves: not a date") from exc
+    cap = _usd(p.get("capacity_usd"), f"{f}.capacity_usd")
+    stake = _usd(p.get("stake_usd"), f"{f}.stake_usd")
     try:
         url = _url(p.get("url"))
         market = _text(p.get("market"), "market")
         note = _text(p.get("note"), "note", required=False)
     except Reject as exc:
         raise Reject(f"{f}.{exc}") from exc
-    return {"venue": p["venue"], "market": market, "market_id": mid, "url": url, "side": p["side"],
-            "price": _prob(p.get("price"), f"{f}.price"), "fair": _prob(p.get("fair"), f"{f}.fair"),
-            "confidence": p["confidence"], "resolves": res, "note": note}
+    return {"venue": venue, "market": market, "market_id": mid, "url": url, "side": side,
+            "price": p["price"] if kind == "pair" else _prob(p.get("price"), f"{f}.price"),
+            "fair": (1.0 if p.get("fair") is None else _pair_fair(p["fair"], f)) if kind == "pair"
+            else _prob(p.get("fair"), f"{f}.fair"),
+            "confidence": p["confidence"], "resolves": res, "note": note,
+            "capacity_usd": cap, "stake_usd": stake, "kind": kind, "legs": legs, "rules_match": rules_match}
+
+
+def _pair_fair(v: Any, f: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v <= 1:
+        raise Reject(f"{f}.fair: must be a number in (0, 1]")
+    return float(v)
 
 
 def validate_post(doc: Any, now: datetime | None = None) -> dict[str, Any]:
@@ -351,32 +535,145 @@ def lookup_resolution(main: sqlite3.Connection | None, venue: str, market_id: st
     return res if res in ("yes", "no") else None
 
 
-def update_positions(conn: sqlite3.Connection, main_db: str | None, now: datetime) -> tuple[int, int]:
+def _leg_state(main: sqlite3.Connection | None, quotes: Any, venue: str, mid: str | None, side: str,
+               market: str, now: datetime) -> dict[str, Any]:
+    """One market: {'result': won|lost|None, 'price': side price|None, 'source', 'at', 'quote_id'}."""
+    res, how, q = lookup_resolution(main, venue, mid), "venue resolution", None
+    if quotes is not None and not res:
+        try:
+            q = quotes.quote(venue, mid, market)
+        except Exception:  # noqa: BLE001 - public quotes are best-effort, never fatal
+            q = None
+        if q is not None and q.result in ("yes", "no"):
+            res, how = q.result, f"{q.source} resolution"
+    qid = q.market_id if q is not None and q.market_id else None
+    if res:
+        won = (res == "yes") == (side == "YES")
+        return {"result": "won" if won else "lost", "price": 1.0 if won else 0.0, "source": how,
+                "at": now.isoformat(), "quote_id": qid}
+    px, at, src = lookup_mark(main, venue, mid, side, now.timestamp()) if venue in VENUES else (None, None, None)
+    if px is None and q is not None and q.side_price(side) is not None:
+        px, at = q.side_price(side), now.isoformat()
+        src = f"{q.source} {q.market_id}"[:160] if not mid or q.market_id != mid else q.source
+    return {"result": None, "price": px, "source": src, "at": at, "quote_id": qid}
+
+
+def _parlay_state(legs: list[dict[str, Any]], states: list[dict[str, Any]]) -> dict[str, Any]:
+    """Any losing leg loses the parlay; it wins only when every leg has resolved in its favour."""
+    if any(st["result"] == "lost" for st in states):
+        return {"result": "lost", "price": 0.0}
+    if all(st["result"] == "won" for st in states):
+        return {"result": "won", "price": 1.0}
+    if any(st["price"] is None for st in states):
+        return {"result": None, "price": None}
+    px = 1.0
+    for st in states:
+        px *= st["price"]
+    return {"result": None, "price": round(px, 4)}
+
+
+def _pair_state(states: list[dict[str, Any]]) -> dict[str, Any]:
+    """Hedged pair: value = sum of leg marks; settles only when both legs resolve (payout = legs won)."""
+    if all(st["result"] for st in states):
+        won = sum(st["result"] == "won" for st in states)
+        return {"result": "won" if won >= 1 else "lost", "price": float(won)}
+    if any(st["price"] is None for st in states):
+        return {"result": None, "price": None}
+    return {"result": None, "price": round(sum(st["price"] for st in states), 4)}
+
+
+class _PickQuotes:
+    """Quotes adapter for move logging: venue 'parlay' -> combined leg-by-leg price of that pick."""
+
+    def __init__(self, quotes: Any, main: sqlite3.Connection | None, legs: dict[str, list[dict[str, Any]]],
+                 now: datetime, pairs: set[str] | None = None):
+        self.quotes, self.main, self.legs, self.now, self.pairs = quotes, main, legs, now, pairs or set()
+
+    def quote(self, venue: str, market_id: str | None, text: str = "") -> Any:
+        if venue != "parlay":
+            return self.quotes.quote(venue, market_id, text)
+        legs = self.legs.get(market_id or "")
+        if not legs:
+            return None
+        from .public_quotes import Quote
+        states = [_leg_state(self.main, self.quotes, x["venue"], x.get("market_id"), x["side"], x["market"],
+                             self.now) for x in legs]
+        st = _pair_state(states) if len(legs) == 2 and {x["venue"] for x in legs} == {"kalshi", "polymarket"} \
+            and legs[0]["side"] != legs[1]["side"] and market_id in self.pairs else _parlay_state(legs, states)
+        res = None if market_id in self.pairs else {"won": "yes", "lost": "no"}.get(st["result"] or "")
+        return Quote("parlay", market_id or "", None, None, st["price"], res, "legs", text[:200],
+                     time.time(), "parlay legs")
+
+
+def update_positions(conn: sqlite3.Connection, main_db: str | None, now: datetime,
+                     quotes: Any = None) -> tuple[int, int]:
+    """Mark/settle picks: NOEMA's own stored quotes first, then (when `quotes` is given) read-only public
+    Kalshi / Polymarket-international quotes. Parlays are marked leg by leg (combined = product of leg prices)
+    and settle only when every leg resolves (any losing leg loses). Scaled picks are planned, never settled.
+    Also logs each open pick's price move at +1h/+1d/+1w."""
+    from . import paper_risk
     main = _ro(main_db) if main_db else None
     marked = settled = 0
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(prediction_picks)")}
+    kcol = "kind" if "kind" in cols else "'single'"
+    lcol = "legs_json" if "legs_json" in cols else "NULL"
     try:
-        rows = conn.execute("SELECT pick_id, venue, market_id, side, entry_price FROM prediction_picks "
-                            "WHERE status='open'").fetchall()
-        for pick_id, venue, mid, side, entry in rows:
-            res = lookup_resolution(main, venue, mid)
-            if res:
-                won = (res == "yes") == (side == "YES")
-                sp = 1.0 if won else 0.0
+        rows = conn.execute(f"SELECT pick_id, venue, market_id, side, entry_price, market, {kcol}, {lcol}, status "
+                            "FROM prediction_picks WHERE status IN ('open','planned')").fetchall()
+        for pick_id, venue, mid, side, entry, market, kind, legs_json, status in rows:
+            if kind in ("parlay", "pair") and legs_json:
+                legs = json.loads(legs_json)
+                states = [_leg_state(main, quotes, x["venue"], x.get("market_id"), x["side"], x["market"], now)
+                          for x in legs]
+                st = _pair_state(states) if kind == "pair" else _parlay_state(legs, states)
+                conn.execute("UPDATE prediction_picks SET legs_mark_json=? WHERE pick_id=?",
+                             (json.dumps([{k: v[k] for k in ("result", "price", "source")} for v in states]),
+                              pick_id))
+                st.update(source="parlay legs", at=now.isoformat(), quote_id=None)
+            else:
+                st = _leg_state(main, quotes, venue, mid, side, market, now)
+            if st.get("quote_id"):
+                conn.execute("UPDATE prediction_picks SET quote_market_id=? WHERE pick_id=?", (st["quote_id"], pick_id))
+            if st["result"] and status == "open":
+                sp = st["price"]
                 conn.execute("UPDATE prediction_picks SET status='settled', settled_at=?, outcome=?, settle_price=?, "
                              "mark_price=?, mark_at=?, mark_source=?, pnl=? WHERE pick_id=?",
-                             (now.isoformat(), "won" if won else "lost", sp, sp, now.isoformat(),
-                              "venue resolution", round(sp - entry, 4), pick_id))
+                             (now.isoformat(), st["result"], sp, sp, now.isoformat(), st["source"],
+                              round(sp - entry, 4), pick_id))
                 settled += 1
                 continue
-            px, at, src = lookup_mark(main, venue, mid, side, now.timestamp())
-            if px is not None:
+            if st["price"] is not None:
                 conn.execute("UPDATE prediction_picks SET mark_price=?, mark_at=?, mark_source=?, pnl=? "
-                             "WHERE pick_id=?", (px, at, src, round(px - entry, 4), pick_id))
+                             "WHERE pick_id=?", (st["price"], st["at"], st["source"],
+                                                 None if status == "planned" else round(st["price"] - entry, 4),
+                                                 pick_id))
                 marked += 1
+        if quotes is not None:
+            since = (now - timedelta(days=8)).isoformat()
+            bets, parlay_legs, pairs = [], {}, set()
+            for pid, v, mid, market, side, entry, opened, kind, legs_json in conn.execute(
+                    f"SELECT pick_id, venue, market_id, market, side, entry_price, opened_at, {kcol}, {lcol} "
+                    "FROM prediction_picks WHERE opened_at >= ? AND status != 'planned'", (since,)).fetchall():
+                if kind in ("parlay", "pair") and legs_json:
+                    parlay_legs[pid] = json.loads(legs_json)
+                    v, mid = "parlay", pid
+                    if kind == "pair":
+                        pairs.add(pid)
+                bets.append(paper_risk.Bet("prediction_bot", pid, v, mid, market, side, float(entry),
+                                           _dt_iso(opened)))
+            paper_risk.schedule_moves(conn, bets)
+            conn.commit()
+            paper_risk.capture_moves(conn, now, _PickQuotes(quotes, main, parlay_legs, now, pairs),
+                                     known=paper_risk.noema_resolution(main) if main is not None else None)
     finally:
         if main is not None:
             main.close()
     return marked, settled
+
+
+def _dt_iso(v: str) -> datetime:
+    d = datetime.fromisoformat(v)
+    return d if d.tzinfo else d.replace(tzinfo=UTC)
 
 
 # ---------- ingestion ----------
@@ -390,7 +687,7 @@ def _move(f: Path, dest: Path) -> None:
 
 
 def ingest(db_path: str | None = None, inbox: Path | str | None = None, *, main_db: str | None = None,
-           now: datetime | None = None) -> dict[str, Any]:
+           now: datetime | None = None, quotes: Any = None) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     inbox_p = Path(inbox) if inbox else inbox_dir()
     main_db = main_db if main_db is not None else os.getenv("NOEMA_DB_PATH")
@@ -422,14 +719,18 @@ def ingest(db_path: str | None = None, inbox: Path | str | None = None, *, main_
                           post["report_path"], len(post["picks"]), sha, now.isoformat()))
             for i, p in enumerate(post["picks"]):
                 conn.execute("INSERT INTO prediction_picks (pick_id, post_id, idx, venue, market, market_id, url, "
-                             "side, entry_price, fair, confidence, resolves, note, opened_at) "
-                             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                             "side, entry_price, fair, confidence, resolves, note, opened_at, capacity_usd, stake_usd, "
+                             "kind, legs_json, status, rules_match) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                              (f"{post['id']}#{i}", post["id"], i, p["venue"], p["market"], p["market_id"], p["url"],
                               p["side"], p["price"], p["fair"], p["confidence"], p["resolves"], p["note"],
-                              post["posted_at"].isoformat()))
+                              post["posted_at"].isoformat(), p.get("capacity_usd"), p.get("stake_usd"),
+                              p.get("kind", "single"), json.dumps(p["legs"]) if p.get("legs") else None,
+                              "planned" if p.get("kind") == "scaled" else "open",
+                              None if p.get("rules_match") is None else int(p["rules_match"])))
             stats["accepted"] += 1
             moves.append((f, inbox_p / "archive" / day))
-        stats["marked"], stats["settled"] = update_positions(conn, main_db, now)
+        conn.commit()  # picks are durable before any (rate-limited) public quote call
+        stats["marked"], stats["settled"] = update_positions(conn, main_db, now, quotes)
         conn.execute("INSERT INTO prediction_ingest_runs (at, files, accepted, rejected, duplicates, marked, settled, "
                      "detail) VALUES (?,?,?,?,?,?,?,?)",
                      (now.isoformat(), stats["files"], stats["accepted"], stats["rejected"], stats["duplicates"],
@@ -448,10 +749,50 @@ def ingest(db_path: str | None = None, inbox: Path | str | None = None, *, main_
 
 # ---------- read model for the room ----------
 
+def _moves(conn: sqlite3.Connection, pick_id: str) -> dict[str, float | None]:
+    try:
+        rows = conn.execute("SELECT offset_s, move FROM paper_bet_moves WHERE bot='prediction_bot' AND bet_id=? "
+                            "AND captured_at IS NOT NULL", (pick_id,)).fetchall()
+    except sqlite3.Error:
+        return {}
+    names = {3600: "1h", 86400: "1d", 604800: "1w"}
+    return {names[o]: m for o, m in rows if o in names}
+
+
+def pair_metrics(legs: list[dict[str, Any]], resolves: str | None, rules_match: Any,
+                 today: date | None = None) -> dict[str, Any]:
+    """Hedged pair economics per $1 payout: cost = sum(leg price + venue fee); locked profit per $ =
+    (1 - cost) / cost; annualized over the days left to `resolves`. Only 'locked' when rules_match is true."""
+    from .paper_risk import fee
+    cost = sum(float(x["price"]) + fee(x["venue"], float(x["price"])) for x in legs)
+    per = (1 - cost) / cost if cost > 0 else None
+    days = None
+    if resolves:
+        try:
+            days = max(1, (date.fromisoformat(resolves) - (today or datetime.now(UTC).date())).days)
+        except ValueError:
+            days = None
+    ann = per * 365 / days if per is not None and days else None
+    verified = rules_match in (1, True)
+    return {"combined_cost": round(cost, 4), "profit_per_usd": None if per is None else round(per, 4),
+            "annualized": None if ann is None else round(ann, 4), "days_to_resolve": days,
+            "rules_match": verified, "verification": "rules match" if verified else "unverified",
+            "locked": bool(verified and per is not None and per > 0)}
+
+
+PICK_COLS = ("pick_id", "post_id", "opened_at", "venue", "market", "market_id", "url", "side", "entry_price", "fair",
+             "confidence", "resolves", "note", "status", "mark_price", "mark_at", "mark_source", "outcome", "pnl",
+             "capacity_usd", "stake_usd", "kind", "legs_json", "legs_mark_json", "quote_market_id", "rules_match",
+             "hidden")
+
+
 def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, Any]:
+    """Picks for the room panel: newest version of each pick only (a later post with the same market + side, or
+    the same pair / parlay legs, replaces the earlier one), hidden picks omitted. Post text stays stored."""
+    from . import paper_risk
     db_path = db_path or default_db()
-    out: dict[str, Any] = {"paper": True, "status": "no data", "posts": [], "stats": None, "last_run_at": None,
-                           "role": "Prediction Bot picks · paper tracking only · never trades"}
+    out: dict[str, Any] = {"paper": True, "status": "no data", "posts": [], "picks": [], "stats": None,
+                           "last_run_at": None, "role": "Prediction Bot picks · paper tracking only · never trades"}
     conn = _ro(db_path)
     if conn is None:
         out["note"] = "no Prediction Bot posts ingested yet"
@@ -459,34 +800,119 @@ def room_view(db_path: str | None = None, *, limit_posts: int = 6) -> dict[str, 
     try:
         run = conn.execute("SELECT at, files, accepted, rejected FROM prediction_ingest_runs ORDER BY id DESC "
                            "LIMIT 1").fetchone()
-        posts = conn.execute("SELECT post_id, posted_at, author, title, summary, report_path, n_picks "
-                             "FROM prediction_posts ORDER BY posted_at DESC LIMIT ?", (limit_posts,)).fetchall()
-        agg = conn.execute("SELECT COUNT(*), SUM(status='open'), SUM(status='settled'), SUM(outcome='won'), "
-                           "SUM(mark_price IS NOT NULL AND status='open'), SUM(pnl), "
-                           "SUM(CASE WHEN status='open' AND mark_price IS NOT NULL AND pnl>0 THEN 1 ELSE 0 END) "
-                           "FROM prediction_picks").fetchone()
-        out["posts"] = []
-        for pid, at, author, title, summary, rp, n in posts:
-            picks = conn.execute("SELECT venue, market, market_id, url, side, entry_price, fair, confidence, resolves, "
-                                 "note, status, mark_price, mark_at, mark_source, outcome, pnl FROM prediction_picks "
-                                 "WHERE post_id=? ORDER BY idx", (pid,)).fetchall()
-            out["posts"].append({"id": pid, "posted_at": at, "author": author, "title": title, "summary": summary,
-                                 "report_path": rp, "picks": [dict(zip(
-                                     ("venue", "market", "market_id", "url", "side", "price", "fair", "confidence",
-                                      "resolves", "note", "status", "current", "current_at", "current_source",
-                                      "outcome", "pnl"), r)) for r in picks]})
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(prediction_picks)")}
+        sel = ", ".join(c if c in cols else f"NULL AS {c}" for c in PICK_COLS)
+        raw = [dict(zip(PICK_COLS, r)) for r in conn.execute(
+            f"SELECT {sel} FROM prediction_picks ORDER BY opened_at DESC, idx")]
+        visible = paper_risk.latest_picks([r for r in raw if not r["hidden"]])
+        order = {pid: i for i, pid in enumerate(r[0] for r in conn.execute(
+            "SELECT post_id FROM prediction_posts ORDER BY posted_at DESC"))}
+        visible.sort(key=lambda r: (order.get(r["post_id"], 1 << 30), r["pick_id"]))
+        rows = []
+        for r in visible:
+            d = {"id": r["pick_id"], "post_id": r["post_id"], "venue": r["venue"], "market": r["market"],
+                 "market_id": r["market_id"], "url": r["url"], "side": r["side"], "price": r["entry_price"],
+                 "fair": r["fair"], "confidence": r["confidence"], "resolves": r["resolves"], "status": r["status"],
+                 "current": r["mark_price"], "current_at": r["mark_at"], "current_source": r["mark_source"],
+                 "outcome": r["outcome"], "pnl": r["pnl"], "capacity_usd": r["capacity_usd"],
+                 "posted_stake_usd": r["stake_usd"], "kind": r["kind"] or "single"}
+            legs = json.loads(r["legs_json"]) if r["legs_json"] else []
+            marks = json.loads(r["legs_mark_json"]) if r["legs_mark_json"] else []
+            for j, leg in enumerate(legs):
+                m = marks[j] if j < len(marks) else {}
+                leg.update(current=m.get("price"), result=m.get("result"), current_source=m.get("source"))
+            d["legs"] = legs
+            if d["kind"] == "pair" and len(legs) == 2:
+                d["pair"] = pair_metrics(legs, r["resolves"], r["rules_match"])
+                d["stake_usd"] = round(max(min(r["stake_usd"] or 1.0, r["capacity_usd"] or float("inf"),
+                                               paper_risk.cap_pct() * paper_risk.bankroll()), 1.0), 2)
+            else:
+                d["stake_usd"] = paper_risk.pick_stake(d["venue"], d["fair"], d["price"], d["capacity_usd"],
+                                                       stake_usd=r["stake_usd"])
+            d["moves"] = _moves(conn, r["pick_id"])
+            rows.append(d)
+        out["picks"] = rows
+        by_post: dict[str, list[dict[str, Any]]] = {}
+        for d in rows:
+            by_post.setdefault(d["post_id"], []).append(d)
+        for pid, at, author, title, summary, rp in conn.execute(
+                "SELECT post_id, posted_at, author, title, summary, report_path FROM prediction_posts "
+                "ORDER BY posted_at DESC LIMIT ?", (limit_posts,)).fetchall():
+            if by_post.get(pid):
+                out["posts"].append({"id": pid, "posted_at": at, "author": author, "title": title,
+                                     "summary": summary, "report_path": rp, "picks": by_post[pid]})
     except sqlite3.Error:
         out["note"] = "no Prediction Bot posts ingested yet"
         return out
     finally:
         conn.close()
-    total, open_, settled, won, marked, pnl, green = (x or 0 for x in agg)
+    live = [d for d in rows if d["status"] != "planned"]
+    settled = [d for d in live if d["status"] == "settled"]
+    won = sum(d["outcome"] == "won" for d in settled)
+    opn = [d for d in live if d["status"] == "open"]
+    out["status"] = "active" if rows else "no data"
+    out["last_run_at"] = run[0] if run else None
+    out["last_run"] = dict(zip(("at", "files", "accepted", "rejected"), run)) if run else None
+    out["stats"] = {"picks": len(rows), "open": len(opn), "settled": len(settled), "won": won,
+                    "hit_rate": round(won / len(settled), 3) if settled else None,
+                    "marked_open": sum(d["current"] is not None for d in opn),
+                    "in_the_money_open": sum((d["pnl"] or 0) > 0 for d in opn),
+                    "paper_pnl_per_contract": round(sum(d["pnl"] or 0 for d in live), 4),
+                    "planned": len(rows) - len(live), "superseded_or_hidden": len(raw) - len(rows)}
+    return out
+    try:
+        run = conn.execute("SELECT at, files, accepted, rejected FROM prediction_ingest_runs ORDER BY id DESC "
+                           "LIMIT 1").fetchone()
+        posts = conn.execute("SELECT post_id, posted_at, author, title, summary, report_path, n_picks "
+                             "FROM prediction_posts ORDER BY posted_at DESC LIMIT ?", (limit_posts,)).fetchall()
+        agg = conn.execute("SELECT COUNT(*), SUM(status='open'), SUM(status='settled'), SUM(outcome='won'), "
+                           "SUM(mark_price IS NOT NULL AND status='open'), SUM(CASE WHEN status!='planned' "
+                           "THEN pnl END), "
+                           "SUM(CASE WHEN status='open' AND mark_price IS NOT NULL AND pnl>0 THEN 1 ELSE 0 END), "
+                           "SUM(status='planned') FROM prediction_picks").fetchone()
+        out["posts"] = []
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(prediction_picks)")}
+
+        def col(name: str) -> str:
+            return name if name in cols else "NULL"
+
+        for pid, at, author, title, summary, rp, n in posts:
+            picks = conn.execute("SELECT venue, market, market_id, url, side, entry_price, fair, confidence, resolves, "
+                                 "note, status, mark_price, mark_at, mark_source, outcome, pnl, "
+                                 f"{col('capacity_usd')}, {col('stake_usd')}, {col('kind')}, {col('legs_json')}, "
+                                 f"{col('legs_mark_json')}, pick_id "
+                                 "FROM prediction_picks WHERE post_id=? ORDER BY idx", (pid,)).fetchall()
+            rows = []
+            for r in picks:
+                d = dict(zip(("venue", "market", "market_id", "url", "side", "price", "fair", "confidence",
+                              "resolves", "note", "status", "current", "current_at", "current_source",
+                              "outcome", "pnl", "capacity_usd", "posted_stake_usd", "kind"), r))
+                d["kind"] = d["kind"] or "single"
+                d["stake_usd"] = paper_risk.pick_stake(d["venue"], d["fair"], d["price"], d["capacity_usd"],
+                                                       stake_usd=d["posted_stake_usd"])
+                legs = json.loads(r[19]) if r[19] else []
+                marks = json.loads(r[20]) if r[20] else []
+                for j, leg in enumerate(legs):
+                    m = marks[j] if j < len(marks) else {}
+                    leg.update(current=m.get("price"), result=m.get("result"), current_source=m.get("source"))
+                d["legs"] = legs
+                d["moves"] = _moves(conn, r[21])
+                rows.append(d)
+            out["posts"].append({"id": pid, "posted_at": at, "author": author, "title": title, "summary": summary,
+                                 "report_path": rp, "picks": rows})
+    except sqlite3.Error:
+        out["note"] = "no Prediction Bot posts ingested yet"
+        return out
+    finally:
+        conn.close()
+    total, open_, settled, won, marked, pnl, green, planned = (x or 0 for x in agg)
     out["status"] = "active" if total else "no data"
     out["last_run_at"] = run[0] if run else None
     out["last_run"] = dict(zip(("at", "files", "accepted", "rejected"), run)) if run else None
     out["stats"] = {"picks": total, "open": open_, "settled": settled, "won": won,
                     "hit_rate": round(won / settled, 3) if settled else None, "marked_open": marked,
-                    "in_the_money_open": green, "paper_pnl_per_contract": round(pnl, 4)}
+                    "in_the_money_open": green, "paper_pnl_per_contract": round(pnl, 4),
+                    "planned": planned}
     return out
 
 
@@ -494,7 +920,12 @@ def run_loop(interval: float = 120, db_path: str | None = None) -> None:
     init_inbox()
     while True:
         try:
-            s = ingest(db_path)
+            q = None
+            if os.getenv("NOEMA_PUBLIC_QUOTES", "1") != "0":
+                from .public_quotes import shared
+                q = shared()
+                q.new_cycle()
+            s = ingest(db_path, quotes=q)
             heartbeats.beat(HEARTBEAT, True, cadence_s=CADENCE_S)
             if s["files"] or s["settled"]:
                 print(json.dumps({"at": datetime.now(UTC).isoformat(), **s}), flush=True)

@@ -24,3 +24,14 @@
 #pb-panel .won{color:var(--g)}
 #pb-panel .lost{color:var(--r)}
 #pb-panel .flat{color:var(--d)}
+#pb-panel .pb-grp{border-top:1px solid var(--ln);padding:4px 0 5px}
+#pb-panel .pb-grp:first-of-type{border-top:0}
+#pb-panel .pb-gh{color:var(--c);font-weight:600;font-size:10px;letter-spacing:.6px;text-transform:uppercase;margin-bottom:2px}
+#pb-panel tr.leg td{color:var(--d);font-size:9.5px;border-top:0;padding-top:0}
+#pb-panel tr.k-scaled td{opacity:.8}
+#pb-panel td.rs{color:var(--d)}
+#pb-panel .sd-PAR{color:var(--c)}
+#pb-panel td.mk a{color:inherit;text-decoration:none}
+#pb-panel td.mk a:hover{text-decoration:underline}
+#pb-panel tr.leg.pm td{font-size:9.5px}
+#pb-panel tr.leg .vk,#pb-panel tr.leg .vp{font-size:8px;min-width:14px;padding:0 2px}

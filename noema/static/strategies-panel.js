@@ -22,12 +22,13 @@
   function render(root, d) {
     root.textContent = '';
     var tb = el('table'), hr = el('tr');
-    ['strategy', 'status', 'weight', 'paper P&L', 'n', 'EV/trade', 'open', 'backtest'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['strategy', 'alloc', 'weight', 'paper P&L', 'n', 'EV/trade', 'open', 'backtest'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     tb.appendChild(hr);
     (d.strategies || []).forEach(function (s) {
       var tr = el('tr');
-      var name = el('td'); name.appendChild(el('span', null, s.label)); tr.appendChild(name);
-      var st = el('td'); var chip = el('span', 'chip ' + s.status, s.status); chip.title = s.reason || ''; st.appendChild(chip); tr.appendChild(st);
+      var name = el('td'); name.appendChild(el('span', null, s.label));
+      if (s.strategy_id) { name.title = s.strategy_id + (s.parent_id ? ' ← ' + s.parent_id : ' (original)') + ' · gen ' + (s.generation || 0) + (s.born_at ? ' · born ' + String(s.born_at).slice(0, 10) : '') + ' · ' + (s.status_reason || ''); name.appendChild(el('span', 'chip ' + (s.status === 'retired' ? 'benched' : s.status === 'scaling' ? 'active' : 'exploring'), ' ' + s.status)); } tr.appendChild(name);
+      var st = el('td'); var al = s.alloc_status || s.status; var chip = el('span', 'chip ' + al, al); chip.title = s.reason || ''; st.appendChild(chip); tr.appendChild(st);
       var w = el('td'); var bar = el('span', 'w'); bar.style.width = Math.round((s.weight || 0) * 60) + 'px'; w.appendChild(bar);
       w.appendChild(el('span', 'dim', ' ' + Math.round((s.weight || 0) * 100) + '%')); tr.appendChild(w);
       tr.appendChild(el('td', (s.pnl_usd || 0) > 0 ? 'up' : (s.pnl_usd || 0) < 0 ? 'dn' : 'dim', money(s.pnl_usd)));
@@ -38,6 +39,19 @@
       tr.appendChild(bt); tb.appendChild(tr);
     });
     root.appendChild(tb);
+    if ((d.families || []).length) {
+      var ft = el('div', 'rb'), tot = 0;
+      ft.appendChild(el('span', 'dim', 'family trees · combined paper P&L: '));
+      d.families.forEach(function (f, i) {
+        tot += Number(f.pnl_usd || 0);
+        var sp = el('span', (f.pnl_usd || 0) > 0 ? 'up' : (f.pnl_usd || 0) < 0 ? 'dn' : 'dim',
+          (i ? ' · ' : '') + f.root + (f.members.length > 1 ? ' (' + f.members.length + ', g' + f.generations + ')' : '') + ' ' + money(f.pnl_usd));
+        sp.title = f.members.join('\n') + '\nsettled n ' + f.n;
+        ft.appendChild(sp);
+      });
+      ft.appendChild(el('span', tot > 0 ? 'up' : tot < 0 ? 'dn' : 'dim', ' · all ' + money(tot)));
+      root.appendChild(ft);
+    }
     var feed = el('div', 'feed');
     (d.recent || []).forEach(function (r) {
       var k = r.at + r.title, row = el('div', seen[k] ? null : 'new');
