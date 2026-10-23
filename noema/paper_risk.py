@@ -518,6 +518,19 @@ def latest_picks(rows: list[dict]) -> list[dict]:
     return out
 
 
+_NOTE_STAKE = re.compile(r"stake \$([0-9,.]+)", re.IGNORECASE)
+
+
+def note_stake(note: str | None) -> float | None:
+    """Stake parsed from a pick note ("stake $4.78, cap $184"); None when absent or not positive."""
+    m = _NOTE_STAKE.search(note or "")
+    try:
+        v = float(m.group(1).replace(",", "").rstrip(".")) if m else None
+    except ValueError:
+        return None
+    return v if v is not None and v > 0 else None
+
+
 def prediction_positions(pred_db: str | None, budget: Budget) -> list[Position]:
     """Open Prediction Bot picks: latest version of each pick only, hidden and planned (scaled) picks excluded.
     A pair / parlay counts once, grouped with its first leg's market (its correlated exposure)."""
@@ -528,11 +541,14 @@ def prediction_positions(pred_db: str | None, budget: Budget) -> list[Position]:
     try:
         cols = {r[1] for r in _rows(k, "PRAGMA table_info(prediction_picks)")}
         names = ("pick_id", "opened_at", "venue", "market", "market_id", "entry_price", "fair", "side",
-                 "capacity_usd", "stake_usd", "legs_json", "kind", "quote_market_id")
+                 "capacity_usd", "stake_usd", "legs_json", "kind", "quote_market_id", "note")
         sel = ", ".join(n if n in cols else f"NULL AS {n}" for n in names)
         hid = " AND hidden=0" if "hidden" in cols else ""
         rows = [dict(zip(names, r)) for r in _rows(
             k, f"SELECT {sel} FROM prediction_picks WHERE status IN ('open','settled','planned','void'){hid}")]
+        for r in rows:  # older posts carry the stake only in the note ("stake $4.78, cap $184")
+            if r["stake_usd"] is None:
+                r["stake_usd"] = note_stake(r["note"])
         k2 = latest_picks(rows)
         open_ids = {r[0] for r in _rows(k, "SELECT pick_id FROM prediction_picks WHERE status='open'")}
         for r in k2:

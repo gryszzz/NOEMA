@@ -139,3 +139,19 @@ def test_capture_moves_only_when_due_and_utc_normalised():
     assert row == ("ok", pytest.approx(0.05))
     pr.capture_moves(c, opened + timedelta(days=3), q)  # 1d far past window -> missed
     assert c.execute("SELECT status FROM paper_bet_moves WHERE offset_s=86400").fetchone()[0] == "missed"
+
+
+def test_note_stake_counts_in_exposure(tmp_path):
+    from noema import prediction_inbox as pi
+
+    assert pr.note_stake("stake $4.78, cap $184") == 4.78 and pr.note_stake("cap $5") is None
+    db = str(tmp_path / "p.db")
+    c = sqlite3.connect(db)
+    pi.ensure_schema(c)
+    c.execute("INSERT INTO prediction_picks (pick_id, post_id, idx, venue, market, market_id, side, entry_price, fair, "
+              "confidence, note, opened_at, status) VALUES ('a#0','a',0,'polymarket','SC Senate','sc-senate','YES',"
+              "0.2,0.43,'low','stake $5, cap $90','2026-10-22T00:00:00+00:00','open')")
+    c.commit()
+    c.close()
+    pos = pr.prediction_positions(db, pr.Budget(bank=1000.0))
+    assert [round(p.stake_usd, 2) for p in pos] == [5.0]
