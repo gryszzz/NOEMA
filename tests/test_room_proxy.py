@@ -56,3 +56,12 @@ def test_password_still_works(client, tmp_path):
     assert "authorization" not in client.seen["headers"]
     bad = "Basic " + base64.b64encode(b"tony:nope").decode()
     assert client.get("/", headers={"Authorization": bad}).status_code == 401
+
+
+def test_launch_script_disables_uvicorn_proxy_headers():
+    """uvicorn must not rewrite client.host from X-Forwarded-For, or the
+    loopback check sees the tailnet IP and the owner gets a 401."""
+    from pathlib import Path
+
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "run-room-proxy.sh").read_text()
+    assert "--no-proxy-headers" in script

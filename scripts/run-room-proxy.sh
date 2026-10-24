@@ -8,7 +8,7 @@ PY="${NOEMA_PYTHON:-/tmp/nv/bin/python}"
 cd "$(dirname "$0")/.." || exit 1
 umask 077
 if ! pgrep -f -- "room_proxy:app" >/dev/null; then
-  nohup "$PY" -m uvicorn noema.room_proxy:app --host 127.0.0.1 --port "$PORT" --no-access-log \
+  nohup "$PY" -m uvicorn noema.room_proxy:app --host 127.0.0.1 --port "$PORT" --no-access-log --no-proxy-headers \
     >> "$RUN_DIR/proxy.log" 2>&1 < /dev/null &
   echo $! > "$RUN_DIR/proxy.pid"
 fi
