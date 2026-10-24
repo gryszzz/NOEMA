@@ -36,3 +36,8 @@ body.v7-one .ag.aw .ago{grid-column:3;grid-row:1;overflow:hidden;text-overflow:e
 body.v7-one .ag.aw .br{grid-column:4;grid-row:1;justify-self:end}
 body.v7-one .ag.aw .th{grid-column:2/4!important;grid-row:2}
 body.v7-one .ag.aw .sp{grid-column:4!important;grid-row:2;justify-self:end}
+/* laptop fix: cap the scan-lane / live-crawl-feed row so it can't grow to the feed's content height (was ~1200px) */
+body.v7-one .ch-main{grid-template-rows:auto minmax(190px,clamp(240px,44vh,440px))!important}
+body.v7-one .ch-main>.ch-stage,body.v7-one .ch-main>.ch-feed{min-height:0;max-height:clamp(240px,44vh,440px);overflow:hidden}
+body.v7-one .ch-stage>#v7-scan{min-height:0;max-height:100%}
+body.v7-one .ch-stage canvas{max-height:100%}
